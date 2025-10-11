@@ -6,6 +6,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: gitleaks/gitleaks-action@v2
+        with:
+          config: .gitleaks.toml
   semgrep:
     runs-on: ubuntu-latest
     steps:
