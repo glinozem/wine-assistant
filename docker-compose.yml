@@ -1,15 +1,15 @@
 services:
   db:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev_local_pw}
       POSTGRES_DB: wine_db
       TZ: Europe/Helsinki
     ports:
-      - "5432:5432"
+      - "5432:5432"            # если занят — "5433:5432" + PGPORT=5433 в .env
     volumes:
       - db_data:/var/lib/postgresql/data
-      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro   # <<< добавить
   adminer:
     image: adminer:4
     restart: unless-stopped
