@@ -2,8 +2,15 @@
 .env
 .env.*.local
 
+# venv & IDE
+.venv/
+.idea/
+
 # data
-data/inbox/
+data/inbox/**
+data/tmp/**
+data/raw/**
+!data/sample/**
 data/out/
 *.xlsx
 *.xls
@@ -13,6 +20,9 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+__pycache__/
+*.py[cod]
+*.pyo
 
 # docker volumes
 db_data/
