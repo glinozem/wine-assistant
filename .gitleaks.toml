@@ -1,0 +1,6 @@
+title = "wine-assistant gitleaks config"
+[allowlist]
+paths = [
+  '''\.env\.example$''',
+  '''docker-compose\.yml$'''
+]
