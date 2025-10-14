@@ -221,6 +221,74 @@ def catalog_search():
     return jsonify({"items": rows, "total": total, "limit": limit, "offset": offset, "query": q})
 
 
+@app.get("/sku/<code>/price-history")
+@require_api_key
+def price_history(code: str):
+    """История цен по SKU (из product_prices). Параметры:
+       ?from=YYYY-MM-DD&to=YYYY-MM-DD&limit=50&offset=0
+    """
+    limit  = request.args.get("limit",  default=50, type=int)
+    offset = request.args.get("offset", default=0,  type=int)
+    frm    = request.args.get("from")
+    to     = request.args.get("to")
+
+    where, params = ["code = %s"], [code]
+    if frm:
+        where.append("effective_from >= %s")
+        params.append(frm)
+    if to:
+        where.append("effective_from < %s::timestamp + interval '1 day'")
+        params.append(to)
+
+    where_sql = "WHERE " + " AND ".join(where)
+    sql = f"""
+      SELECT price_rub, effective_from, effective_to
+      FROM product_prices
+      {where_sql}
+      ORDER BY effective_from DESC
+      LIMIT %s OFFSET %s
+    """
+
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(sql, (*params, limit, offset))
+        rows = cur.fetchall()
+    return jsonify({"code": code, "items": rows, "limit": limit, "offset": offset})
+
+
+@app.get("/sku/<code>/inventory-history")
+@require_api_key
+def inventory_history(code: str):
+    """История остатков по SKU (из inventory_history). Параметры:
+       ?from=YYYY-MM-DD&to=YYYY-MM-DD&limit=50&offset=0
+    """
+    limit  = request.args.get("limit",  default=50, type=int)
+    offset = request.args.get("offset", default=0,  type=int)
+    frm    = request.args.get("from")
+    to     = request.args.get("to")
+
+    where, params = ["code = %s"], [code]
+    if frm:
+        where.append("as_of >= %s")
+        params.append(frm)
+    if to:
+        where.append("as_of < %s::timestamp + interval '1 day'")
+        params.append(to)
+
+    where_sql = "WHERE " + " AND ".join(where)
+    sql = f"""
+      SELECT stock_total, reserved, stock_free, as_of
+      FROM inventory_history
+      {where_sql}
+      ORDER BY as_of DESC
+      LIMIT %s OFFSET %s
+    """
+
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(sql, (*params, limit, offset))
+        rows = cur.fetchall()
+    return jsonify({"code": code, "items": rows, "limit": limit, "offset": offset})
+
+
 if __name__ == "__main__":
     debug = os.getenv("FLASK_DEBUG", "0") == "1"
     host = os.getenv("FLASK_HOST", "127.0.0.1")
