@@ -1,16 +1,50 @@
-﻿name: Release Drafter
-on:
-  push:
-    branches: [ master ]
-  pull_request:
-    types: [opened, edited, labeled, unlabeled, closed, reopened, synchronize]
-permissions:
-  contents: write
-  pull-requests: write
-jobs:
-  update_release_draft:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: release-drafter/release-drafter@v6
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+﻿# .github/release-drafter.yml
+name-template: 'v$RESOLVED_VERSION'
+tag-template: 'v$RESOLVED_VERSION'
+
+categories:
+  - title: "🚀 Features"
+    labels: [feat, feature]
+  - title: "🐛 Fixes"
+    labels: [fix, bug]
+  - title: "🧰 Maintenance"
+    labels: [chore, refactor, deps, build, ci]
+  - title: "📝 Docs"
+    labels: [docs]
+
+change-template: "- $TITLE (#$NUMBER) @$AUTHOR"
+template: |
+  ## What's Changed
+  $CHANGES
+
+version-resolver:
+  major:
+    labels: [major, "breaking change", breaking]
+  minor:
+    labels: [minor, feat, feature]
+  patch:
+    labels: [patch, fix, bug, chore, refactor, docs, ci, deps]
+  default: patch
+
+exclude-labels:
+  - skip-changelog
+
+autolabeler:
+  - label: feat
+    title:
+      - '/^feat/i'
+  - label: fix
+    title:
+      - '/^fix/i'
+  - label: chore
+    title:
+      - '/^(chore|build|deps)/i'
+  - label: docs
+    title:
+      - '/^docs/i'
+  - label: refactor
+    title:
+      - '/^refactor/i'
+  - label: ci
+    title:
+      - '/^ci/i'
