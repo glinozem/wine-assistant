@@ -330,3 +330,5 @@ scripts/migrate.ps1 — применяет все миграции из db/migra
 Начальные таблицы и загрузка демо-CSV.
 
 Первый вариант API (/health, /search, /sku/{code}).
+
+Test changelog entry
