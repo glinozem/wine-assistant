@@ -1,57 +1,67 @@
-﻿name: Changelog on Release
+name: Changelog on Release
 
 on:
   release:
     types: [published, edited]
-  workflow_dispatch:            # ручной запуск из Actions
-    inputs:
-      tag:
-        description: "Tag name to (re)build notes for. Leave empty to use latest release"
-        required: false
+  workflow_dispatch: {}  # позволит запускать вручную (Actions → Run workflow)
 
 permissions:
-  contents: write               # нужно для обновления release notes
-  pull-requests: read
-  issues: read
+  contents: write
+  pull-requests: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout (full history for tags/PRs)
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Resolve tag
-        id: meta
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if [ -n "${{ github.event.release.tag_name }}" ]; then
-            echo "tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
-          elif [ -n "${{ inputs.tag }}" ]; then
-            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=$(gh release view --json tagName -q .tagName)" >> "$GITHUB_OUTPUT"
-          fi
-          echo "Using tag: $(cat $GITHUB_OUTPUT)"
-
-      - name: Build changelog from PRs
+      # Генерим markdown. Если нет .github/changelog-config.json — смело убери строку configuration:
+      - name: Build CHANGELOG.md
         id: changelog
         uses: mikepenz/release-changelog-builder-action@v5
         with:
-          configuration: .github/changelog-config.json
-          toTag: ${{ steps.meta.outputs.tag }}
-          ignorePreReleases: true
+          # configuration: .github/changelog-config.json
+          toTag: ${{ github.event.release.tag_name || github.ref_name }}
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Update release notes
-        uses: softprops/action-gh-release@v2
+      - name: Update file & prepare branch
+        id: update
+        shell: bash
+        run: |
+          echo "${{ steps.changelog.outputs.changelog }}" > CHANGELOG.md
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          BR="docs/changelog-${{ github.event.release.tag_name || github.ref_name }}"
+          git checkout -B "$BR"
+          git add CHANGELOG.md
+          if git diff --cached --quiet; then
+            echo "no_changes=true"  >> $GITHUB_OUTPUT
+            echo "branch=$BR"      >> $GITHUB_OUTPUT
+          else
+            git commit -m "docs(changelog): update for ${{ github.event.release.tag_name || github.ref_name }}"
+            echo "no_changes=false" >> $GITHUB_OUTPUT
+            echo "branch=$BR"       >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Pull Request
+        if: steps.update.outputs.no_changes == 'false'
+        id: cpr
+        uses: peter-evans/create-pull-request@v6
         with:
-          tag_name: ${{ steps.meta.outputs.tag }}
-          body: ${{ steps.changelog.outputs.changelog }}
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+          branch: ${{ steps.update.outputs.branch }}
+          title: "docs(changelog): ${{ github.event.release.tag_name || github.ref_name }}"
+          body: "Auto-generated changelog for ${{ github.event.release.tag_name || github.ref_name }}"
+          labels: changelog, automated
+
+      - name: Job summary (PR link or reason)
+        shell: bash
+        run: |
+          if [ -n "${{ steps.cpr.outputs.pull-request-url }}" ]; then
+            echo "PR **#${{ steps.cpr.outputs.pull-request-number }}** → ${{ steps.cpr.outputs.pull-request-url }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No changes to commit — PR not created." >> $GITHUB_STEP_SUMMARY
+          fi
