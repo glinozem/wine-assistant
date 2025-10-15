@@ -1,4 +1,4 @@
-﻿name: Changelog on Release
+name: Changelog on Release
 
 on:
   release:
