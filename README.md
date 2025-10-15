@@ -1,300 +1,332 @@
 Wine Assistant
 
-Мини-сервис для загрузки и поиска ассортимента вина: хранит карточки товаров, две цены (прайс и конечную), историю изменения цен и остатков, и предоставляет HTTP API для поиска и просмотра.
+Мини-сервис для работы с ассортиментом и ценами вин: загрузка Excel/CSV, хранение истории цен и остатков, быстрый поиск по каталогу, простой HTTP API (Flask) поверх PostgreSQL (pg_trgm, pgvector).
 
 Содержание
 
+Возможности
+
+Требования
+
 Быстрый старт
 
-Переменные окружения
+1) Переменные окружения
 
-Docker: Postgres + Adminer
+2) Запуск Docker (Postgres + Adminer)
 
-Миграции
+3) Миграции
 
-Загрузка данных (Excel/CSV)
+4) Загрузка данных (Excel/CSV)
+
+5) Запуск API
 
 API
 
-/health
+Схема данных
 
-/sku/{code}
+Трюки для Windows/PowerShell
 
-/sku/{code}/price-history
+Разработка и качество
 
-/sku/{code}/inventory-history
+Changelog
 
-/search
+Возможности
 
-/catalog/search
+Две цены в products: price_list_rub (прайс) и price_final_rub (фактическая) + обратная совместимость со старым price_rub.
 
-Индексы и производительность
+История цен: таблица product_prices с уникальностью (code, effective_from), защитой от перекрытий периодов (GiST + tstzrange) и чеком на неотрицательные цены.
 
-Безопасность и CORS
+История остатков: inventory_history + удобная функция upsert_inventory(...) для апсерта текущего состояния и логирования истории.
 
-Трюки Windows / PowerShell
+Поиск: pg_trgm по search_text (GIN-индекс), фильтры по цвету/региону/стилю, ограничение по финальной цене, fallback по title_en для латиницы.
 
-Тесты / Диагностика данных
+Безопасность API: защищённые эндпоинты с заголовком X-API-Key.
 
-Миграции: как добавлять новые
+Утилиты: скрипт миграций scripts/migrate.ps1, надёжный загрузчик Excel/CSV scripts/load_csv.py.
+
+Adminer: веб-клиент БД из коробки.
+
+Требования
+
+Docker Desktop (Windows/macOS/Linux)
+
+Python 3.10+ (для запуска скриптов)
+
+PowerShell (Windows) — команды ниже рассчитаны именно на PowerShell
 
 Быстрый старт
-# 1) Клонируем и готовим окружение
-git clone https://github.com/glinozem/wine-assistant.git
-cd wine-assistant
-copy .env.example .env
-# отредактируй .env (см. раздел ниже)
+1) Переменные окружения
 
-# 2) Поднимаем БД и Adminer (локальные порты 15432 и 18080)
-docker compose up -d
+Скопируйте .env.example → .env и заполните секреты (локально можно оставить дефолты):
 
-# 3) Применяем миграции (все .sql из db/migrations)
-powershell -ExecutionPolicy Bypass -File .\scripts\migrate.ps1
-
-# 4) (Опц.) загрузка демонстрационных данных
-python scripts\load_csv.py --csv data\sample\dw_sample_products.csv
-
-# 5) Запускаем API (локально)
-$env:FLASK_DEBUG="1"
-$env:FLASK_HOST="127.0.0.1"
-$env:FLASK_PORT="18000"
-python api\app.py
-
-# Проверка
-curl http://127.0.0.1:18000/health
-
-Переменные окружения
-
-Файл .env:
-
-PGHOST=127.0.0.1
-PGPORT=15432          # см. docker-compose (порт контейнера 5432 проброшен на 15432)
+PGHOST=localhost
+PGPORT=5432
 PGUSER=postgres
 PGPASSWORD=dev_local_pw
 PGDATABASE=wine_db
 TZ=Europe/Helsinki
 
-# Опционально: защита приватных эндпоинтов
-API_KEY=mytestkey
+# Защита API-эндпоинтов (опционально локально, обязательно в prod)
+API_KEY=CHANGE_ME
 
-# Параметры запуска Flask
-FLASK_DEBUG=1
-FLASK_HOST=127.0.0.1
-FLASK_PORT=18000
+# Управляет debug-режимом Flask
+FLASK_DEBUG=0
 
-Docker: Postgres + Adminer
 
-Используем образ pgvector/pgvector:pg16 (расширения vector, pg_trgm доступны).
+На Windows часто порты 5432/8080 заняты системными службами. В репозитории уже есть вариант маппинга на 15432 (Postgres) и 18080 (Adminer) через docker-compose.yml. Используйте их при подключении.
 
-Порты по умолчанию (Windows-friendly):
-
-Postgres: 127.0.0.1:15432 -> 5432
-
-Adminer: 127.0.0.1:18080 -> 8080
-
-Вход в Adminer: http://127.0.0.1:18080
-
-System: PostgreSQL, Server: db, User: postgres, Password: dev_local_pw, Database: wine_db
-
-Полезное:
-
-# Полный ресет БД
-docker compose down -v
+2) Запуск Docker (Postgres + Adminer)
 docker compose up -d
+docker compose ps
+# Должно показать:
+# wine_assistant-db-1        ...  127.0.0.1:15432->5432/tcp
+# wine_assistant-adminer-1   ...  127.0.0.1:18080->8080/tcp
 
-Миграции
 
-Все миграции лежат в db/migrations/*.sql. Запуск:
+Проверка доступности БД:
+
+docker compose exec db psql -U postgres -d wine_db -c "SELECT 1 as ok;"
+
+
+Adminer: http://127.0.0.1:18080
+
+(Сервер: db или 127.0.0.1:15432, пользователь: postgres, БД: wine_db)
+
+3) Миграции
+
+Выполнить все SQL-файлы из db/migrations:
 
 powershell -ExecutionPolicy Bypass -File .\scripts\migrate.ps1
 
 
-Что уже есть:
-
-Две цены в products: price_list_rub (прайсовая) и price_final_rub (фактическая).
-
-История цен product_prices с ограничением без перекрытий интервалов (GiST + tstzrange) и проверкой «цена не отрицательная».
-
-История остатков inventory_history и функция upsert_inventory(...).
-
-Индексы для поиска/фильтров.
-
-Диагностика:
+Проверка диагностики (опционально):
 
 Get-Content db\migrations\2025-10-14-diagnostics.sql -Raw |
   docker compose exec -T db psql -U postgres -d wine_db -v ON_ERROR_STOP=1 -f -
 
-Загрузка данных (Excel/CSV)
 
-Скрипт: scripts/load_csv.py
-Возможности:
+Ожидаемые проверки:
 
-Чтение Excel (--excel) или CSV (--csv).
+ux_product_prices_code_from существует
 
-Авто-определение разделителя CSV; для Excel — автоматический поиск шапки (строка заголовков).
+product_prices_no_overlap (защита перекрытий) и chk_product_prices_nonneg (цена ≥ 0) на месте
 
-Поддержка двух цен: "Цена прайс" → price_list_rub, "Цена со скидкой" → price_final_rub.
-Если «скидочная» пустая, но задан процент скидки — вычисляется.
+перекрытий интервалов нет, отрицательных цен нет
 
-История цен обновляется через upsert_price(...).
+индекс idx_inventory_history_code_time существует
 
-Запись текущих остатков + лог в inventory_history через upsert_inventory(...).
+4) Загрузка данных (Excel/CSV)
 
-Примеры:
+Установите переменные окружения для подключения скриптов:
 
-# CSV
-python scripts\load_csv.py --csv data\sample\dw_sample_products.csv
-
-# Excel (лист авто, но можно явно sheet по имени/индексу)
-$FILE="D:\...\data\inbox\Копия 2025_01_20 Прайс_Легенда_Виноделия.xlsx"
-python scripts\load_csv.py --excel "$FILE" --asof 2025-01-20
-
-# Excel с указанием ячейки скидки (в шапке), и приоритетом её над колонкой
-python scripts\load_csv.py --excel "$FILE" --asof 2025-01-20 `
-  --discount-cell S5 --prefer-discount-cell
+$env:PGHOST="127.0.0.1"
+$env:PGPORT="15432"
+$env:PGUSER="postgres"
+$env:PGPASSWORD="dev_local_pw"
+$env:PGDATABASE="wine_db"
 
 
-Колонки (авто-маппинг):
-code, country, title_ru, grapes, abv, volume, pack,
-price_list_rub, price_final_rub, stock_total, reserved, stock_free.
+Excel (пример с прайс-файлом, дата среза и ячейка скидки S5):
+
+$FILE="D:\path\to\Копия 2025_01_20 Прайс_Легенда_Виноделия.xlsx"
+python scripts\load_csv.py --excel "$FILE" --asof 2025-01-20 --discount-cell S5 --prefer-discount-cell
+
+
+Скрипт автоматически определит шапку, найдёт ключевые колонки (Код, Наименование, Сорт винограда, Алк.,%, Ёмк.,л, Бут. в кор., Цена прайс, Цена со скидкой, остатки/резерв/свободный остаток, Страна и пр.).
+
+Если в файле есть процент скидки в ячейке (например, S5) или отдельная колонка — скрипт посчитает price_final_rub.
+
+В БД будут обновлены products (включая price_list_rub, price_final_rub) и записана история в product_prices и inventory_history.
+
+CSV:
+
+python scripts\load_csv.py --csv data\sample\dw_sample_products.csv --sep "," --asof 2025-01-20
+
+
+У ключевого кода товара не должно быть пробелов/кириллицы. Скрипт нормализует код, а при конфликте gracefully обновит запись.
+
+5) Запуск API
+$env:FLASK_DEBUG="1"
+$env:FLASK_HOST="127.0.0.1"
+$env:FLASK_PORT="18000"
+$env:API_KEY="mytestkey"
+python api\app.py
+
+
+Проверка:
+
+curl "http://127.0.0.1:18000/health"
 
 API
 
-Сервис стартует на http://127.0.0.1:${FLASK_PORT} (по умолчанию 18000).
-JSON — UTF-8 без \uXXXX.
+Базовый URL по умолчанию: http://127.0.0.1:18000
 
-Приватные эндпоинты требуют заголовок X-API-Key: ${API_KEY} (если API_KEY задан).
+В некоторых эндпоинтах требуется заголовок X-API-Key: <ваш_ключ>.
 
 GET /health
 
 Проверка живости.
 
-curl http://127.0.0.1:18000/health
+{"ok": true}
 
-GET /sku/{code}
+GET /sku/<code> (требуется X-API-Key)
 
-Карточка товара + «текущая» цена (последняя открытая в product_prices).
+Возвращает карточку товара, включая обе цены и текущую активную цену из истории:
 
-Заголовок: X-API-Key: mytestkey (если включено).
-
-curl -H "X-API-Key: mytestkey" \
-  "http://127.0.0.1:18000/sku/D009704"
+curl.exe -H "X-API-Key: mytestkey" "http://127.0.0.1:18000/sku/D009704"
 
 
-Ответ включает: price_list_rub, price_final_rub, current_price, и основные поля товара.
+Ответ (пример):
 
-GET /sku/{code}/price-history
-
-История изменения цен.
-
-Параметры: limit, offset.
-
-curl -H "X-API-Key: mytestkey" \
-  "http://127.0.0.1:18000/sku/D009704/price-history?limit=5"
-
-GET /sku/{code}/inventory-history
-
-История остатков за период.
-
-Параметры: from, to (ISO YYYY-MM-DD), limit, offset.
-
-curl -H "X-API-Key: mytestkey" \
-  "http://127.0.0.1:18000/sku/D009704/inventory-history?from=2025-01-01&to=2025-12-31&limit=5"
+{
+  "code": "D009704",
+  "title_ru": "Il Rocchin Gavi Иль Роккин Гави",
+  "title_en": "Gavi",
+  "country": "Италия",
+  "color": "БЕЛОЕ",
+  "style": "тихое",
+  "grapes": "Кортезе",
+  "abv": "0.12",
+  "volume": "0.75",
+  "pack": "12.0",
+  "price_list_rub": "2778.0",
+  "price_final_rub": "2778.0",
+  "price_rub": "2778.0",
+  "current_price": "2778.0"
+}
 
 GET /search
 
-Поиск по каталогу (короткая выборка). Использует price_final_rub для фильтра max_price.
-Сортировка — по pg_trgm.similarity(p.search_text, q) (порог 0.1),
-fallback: если запрос латиницей, добавляем ILIKE по title_en.
-
 Параметры:
-q, max_price, color, region, style, limit (по умолчанию 10).
 
-curl "http://127.0.0.1:18000/search?q=Гави&max_price=3500&limit=5"
-curl "http://127.0.0.1:18000/search?q=gavi&max_price=3500&limit=5"
+q — строка поиска (рус/латиница; для латиницы есть fallback по title_en)
+
+Фильтры: max_price (по финальной цене), color, region, style, limit (по умолчанию 10)
+
+Пример:
+
+curl "http://127.0.0.1:18000/search?q=Гави&max_price=4000&limit=5"
+curl "http://127.0.0.1:18000/search?q=gavi&max_price=4000&limit=5"
+
+
+Поиск использует pg_trgm по search_text с порогом, плюс сортировка по similarity и fallback ILIKE по title_en для латиницы.
 
 GET /catalog/search
 
-Расширенный поиск + пагинация + флаги наличия.
+Расширенный поиск с пагинацией и остатками. Параметры:
 
-Параметры:
-q, max_price, color, region, style, grape, in_stock (true/false), limit (20), offset (0).
+те же, что в /search, плюс
 
-curl "http://127.0.0.1:18000/catalog/search?q=gavi&color=БЕЛОЕ&max_price=4000&limit=5&offset=0"
+grape, in_stock (true|false), offset (пагинация)
+
+GET /sku/<code>/price-history
+
+Параметры: limit, offset. Возвращает историю из product_prices.
+
+GET /sku/<code>/inventory-history
+
+Параметры: from, to (YYYY-MM-DD), limit, offset. Данные из inventory_history.
+
+Схема данных
+products
+
+Основное описание (код, названия, страна/регион, цвет/стиль, сорт, крепость, объём, упаковка)
+
+Цены: price_list_rub (прайс), price_final_rub (фактическая). Сохраняется и старое поле price_rub.
+
+Индексы: btree по ценам, GIN (search_text gin_trgm_ops) для поиска.
+
+product_prices
+
+Поля: code, price_rub, effective_from, effective_to.
+
+Ограничения:
+
+CHECK (price_rub >= 0)
+
+UNIQUE (code, effective_from)
+
+EXCLUDE USING gist (...) — защита от перекрытия интервалов для одного code.
+
+Утилиты: upsert_price(code, price, timestamp) (есть перегрузка для timestamptz).
+
+inventory / inventory_history
+
+inventory — текущее состояние: stock_total, reserved, stock_free.
+
+inventory_history — история, поле as_of (timestamp), индекс (code, as_of DESC).
+
+Утилита: upsert_inventory(code, stock_total, reserved, stock_free, as_of) — апсерт текущего + запись в историю.
+
+Трюки для Windows/PowerShell
+
+Порты заняты / “forbidden by its access permissions” — используйте маппинг портов в docker-compose.yml на 127.0.0.1:15432 (PG) и 127.0.0.1:18080 (Adminer).
+
+curl vs PowerShell — в PowerShell curl — это алиас Invoke-WebRequest. Для чистого curl используйте curl.exe.
+Пример заголовков:
+
+# Чистый curl
+curl.exe -H "X-API-Key: mytestkey" "http://127.0.0.1:18000/sku/D009704"
+
+# PowerShell-стиль
+Invoke-RestMethod "http://127.0.0.1:18000/sku/D009704" -Headers @{ "X-API-Key" = "mytestkey" }
 
 
-Ответ: { items: [...], total, limit, offset }.
-
-Индексы и производительность
-
-GIN (pg_trgm) на products.search_text.
-
-BTREE на products.price_list_rub, products.price_final_rub.
-
-История цен:
-
-UNIQUE (code, effective_from) — ux_product_prices_code_from
-
-GiST-ограничение без перекрытий интервалов по (code, [effective_from, effective_to)).
-
-История остатков:
-
-BTREE (code, as_of DESC).
-
-Безопасность и CORS
-
-Если в .env задан API_KEY, эндпоинт /sku/* и истории требуют заголовок X-API-Key.
-
-Если фронт будет на другом домене, добавь CORS:
-
-pip install flask-cors
-
-
-В api/app.py:
-
-from flask_cors import CORS
-CORS(app)
-
-Трюки Windows / PowerShell
-
-curl в PowerShell — это Invoke-WebRequest. Для «настоящего» curl используй curl.exe.
-
-Пример с заголовками:
-
-Invoke-WebRequest "http://127.0.0.1:18000/sku/D009704" -Headers @{ "X-API-Key"="mytestkey" } | Select -Expand Content
-
-
-Для корректного вывода русских символов:
+Юникод в консоли:
 
 chcp 65001 | Out-Null
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-Тесты / Диагностика данных
+Разработка и качество
 
-Диагностика миграций/ограничений/индексов:
+pre-commit: merge-conflicts check, end-of-file-fixer, trim-trailing-whitespace, гвард секрета.
+Если end-of-file-fixer что-то поправил — просто git add и повторить коммит.
 
-Get-Content db\migrations\2025-10-14-diagnostics.sql -Raw |
-  docker compose exec -T db psql -U postgres -d wine_db -v ON_ERROR_STOP=1 -f -
+Ветвление/PR: защита ветки master — Require PR, Require status checks, Block force pushes.
 
+Безопасность: не коммитим .env, ключи — только через переменные окружения/секреты CI.
 
-Пример точечной записи в историю остатков (ручная проверка):
+CORS / OpenAPI (опционально):
 
-SELECT upsert_inventory('D009704', 120.0, 15.0, 105.0, '2025-02-01'::timestamp);
+CORS: pip install flask-cors, затем в api/app.py:
 
-Миграции: как добавлять новые
-
-Создай файл db/migrations/YYYY-MM-DD-topic.sql (UTF-8).
-
-Положи в него DDL/DML, которые должны выполняться идемпотентно
-(IF NOT EXISTS, CREATE OR REPLACE FUNCTION, проверяй существование индексов/констрейнтов).
-
-Запусти все миграции:
-
-powershell -ExecutionPolicy Bypass -File .\scripts\migrate.ps1
+from flask_cors import CORS
+CORS(app)
 
 
-Проверь диагностический скрипт.
+OpenAPI/Swagger: flasgger или connexion — можно добавить позже.
 
-Лицензия
+Changelog
+2025-10-14
 
-MIT
+DB: добавлены price_list_rub и price_final_rub в products.
+
+История цен: product_prices + уникальный индекс (code, effective_from) и защита от перекрытий интервалов (GiST + tstzrange), чек на неотрицательные цены.
+
+История остатков: inventory_history + функция upsert_inventory(...), индекс (code, as_of DESC).
+
+API:
+
+GET /sku/{code} — теперь отдаёт обе цены + current_price (по истории).
+
+GET /sku/{code}/price-history
+
+GET /sku/{code}/inventory-history
+
+Поиск учитывает price_final_rub, добавлен fallback по title_en для латиницы.
+
+Скрипты:
+
+scripts/migrate.ps1 — применяет все миграции из db/migrations.
+
+Улучшен scripts/load_csv.py: чтение Excel/CSV, поддержка скидки (ячейка и/или колонка), апсерты цен/остатков.
+
+Диагностика: db/migrations/2025-10-14-diagnostics.sql.
+
+2025-10-12
+
+Базовый стек: Postgres 16 (pgvector, pg_trgm), Adminer.
+
+Начальные таблицы и загрузка демо-CSV.
+
+Первый вариант API (/health, /search, /sku/{code}).
