@@ -2,14 +2,13 @@ name: Release Drafter
 
 on:
   push:
-    branches:
-      - master        # твой default branch
+    branches: [ master ]                       # твоя default-ветка
   pull_request_target:
-    types: [opened, reopened, synchronize, edited]
-  workflow_dispatch: {}      # <- кнопка "Run workflow"
+    types: [opened, reopened, synchronize, edited, labeled, unlabeled, closed]
+  workflow_dispatch: {}                         # ручной запуск из Actions
 
 permissions:
-  contents: write            # нужно для записи драфта релиза
+  contents: write                               # нужно, чтобы писать/обновлять draft release
   pull-requests: read
 
 concurrency:
@@ -24,7 +23,7 @@ jobs:
       - name: Release Drafter
         uses: release-drafter/release-drafter@v6
         with:
-          # путь к конфигу Release Drafter (по умолчанию .github/release-drafter.yml)
+          # конфиг Release Drafter (лежит в .github/release-drafter.yml)
           config-name: release-drafter.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
