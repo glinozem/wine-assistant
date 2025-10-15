@@ -1,37 +1,57 @@
 ﻿name: Changelog on Release
+
 on:
   release:
-    types: [published]
+    types: [published, edited]
+  workflow_dispatch:            # ручной запуск из Actions
+    inputs:
+      tag:
+        description: "Tag name to (re)build notes for. Leave empty to use latest release"
+        required: false
+
 permissions:
-  contents: write
+  contents: write               # нужно для обновления release notes
+  pull-requests: read
+  issues: read
+
 jobs:
-  write_changelog:
+  build:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout (full history for tags/PRs)
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Prepare CHANGELOG entry
-        id: prep
-        run: |
-          TAG="${{ github.event.release.tag_name }}"
-          DATE="$(date -u +'%Y-%m-%d')"
-          BODY=$(printf "%s" "${{ github.event.release.body }}")
-          echo "TAG=$TAG" >> $GITHUB_OUTPUT
-          echo "DATE=$DATE" >> $GITHUB_OUTPUT
-          cat > /tmp/_new_entry.md <<EOF
-          ## $TAG - $DATE
 
-          $BODY
-
-          EOF
-      - name: Prepend to CHANGELOG.md
+      - name: Resolve tag
+        id: meta
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          touch CHANGELOG.md
-          cp CHANGELOG.md /tmp/_old.md
-          cat /tmp/_new_entry.md /tmp/_old.md > CHANGELOG.md
-      - name: Commit CHANGELOG.md
-        uses: stefanzweifel/git-auto-commit-action@v5
+          if [ -n "${{ github.event.release.tag_name }}" ]; then
+            echo "tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ inputs.tag }}" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=$(gh release view --json tagName -q .tagName)" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Using tag: $(cat $GITHUB_OUTPUT)"
+
+      - name: Build changelog from PRs
+        id: changelog
+        uses: mikepenz/release-changelog-builder-action@v5
         with:
-          commit_message: "docs(changelog): update for ${{ steps.prep.outputs.TAG }}"
-          file_pattern: CHANGELOG.md
+          configuration: .github/changelog-config.json
+          toTag: ${{ steps.meta.outputs.tag }}
+          ignorePreReleases: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Update release notes
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          body: ${{ steps.changelog.outputs.changelog }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
