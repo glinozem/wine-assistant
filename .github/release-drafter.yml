@@ -1,4 +1,3 @@
-﻿# .github/release-drafter.yml
 name-template: 'v$RESOLVED_VERSION'
 tag-template: 'v$RESOLVED_VERSION'
 
@@ -18,33 +17,23 @@ template: |
   $CHANGES
 
 version-resolver:
-  major:
-    labels: [major, "breaking change", breaking]
-  minor:
-    labels: [minor, feat, feature]
-  patch:
-    labels: [patch, fix, bug, chore, refactor, docs, ci, deps]
+  major: { labels: [major, "breaking change", breaking] }
+  minor: { labels: [minor, feat, feature] }
+  patch: { labels: [patch, fix, bug, chore, refactor, docs, ci, deps] }
   default: patch
 
-exclude-labels:
-  - skip-changelog
+exclude-labels: [skip-changelog]
 
 autolabeler:
   - label: feat
-    title:
-      - '/^feat/i'
+    title: ['/^feat/i']
   - label: fix
-    title:
-      - '/^fix/i'
+    title: ['/^fix/i']
   - label: chore
-    title:
-      - '/^(chore|build|deps)/i'
+    title: ['/^(chore|build|deps)/i']
   - label: docs
-    title:
-      - '/^docs/i'
+    title: ['/^docs/i']
   - label: refactor
-    title:
-      - '/^refactor/i'
+    title: ['/^refactor/i']
   - label: ci
-    title:
-      - '/^ci/i'
+    title: ['/^ci/i']
