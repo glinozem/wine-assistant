@@ -1,0 +1,31 @@
+﻿name-template: "v$NEXT_PATCH_VERSION"
+tag-template: "v$NEXT_PATCH_VERSION"
+
+categories:
+  - title: "🚀 Features"
+    labels: ["feat","feature","enhancement"]
+  - title: "🐛 Fixes"
+    labels: ["fix","bug"]
+  - title: "🧰 Chore"
+    labels: ["chore","maintenance"]
+  - title: "🧪 Tests"
+    labels: ["test","tests"]
+  - title: "📚 Docs"
+    labels: ["docs","documentation"]
+  - title: "♻️ Refactor"
+    labels: ["refactor"]
+  - title: "⚡ Performance"
+    labels: ["perf","performance"]
+  - title: "⬆️ Dependencies"
+    labels: ["deps","dependencies"]
+
+change-template: "- $TITLE (#$NUMBER) by @$AUTHOR"
+change-title-escapes: "\<*_&"
+no-changes-template: "- No user facing changes"
+
+exclude-labels:
+  - "skip-changelog"
+
+template: |
+  ## What’s Changed
+  $CHANGES

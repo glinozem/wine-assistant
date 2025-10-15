@@ -1,0 +1,37 @@
+﻿name: Changelog on Release
+on:
+  release:
+    types: [published]
+permissions:
+  contents: write
+jobs:
+  write_changelog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Prepare CHANGELOG entry
+        id: prep
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          DATE="$(date -u +'%Y-%m-%d')"
+          BODY=$(printf "%s" "${{ github.event.release.body }}")
+          echo "TAG=$TAG" >> $GITHUB_OUTPUT
+          echo "DATE=$DATE" >> $GITHUB_OUTPUT
+          cat > /tmp/_new_entry.md <<EOF
+          ## $TAG - $DATE
+
+          $BODY
+
+          EOF
+      - name: Prepend to CHANGELOG.md
+        run: |
+          touch CHANGELOG.md
+          cp CHANGELOG.md /tmp/_old.md
+          cat /tmp/_new_entry.md /tmp/_old.md > CHANGELOG.md
+      - name: Commit CHANGELOG.md
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "docs(changelog): update for ${{ steps.prep.outputs.TAG }}"
+          file_pattern: CHANGELOG.md
