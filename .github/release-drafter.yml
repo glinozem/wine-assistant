@@ -1,39 +1,30 @@
-name-template: 'v$RESOLVED_VERSION'
-tag-template: 'v$RESOLVED_VERSION'
+name: Release Drafter
 
-categories:
-  - title: "🚀 Features"
-    labels: [feat, feature]
-  - title: "🐛 Fixes"
-    labels: [fix, bug]
-  - title: "🧰 Maintenance"
-    labels: [chore, refactor, deps, build, ci]
-  - title: "📝 Docs"
-    labels: [docs]
+on:
+  push:
+    branches:
+      - master        # твой default branch
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited]
+  workflow_dispatch: {}      # <- кнопка "Run workflow"
 
-change-template: "- $TITLE (#$NUMBER) @$AUTHOR"
-template: |
-  ## What's Changed
-  $CHANGES
+permissions:
+  contents: write            # нужно для записи драфта релиза
+  pull-requests: read
 
-version-resolver:
-  major: { labels: [major, "breaking change", breaking] }
-  minor: { labels: [minor, feat, feature] }
-  patch: { labels: [patch, fix, bug, chore, refactor, docs, ci, deps] }
-  default: patch
+concurrency:
+  group: release-drafter-${{ github.ref }}
+  cancel-in-progress: false
 
-exclude-labels: [skip-changelog]
-
-autolabeler:
-  - label: feat
-    title: ['/^feat/i']
-  - label: fix
-    title: ['/^fix/i']
-  - label: chore
-    title: ['/^(chore|build|deps)/i']
-  - label: docs
-    title: ['/^docs/i']
-  - label: refactor
-    title: ['/^refactor/i']
-  - label: ci
-    title: ['/^ci/i']
+jobs:
+  update_release_draft:
+    name: update_release_draft
+    runs-on: ubuntu-latest
+    steps:
+      - name: Release Drafter
+        uses: release-drafter/release-drafter@v6
+        with:
+          # путь к конфигу Release Drafter (по умолчанию .github/release-drafter.yml)
+          config-name: release-drafter.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
