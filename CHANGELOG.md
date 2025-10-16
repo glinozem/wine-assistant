@@ -1,5 +1,6 @@
 # Changelog
 
-## v0.1.3
+## v0.1.4
 
-* Ci/changelog fix 2 (#16) (04c5f50) by glinozem
+* ci(changelog): create PR with PAT + least-priv perms (#18) (057f3b2) by glinozem
+* docs(changelog): v0.1.3 (#17) (5112bde) by github-actions[bot]
