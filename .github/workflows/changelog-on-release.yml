@@ -3,7 +3,7 @@ name: Changelog on Release
 on:
   release:
     types: [published, edited]
-  workflow_dispatch: {}  # позволит запускать вручную (Actions → Run workflow)
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -18,47 +18,53 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Генерим markdown. Если нет .github/changelog-config.json — смело убери строку configuration:
       - name: Build CHANGELOG.md
         id: changelog
         uses: mikepenz/release-changelog-builder-action@v5
         with:
+          # при желании можно указать конфиг:
           # configuration: .github/changelog-config.json
           toTag: ${{ github.event.release.tag_name || github.ref_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Update file & prepare branch
+      - name: Update file & create working branch
         id: update
         shell: bash
         run: |
           echo "${{ steps.changelog.outputs.changelog }}" > CHANGELOG.md
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          BR="docs/changelog-${{ github.event.release.tag_name || github.ref_name }}"
+
+          # уникальная ветка, НИКОГДА не совпадёт с base
+          TAG="${{ github.event.release.tag_name || github.ref_name }}"
+          BR="docs/changelog-${TAG}-${{ github.run_number }}"
           git checkout -B "$BR"
+
           git add CHANGELOG.md
           if git diff --cached --quiet; then
             echo "no_changes=true"  >> $GITHUB_OUTPUT
-            echo "branch=$BR"      >> $GITHUB_OUTPUT
           else
-            git commit -m "docs(changelog): update for ${{ github.event.release.tag_name || github.ref_name }}"
+            git commit -m "docs(changelog): update for ${TAG}"
             echo "no_changes=false" >> $GITHUB_OUTPUT
-            echo "branch=$BR"       >> $GITHUB_OUTPUT
           fi
+          echo "branch=$BR" >> $GITHUB_OUTPUT
+          echo "tag=$TAG"   >> $GITHUB_OUTPUT
 
       - name: Create Pull Request
         if: steps.update.outputs.no_changes == 'false'
         id: cpr
         uses: peter-evans/create-pull-request@v6
         with:
+          # ЯВНО указываем base вашей репы
+          base: master
           branch: ${{ steps.update.outputs.branch }}
-          title: "docs(changelog): ${{ github.event.release.tag_name || github.ref_name }}"
-          body: "Auto-generated changelog for ${{ github.event.release.tag_name || github.ref_name }}"
+          title: "docs(changelog): ${{ steps.update.outputs.tag }}"
+          body: "Auto-generated changelog for ${{ steps.update.outputs.tag }}"
           labels: changelog, automated
+          delete-branch: true
 
-      - name: Job summary (PR link or reason)
-        shell: bash
+      - name: Job summary (PR link)
         run: |
           if [ -n "${{ steps.cpr.outputs.pull-request-url }}" ]; then
             echo "PR **#${{ steps.cpr.outputs.pull-request-number }}** → ${{ steps.cpr.outputs.pull-request-url }}" >> $GITHUB_STEP_SUMMARY
