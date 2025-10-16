@@ -1,4 +1,4 @@
-﻿name: Changelog on Release
+name: Changelog on Release
 
 on:
   release:
@@ -6,109 +6,134 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to build changelog for (e.g. v0.1.1). Leave empty to use latest tag.'
+        description: "Tag to build changelog for (e.g. v0.1.1). If empty, try last release tag."
         required: false
+        default: ""
 
 permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: changelog-on-release
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Resolve tag (from event or manual input)
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG_INPUT="${{ github.event.inputs.tag || '' }}"
+          TAG_EVENT="${{ github.event.release.tag_name || '' }}"
+          TAG="${TAG_INPUT:-$TAG_EVENT}"
+          if [[ -z "$TAG" ]]; then
+            echo "No tag provided and no release tag in event — trying to read latest GitHub release…"
+            # Пустой TAG — считаем это мягким скипом
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "reason=No tag to process" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Checkout full history
+        if: steps.tag.outputs.skip != 'true'
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Resolve tag
-        id: tag
+      - name: Verify tag exists locally
+        if: steps.tag.outputs.skip != 'true'
+        id: verify
         shell: bash
         run: |
-          # 1) manual input
-          if [ -n "${{ github.event.inputs.tag }}" ]; then
-            TAG="${{ github.event.inputs.tag }}"
-          # 2) release event
-          elif [ -n "${{ github.event.release.tag_name }}" ]; then
-            TAG="${{ github.event.release.tag_name }}"
-          # 3) fallback: latest tag in repo
+          set -euo pipefail
+          TAG="${{ steps.tag.outputs.tag }}"
+          if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::warning ::Skipped: Tag '$TAG' not found in repository"
+            echo "skip=true"   >> $GITHUB_OUTPUT
+            echo "reason=Tag not found" >> $GITHUB_OUTPUT
           else
-            TAG="$(git tag --sort=-creatordate | head -n 1 || true)"
+            echo "skip=false" >> $GITHUB_OUTPUT
           fi
 
-          if [ -z "$TAG" ]; then
-            echo "skip=true" >> $GITHUB_OUTPUT
-            echo "reason=No tag found in repo" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # validate tag exists
-          if ! git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
-            echo "skip=true" >> $GITHUB_OUTPUT
-            echo "reason=Tag '$TAG' not found" >> $GITHUB_OUTPUT
-            echo "tag=$TAG" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "skip=false" >> $GITHUB_OUTPUT
-          echo "Using tag: $TAG"
-
-      - name: Stop early (no valid tag)
-        if: steps.tag.outputs.skip == 'true'
+      - name: Detect previous tag
+        if: steps.tag.outputs.skip != 'true' && steps.verify.outputs.skip != 'true'
+        id: prev
+        shell: bash
         run: |
-          echo "### Skipping run" >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.tag.outputs.reason }}" >> $GITHUB_STEP_SUMMARY
+          set -euo pipefail
+          CUR="${{ steps.tag.outputs.tag }}"
+          PREV=$(git describe --tags --abbrev=0 --exclude "$CUR" "$(git rev-list --tags --max-count=1 2>/dev/null)" || true)
+          if [[ -z "$PREV" ]]; then
+            # пробуем «предыдущий» тег в хронологическом порядке
+            PREV=$(git tag --sort=-creatordate | grep -v "^$CUR$" | sed -n '1p' || true)
+          fi
+          echo "prev=$PREV" >> $GITHUB_OUTPUT
 
-      - name: Build CHANGELOG.md
-        if: steps.tag.outputs.skip != 'true'
-        id: changelog
+      - name: Build CHANGELOG.md (pull-requests based)
+        if: steps.tag.outputs.skip != 'true' && steps.verify.outputs.skip != 'true'
         uses: mikepenz/release-changelog-builder-action@v5
+        id: changelog
         with:
-          toTag: ${{ steps.tag.outputs.tag }}
+          fromTag: ${{ steps.prev.outputs.prev }}
+          toTag:   ${{ steps.tag.outputs.tag }}
+          configurationJson: |
+            {
+              "pr_template": "- {{TITLE}} ({{NUMBER}}) @{{AUTHOR}}",
+              "template": "## What's Changed\n\n{{CHANGELOG}}",
+              "categories": [],
+              "includeInvalidCommits": false
+            }
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Update file & create working branch
-        if: steps.tag.outputs.skip != 'true'
-        id: update
+      - name: Stop if nothing to change
+        if: steps.tag.outputs.skip != 'true' && steps.verify.outputs.skip != 'true'
+        id: nothing
         shell: bash
         run: |
-          echo "${{ steps.changelog.outputs.changelog }}" > CHANGELOG.md
+          set -euo pipefail
+          BODY="${{ steps.changelog.outputs.changelog }}"
+          if [[ -z "$BODY" || "$BODY" == "## What's Changed"$'\n\n' ]]; then
+            echo "No changes in CHANGELOG.md — PR not created."
+            echo "skippr=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Prepare working tree
+        if: steps.nothing.outputs.skippr != 'true' && steps.tag.outputs.skip != 'true' && steps.verify.outputs.skip != 'true'
+        run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          BR="docs/changelog-${{ steps.tag.outputs.tag }}-${{ github.run_number }}"
-          git checkout -B "$BR"
-
-          git add CHANGELOG.md
-          if git diff --cached --quiet; then
-            echo "no_changes=true"  >> $GITHUB_OUTPUT
-          else
-            git commit -m "docs(changelog): update for ${{ steps.tag.outputs.tag }}"
-            echo "no_changes=false" >> $GITHUB_OUTPUT
-          fi
-          echo "branch=$BR" >> $GITHUB_OUTPUT
+          echo -e "# Changelog\n\n${{ steps.changelog.outputs.changelog }}" > CHANGELOG.md
 
       - name: Create Pull Request
-        if: steps.tag.outputs.skip != 'true' && steps.update.outputs.no_changes == 'false'
+        if: steps.nothing.outputs.skippr != 'true' && steps.tag.outputs.skip != 'true' && steps.verify.outputs.skip != 'true'
         id: cpr
         uses: peter-evans/create-pull-request@v6
         with:
+          commit-message: "docs(changelog): ${{ steps.tag.outputs.tag }}"
+          title:          "docs(changelog): ${{ steps.tag.outputs.tag }}"
+          body: |
+            Autogenerated by **Changelog on Release** for tag `${{ steps.tag.outputs.tag }}`.
           base: master
-          branch: ${{ steps.update.outputs.branch }}
-          title: "docs(changelog): ${{ steps.tag.outputs.tag }}"
-          body: "Auto-generated changelog for ${{ steps.tag.outputs.tag }}"
-          labels: changelog, automated
+          branch: docs/changelog/${{ steps.tag.outputs.tag }}   # ← всегда отдельная ветка, не master
           delete-branch: true
+          add-paths: |
+            CHANGELOG.md
 
-      - name: Job summary
+      - name: Summary
+        if: always()
         run: |
-          if [ "${{ steps.tag.outputs.skip }}" = "true" ]; then
-            echo "Skipped: ${{ steps.tag.outputs.reason }}" >> $GITHUB_STEP_SUMMARY
-          elif [ "${{ steps.update.outputs.no_changes }}" = "true" ]; then
-            echo "No changes in CHANGELOG.md — PR not created." >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ steps.tag.outputs.skip || 'false' }}" == "true" ]]; then
+            echo "Skipped: ${{ steps.tag.outputs.reason }}"
+          elif [[ "${{ steps.verify.outputs.skip || 'false' }}" == "true" ]]; then
+            echo "Skipped: ${{ steps.verify.outputs.reason }}"
+          elif [[ "${{ steps.nothing.outputs.skippr || 'false' }}" == "true" ]]; then
+            echo "No changes — PR not created."
           else
-            echo "PR **#${{ steps.cpr.outputs.pull-request-number }}** → ${{ steps.cpr.outputs.pull-request-url }}" >> $GITHUB_STEP_SUMMARY
+            echo "Created pull request: ${{ steps.cpr.outputs.pull-request-url }}"
           fi
