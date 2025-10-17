@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.1.6
+## v0.1.8
 
-* docs: align README with real schema, migrations, pricing, API key, Swagger, CI (#22) (55bb268) by glinozem
-* docs(changelog): add CHANGELOG for v0.1.5 (#21) (c030153) by glinozem
+* fix: remove commas from grapes column in sample CSV (#28) (accef32) by glinozem
+* Fix/sprint1 critical fixes (#27) (3afe2d7) by glinozem
