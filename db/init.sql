@@ -21,18 +21,14 @@ CREATE TABLE IF NOT EXISTS products (
   abv         TEXT,
   pack        TEXT,
   volume      TEXT,
-  -- Старая колонка для совместимости (заполняется = price_final_rub)
   price_rub   NUMERIC,
-  -- Две новые колонки цен
   price_list_rub  NUMERIC,
   price_final_rub NUMERIC,
-  -- Поисковый индекс
   search_text TEXT GENERATED ALWAYS AS
     (coalesce(producer,'')||' '||coalesce(title_ru,'')||' '||
      coalesce(country,'')||' '||coalesce(region,'')||' '||
      coalesce(color,'')||' '||coalesce(style,'')||' '||
      coalesce(grapes,'')) STORED,
-  -- Векторные эмбеддинги (для будущего семантического поиска)
   embedding   VECTOR(1536)
 );
 
@@ -45,7 +41,7 @@ CREATE TABLE IF NOT EXISTS product_prices (
   effective_to   TIMESTAMP WITHOUT TIME ZONE
 );
 
--- Таблица текущих остатков (актуальная структура)
+-- Таблица текущих остатков
 CREATE TABLE IF NOT EXISTS inventory (
   code        TEXT PRIMARY KEY REFERENCES products(code) ON DELETE CASCADE,
   stock_total NUMERIC,
@@ -88,42 +84,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_product_prices_code_from ON product_prices(
 -- История остатков
 CREATE INDEX IF NOT EXISTS idx_inventory_history_code_time ON inventory_history(code, as_of DESC);
 CREATE INDEX IF NOT EXISTS idx_inventory_code_free         ON inventory(code, stock_free);
-
--- =====================================================================
--- Constraints
--- =====================================================================
-
--- Цены неотрицательные
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'chk_product_prices_nonneg'
-  ) THEN
-    ALTER TABLE product_prices
-      ADD CONSTRAINT chk_product_prices_nonneg
-      CHECK (price_rub >= 0);
-  END IF;
-END $$;
-
--- Запрет перекрывающихся интервалов цен
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname='product_prices_no_overlap'
-  ) THEN
-    ALTER TABLE product_prices
-      ADD CONSTRAINT product_prices_no_overlap
-      EXCLUDE USING gist (
-        code WITH =,
-        tstzrange(
-          effective_from::timestamptz,
-          COALESCE(effective_to, 'infinity')::timestamptz,
-          '[)'
-        ) WITH &&
-      )
-      DEFERRABLE INITIALLY DEFERRED;
-  END IF;
-END $$;
 
 -- =====================================================================
 -- Функции
@@ -188,11 +148,9 @@ CREATE OR REPLACE FUNCTION upsert_inventory(
   p_as_of timestamp without time zone
 ) RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
-  -- Запись в историю
   INSERT INTO inventory_history(code, stock_total, reserved, stock_free, as_of)
   VALUES (p_code, p_stock_total, p_reserved, p_stock_free, p_as_of);
 
-  -- Обновление текущих остатков
   INSERT INTO inventory(code, stock_total, reserved, stock_free, asof_date)
   VALUES (p_code, p_stock_total, p_reserved, p_stock_free, p_as_of::date)
   ON CONFLICT (code) DO UPDATE
