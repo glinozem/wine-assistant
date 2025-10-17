@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.1.4
+## v0.1.6
 
-* ci(changelog): create PR with PAT + least-priv perms (#18) (057f3b2) by glinozem
-* docs(changelog): v0.1.3 (#17) (5112bde) by github-actions[bot]
+* docs: align README with real schema, migrations, pricing, API key, Swagger, CI (#22) (55bb268) by glinozem
+* docs(changelog): add CHANGELOG for v0.1.5 (#21) (c030153) by glinozem
