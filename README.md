@@ -1,153 +1,279 @@
-# wine-assistant
+# Wine Assistant — API & ETL
 
-[![CI](https://github.com/glinozem/wine-assistant/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/glinozem/wine-assistant/actions/workflows/ci.yml)
-[![Release Drafter](https://github.com/glinozem/wine-assistant/actions/workflows/release-drafter.yml/badge.svg?branch=master)](https://github.com/glinozem/wine-assistant/actions/workflows/release-drafter.yml)
-[![Changelog on Release](https://github.com/glinozem/wine-assistant/actions/workflows/changelog-on-release.yml/badge.svg?branch=master)](https://github.com/glinozem/wine-assistant/actions/workflows/changelog-on-release.yml)
-[![Latest release](https://img.shields.io/github/v/release/glinozem/wine-assistant?sort=semver)](https://github.com/glinozem/wine-assistant/releases)
+[![CI](https://github.com/glinozem/wine-assistant/actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml)
+[![Release Drafter](https://github.com/glinozem/wine-assistant/actions/workflows/release-drafter.yml/badge.svg)](../../actions/workflows/release-drafter.yml)
+[![Changelog on Release](https://github.com/glinozem/wine-assistant/actions/workflows/changelog-on-release.yml/badge.svg)](../../actions/workflows/changelog-on-release.yml)
 
-Мини-API и база для ассистента по вину: поиск и карточки товаров, **две цены** (прайс/финальная), **история цен**, **история остатков**, индексы для быстрых выборок и готовые миграции.
-
----
-
-## ✨ Что уже есть
-
-- **Две цены в `products`**
-  `price_list_rub`, `price_final_rub` (+ бэкофил из старого `price_rub`). Индексы по обеим.
-- **История цен** — `product_prices` + `upsert_price(..)`
-  - защита от перекрытия интервалов: `EXCLUDE USING gist` с `btree_gist`
-  - чек неотрицательной цены
-  - уникальный ключ `(code, effective_from)`
-- **История остатков** — `inventory_history` + `upsert_inventory(..)`
-  индекс `(code, as_of DESC)` для таймсерийных запросов.
-- **Поиск**
-  GIN по `products.search_text` на `pg_trgm`; `vector` включён «на будущее».
-- **API (key-auth через `X-API-Key`)**
-  - `GET /sku/{code}/price-history?limit=&offset=`
-  - `GET /sku/{code}/inventory-history?from=&to=&limit=&offset=`
-- **Swagger/OpenAPI** — UI рядом с сервисом (`/docs` и `/openapi.json`).
-- **Миграции** — идемпотентные SQL + скрипт `scripts/migrate.ps1`.
-- **CI/CD**
-  - Release Drafter — черновик релиза из PR.
-  - **Changelog on Release** — генерация `CHANGELOG.md` и **авто-PR** через PAT
-    (`CHANGELOG_PR_PAT`, права: Contents RW, Pull Requests RW, Commit Statuses RW; ограничен на этот репозиторий).
+Мини-сервис для поиска вин, хранения прайс-данных и истории цен/остатков.
+API на Flask + PostgreSQL (pg_trgm, pgvector), загрузка Excel/CSV.
 
 ---
 
-## 🚀 Быстрый старт
+## Содержание
 
-### Требования
-Docker + Docker Compose, PowerShell (Windows). Для локального API — Python (см. `api/`).
+- [Требования](#требования)
+- [Быстрый старт](#быстрый-старт)
+  - [1) Поднять БД](#1-поднять-бд)
+  - [1_5) Применить миграции (обязательно)](#15-применить-миграции-обязательно)
+  - [2) Создать .env](#2-создать-env)
+  - [3) Установить зависимости](#3-установить-зависимости)
+  - [4) Загрузить данные](#4-загрузить-данные)
+  - [5) Запустить API](#5-запустить-api)
+- [API](#api)
+  - [/health](#health)
+  - [/search](#search)
+  - [/catalog/search](#catalogsearch)
+  - [/sku/…](#sku)
+  - [Swagger / OpenAPI](#swagger--openapi)
+- [Логика цен и скидок](#логика-цен-и-скидок)
+- [Adminer (SQL UI)](#adminer-sql-ui)
+- [Миграции БД](#миграции-бд)
+- [ETL / загрузчик](#etl--загрузчик)
+- [CI/CD и CHANGELOG](#cicd-и-changelog)
+- [Roadmap](#roadmap)
 
-### Поднять инфраструктуру и применить миграции
+---
+
+## Требования
+
+- **Python** 3.11+ (подойдёт 3.10/3.12, но тестируется на 3.11)
+- **pip**, **virtualenv** (рекомендуется)
+- **Docker** + **Docker Compose**
+- Интернет для установки зависимостей (`openpyxl`, `psycopg2-binary`, …)
+
+---
+
+## Быстрый старт
+
+### 1) Поднять БД
+
 ```powershell
-git clone https://github.com/glinozem/wine-assistant.git
-cd wine-assistant
 docker compose up -d
+# БД: 127.0.0.1:15432 (host) → контейнер db:5432
+# Adminer: http://localhost:18080
+⚠️ db/init.sql создаёт минимальную схему. Для полной схемы обязательно примените миграции!
 
-# применить все .sql из db/migrations
-powershell -ExecutionPolicy Bypass -File .\scripts\migrate.ps1
-Переменные окружения (пример)
-Создайте .env при необходимости:
-
-dotenv
+1_5) Применить миграции (обязательно)
+powershell
 Копировать код
-API_PORT=18000
+# применит все *.sql из db/migrations по алфавиту
+powershell -ExecutionPolicy Bypass -File .\scripts\migrate.ps1
+Миграции добавят:
+
+products.price_list_rub, products.price_final_rub;
+
+историю цен product_prices (+ guardrails: без перекрытий, уникальный индекс);
+
+историю остатков inventory_history и индексы;
+
+актуальную структуру inventory (stock_total, reserved, stock_free);
+
+индексы/расширения (pg_trgm, pgvector, btree_gist и пр.).
+
+2) Создать .env
+ini
+Копировать код
+# .env
+PGHOST=127.0.0.1
+PGPORT=15432
+PGUSER=postgres
+PGPASSWORD=dev_local_pw
+PGDATABASE=wine_db
+
+# API
 API_KEY=mytestkey
-DATABASE_URL=postgresql://postgres:postgres@db:5432/wine_db
-Проверка API
+FLASK_HOST=127.0.0.1
+FLASK_PORT=18000
+FLASK_DEBUG=1
+3) Установить зависимости
+powershell
+Копировать код
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+Для Excel используется openpyxl.
+
+4) Загрузить данные
+Используйте единый скрипт scripts/load_csv.py.
+
+Excel (с учётом скидки из S5):
+
+powershell
+Копировать код
+$FILE="data\inbox\Копия 2025_01_20 Прайс_Легенда_Виноделия.xlsx"
+python scripts\load_csv.py --excel "$FILE" --asof 2025-01-20 --discount-cell S5 --prefer-discount-cell
+CSV (семпл):
+
+powershell
+Копировать код
+python scripts\load_csv.py --csv data\sample\dw_sample_products.csv
+5) Запустить API
+powershell
+Копировать код
+python api\app.py
+# или с .env: FLASK_HOST=127.0.0.1, FLASK_PORT=18000
+# http://127.0.0.1:18000/health
+API
+/health
+Проверка готовности:
+
 bash
 Копировать код
-# история цен
-curl -H "X-API-Key: mytestkey" "http://127.0.0.1:18000/sku/D009704/price-history?limit=5"
+GET /health → { "ok": true }
+/search
+Поиск в каталоге по финальной цене и полнотексту:
 
-# история остатков
-curl -H "X-API-Key: mytestkey" "http://127.0.0.1:18000/sku/D009704/inventory-history?from=2025-01-01&to=2025-12-31&limit=5"
-Swagger / OpenAPI
-UI: http://127.0.0.1:18000/docs
-
-Спецификация: http://127.0.0.1:18000/openapi.json
-
-Если пути отличаются — проверьте конфиг в api/app.py.
-
-🗄️ Схема БД (PostgreSQL)
-Расширения: pg_trgm, vector, btree_gist.
-
-products
-price_list_rub numeric, price_final_rub numeric (+ индексы).
-
-product_prices
-
-code text (FK → products(code)), price_rub numeric, effective_from ts, effective_to ts
-
-индексы: idx_product_prices_open, ux_product_prices_code_from
-
-ограничения: product_prices_no_overlap, chk_product_prices_nonneg
-
-функции: upsert_price(text, numeric, timestamp/timestamptz)
-
-inventory_history
-code, stock_total, reserved, stock_free, as_of ts
-индекс: idx_inventory_history_code_time
-функции: upsert_inventory(text, numeric, numeric, numeric, timestamp/timestamptz)
-
-Служебные SQL:
-
-db/migrations/2025-10-14-price-history-guardrails.sql — ограничения и индексы.
-
-db/migrations/2025-10-14-price-check.sql — чек неотрицательных цен.
-
-db/migrations/2025-10-14-diagnostics.sql — проверка индексов/перекрытий/несоответствий.
-
-🔐 Аутентификация
-Все эндпоинты ожидают заголовок:
-
-makefile
+php-template
 Копировать код
-X-API-Key: <ваш_ключ>
-Ключ задаётся в настройках сервиса/окружении (см. .env и api/app.py).
+GET /search?q=<строка>&max_price=<число>&limit=<n>
+Фильтр по цене идёт по price_final_rub.
 
-🤖 CI/CD и релизы
-Release Drafter создаёт черновик релиза из PR’ов.
+Релевантность — pg_trgm.similarity по search_text (+ fallback по title_en).
 
-Changelog on Release:
+limit по умолчанию 10.
 
-триггеры: release: [published, edited] + ручной workflow_dispatch
+/catalog/search
+Пагинация + фильтры + наличие:
 
-генерирует CHANGELOG.md и открывает авто-PR из ветки docs/changelog/vX.Y.Z
+pgsql
+Копировать код
+GET /catalog/search?q=&max_price=&color=&region=&style=&grape=&in_stock=(true|false)&limit=20&offset=0
+Возвращает { items, total, limit, offset }.
+Поле in_stock берётся из таблицы inventory (по умолчанию true, если нет записи).
 
-использует секрет CHANGELOG_PR_PAT (fine-grained PAT, ограниченный на этот репозиторий).
+/sku
+Детали товара (требует API-ключ):
 
-Чтобы PR с changelog проходили без подвисших проверок:
+vbnet
+Копировать код
+GET /sku/<code>
+Headers: X-API-Key: <ваш ключ>
+История цен:
 
-создайте PAT со Scope: Contents: RW, Pull Requests: RW, Commit Statuses: RW;
+bash
+Копировать код
+GET /sku/<code>/price-history?limit=...&offset=...
+Headers: X-API-Key: <ваш ключ>
+История остатков (с датами):
 
-добавьте секрет репозитория CHANGELOG_PR_PAT;
+vbnet
+Копировать код
+GET /sku/<code>/inventory-history?from=YYYY-MM-DD&to=YYYY-MM-DD&limit=...&offset=...
+Headers: X-API-Key: <ваш ключ>
+Swagger / OpenAPI
+/openapi.json — спецификация (если включили).
 
-workflow уже настроен на использование PAT и least-privilege (persist-credentials: false).
+/docs — Swagger UI (если включили flasgger).
 
-🧑‍💻 Разработка
-Любые изменения схемы — отдельный .sql в db/migrations/ + scripts/migrate.ps1.
+Как включить (опционально):
 
-Windows/UTF-8: используйте chcp 65001 и Get-Content -Raw | psql -f -, чтобы избежать проблем кодировки.
+bash
+Копировать код
+pip install flasgger
+В api/app.py:
 
-Линтеры/проверки — см. workflow CI. В репозитории настроен pre-commit.
+python
+Копировать код
+from flasgger import Swagger
+# ...
+app = Flask(__name__)
+Swagger(app, template_file='openapi.yaml')  # или собрать dict динамически
+Логика цен и скидок
+price_list_rub — прайс-цена из Excel (столбец «Цена прайс»).
 
-📝 Changelog
-Файл CHANGELOG.md генерируется автоматически и приезжает авто-PR’ом.
-Список релизов — во вкладке Releases.
+price_final_rub — финальная цена с учётом скидки.
 
-🧭 Roadmap (коротко)
-API: пагинация по умолчанию, сортировки, POST-обёртки над upsert_* с валидацией.
+Скидка берётся в порядке приоритета:
 
-БД: переход на timestamptz/numeric(12,2), партиционирование inventory_history.
+из ячейки S5 (верхняя скидка в шапке) — если задана или --prefer-discount-cell;
 
-Поиск: улучшить FTS, подключить эмбеддинги (vector) и гибридный поиск.
+из «второй строки» заголовка (если там указан %);
 
-Наблюдаемость: health/ready, метрики Prometheus, структурные логи.
+из колонки «Цена со скидкой»;
 
-Безопасность: JWT/rotation для ключей, rate-limit.
+иначе price_final_rub = price_list_rub.
 
-DX: Makefile/Taskfile, dev-compose с авто-перезапуском, сборка образа в GHCR.
+Переменная окружения PREFER_S5=1 или флаг --prefer-discount-cell заставляет приоритетно использовать S5.
 
-📄 Лицензия
-TBD.
+Эндпоинт /search фильтрует по price_final_rub.
+
+Adminer (SQL UI)
+URL: http://localhost:18080
+
+Внутри docker-сети:
+
+Server: db
+
+User: postgres
+
+Password: dev_local_pw
+
+Database: wine_db
+
+С хоста (psql): 127.0.0.1:15432
+
+Миграции БД
+SQL-миграции: db/migrations/*.sql
+
+Прогон:
+
+powershell
+Копировать код
+powershell -ExecutionPolicy Bypass -File .\scripts\migrate.ps1
+Накатывают:
+
+колонки цен в products,
+
+историю цен product_prices (уникальный индекс, запрет перекрытий),
+
+историю остатков inventory_history,
+
+актуальные поля в inventory (stock_total, reserved, stock_free),
+
+индексы и расширения (pg_trgm, btree_gist и пр.).
+
+db/init.sql — минимальная схема для инициализации контейнера.
+Для полноценной работы обязательно выполняйте миграции.
+
+ETL / загрузчик
+Используйте только scripts/load_csv.py:
+
+Поддерживает Excel и CSV.
+
+Автоопределяет шапку, извлекает скидку из S5, нормализует коды.
+
+Пишет:
+
+products (оба типа цен, атрибуты),
+
+product_prices (история цен),
+
+inventory и inventory_history (остатки/резервы/свободный остаток).
+
+Старый скрипт etl/run_daily.py — deprecated.
+
+CI/CD и CHANGELOG
+Release Drafter формирует черновики релизов.
+
+При публикации/редактировании релиза триггерится Changelog on Release:
+
+генерирует CHANGELOG.md;
+
+создаёт авто-PR docs/changelog: <tag>.
+
+Для надёжного авто-PR используем PAT (fine-grained) в secrets.PAT_CREATE_PR.
+
+Бейджи в начале README показывают статусы CI, Release Drafter, Changelog on Release.
+
+Roadmap
+ Выравнять db/init.sql с актуальной схемой (чтобы cold-start без миграций тоже работал).
+
+ Покрыть scripts/load_csv.py тестами (минимум happy-path + разбор S5 + конфликтующие цены).
+
+ Вынести CORS (flask-cors) для фронта.
+
+ Полноценная OpenAPI-схема + аннотации у всех эндпоинтов.
+
+ Примеры клиентов (curl/PowerShell, Python requests).
+
+ Метрики (логирование запросов, время ответа), Sentry/OTel (опционально).
