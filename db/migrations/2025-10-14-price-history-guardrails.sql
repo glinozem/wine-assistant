@@ -36,7 +36,7 @@ UPDATE product_prices p
       OR p.effective_to < p.effective_from
    );
 
--- запрет перекрывающихся интервалов (DEFERRABLE — удобно для батчей)
+-- запрет перекрывающихся интервалов (только для закрытых интервалов)
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -46,12 +46,13 @@ BEGIN
       ADD CONSTRAINT product_prices_no_overlap
       EXCLUDE USING gist (
         code WITH =,
-        tstzrange(
-          effective_from::timestamptz,
-          COALESCE(effective_to, 'infinity')::timestamptz,
+        tsrange(                    -- ← НЕ tstzrange!
+          effective_from,           -- ← БЕЗ ::timestamptz
+          effective_to,             -- ← БЕЗ ::timestamptz
           '[)'
         ) WITH &&
       )
+      WHERE (effective_to IS NOT NULL)
       DEFERRABLE INITIALLY DEFERRED;
   END IF;
 END $$;
