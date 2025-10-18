@@ -163,6 +163,15 @@ def readiness():
     status_code = 200 if overall_status == "ready" else 503
     return jsonify(response), status_code
 
+
+@app.get("/version")
+def version():
+    """Возвращает версию API."""
+    return jsonify({
+        'version': os.getenv('APP_VERSION', '0.2.0')
+    })
+
+
 @app.get("/health")
 def health():
     return jsonify(ok=True)
