@@ -435,6 +435,13 @@ docker compose up -d
 
 # Вариант 2: Применить миграции на существующую БД
 powershell -ExecutionPolicy Bypass -File .\scripts\migrate.ps1
+# → Миграции обновят структуру без потери данных
+```
+
+**Проверка после исправления:**
+```powershell
+docker compose exec db psql -U postgres -d wine_db -c "\d products" | Select-String "price_final_rub"
+# Должно показать: price_final_rub | numeric
 ```
 
 ---
