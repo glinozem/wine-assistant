@@ -32,3 +32,6 @@ db_data/
 Thumbs.db
 .idea/
 .vscode/
+
+# Backup files
+*.backup
