@@ -56,6 +56,7 @@ def liveness():
     """Liveness probe: процесс жив (без проверки БД)"""
     return jsonify({
         'status': 'alive',
+        'version': os.getenv('APP_VERSION', '0.2.0'),
         'timestamp': datetime.utcnow().isoformat() + 'Z',
         'uptime_seconds': int(time.time() - app.start_time)
     }), 200
