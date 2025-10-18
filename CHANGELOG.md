@@ -1,6 +1,8 @@
 # Changelog
 
-## v0.1.6
+## v0.1.11
 
-* docs: align README with real schema, migrations, pricing, API key, Swagger, CI (#22) (55bb268) by glinozem
-* docs(changelog): add CHANGELOG for v0.1.5 (#21) (c030153) by glinozem
+* docs: update README after Sprint 2 (healthchecks) (#38) (2f33309) by glinozem
+* feat(api): add version endpoint (#37) (4cdabc4) by glinozem
+* feat(api): add version field to /live endpoint (#36) (9d2d970) by glinozem
+* feat(api): add /live and /ready healthcheck endpoints (#35) (5cc37b9) by glinozem
