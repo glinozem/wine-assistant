@@ -1,16 +1,20 @@
 # api/app.py
 
 import os
+import time
+from datetime import datetime
 from functools import wraps
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, g
 import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
+from jinja2.utils import missing
 
 load_dotenv()
 
 app = Flask(__name__)
+app.start_time = time.time()
 
 # JSON всегда в UTF-8 без \uXXXX
 app.json.ensure_ascii = False           # Flask ≥ 2.2
@@ -46,6 +50,117 @@ def get_conn():
         dbname=os.getenv("PGDATABASE", "wine_db"),
     )
 
+
+@app.get("/live")
+def liveness():
+    """Liveness probe: процесс жив (без проверки БД)"""
+    return jsonify({
+        'status': 'alive',
+        'timestamp': datetime.utcnow().isoformat() + 'Z',
+        'uptime_seconds': int(time.time() - app.start_time)
+    }), 200
+
+
+@app.get("/ready")
+def readiness():
+    """Readiness probe: готов к трафику (проверка БД + constraints)."""
+    start_time = time.time()
+    checks = {}
+    overall_status = "ready"
+
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            # 1. Базовая проверка подключения
+            db_start = time.time()
+            cur.execute("SELECT version()")
+            db_version = cur.fetchone()[0].split()[0:2]  # "PostgreSQL 16.1"
+            db_latency = (time.time() - db_start) * 1000
+
+            # 2. Проверка таблиц
+            cur.execute("""
+                        SELECT table_name
+                        FROM information_schema.tables
+                        WHERE table_schema = 'public'
+                          AND table_name IN
+                              ('products', 'product_prices', 'inventory',
+                               'inventory_history')
+                        ORDER BY table_name
+                        """)
+            tables = [row[0] for row in cur.fetchall()]
+            expected_tables = ['inventory', 'inventory_history',
+                               'product_prices', 'products']
+
+            if tables != expected_tables:
+                raise Exception(
+                    f"Missing tables. Expected: {expected_tables}, got: {tables}")
+
+            # 3. Проверка индексов
+            cur.execute("""
+                        SELECT indexname
+                        FROM pg_indexes
+                        WHERE schemaname = 'public'
+                          AND indexname IN (
+                                            'ux_product_prices_code_from',
+                                            'idx_inventory_history_code_time',
+                                            'idx_inventory_code_free'
+                            )
+                        ORDER BY indexname
+                        """)
+            indexes = [row[0] for row in cur.fetchall()]
+            expected_indexes = [
+                'idx_inventory_code_free',
+                'idx_inventory_history_code_time',
+                'ux_product_prices_code_from'
+            ]
+
+            if len(indexes) < len(expected_indexes):
+                missing = set(expected_indexes) - set(indexes)
+                raise Exception(f"Missing indexes: {missing}")
+
+            # 4. Проверка constraints
+            cur.execute("""
+                        SELECT conname
+                        FROM pg_constraint
+                        WHERE conrelid = 'product_prices'::regclass
+                AND conname IN ('chk_product_prices_nonneg')
+                        ORDER BY conname
+                        """)
+            constraints = [row[0] for row in cur.fetchall()]
+
+            if 'chk_product_prices_nonneg' not in constraints:
+                raise Exception(
+                    "Missing CHECK constraint: chk_product_prices_nonneg")
+
+            checks['database'] = {
+                'status': 'up',
+                'latency_ms': round(db_latency, 2),
+                'version': ' '.join(db_version),
+                'tables': tables,
+                'indexes': indexes,
+                'constraints': constraints
+            }
+
+        conn.close()
+
+    except Exception as e:
+        overall_status = "not_ready"
+        checks['database'] = {
+            'status': 'down',
+            'error': str(e)
+        }
+
+    # Response
+    response = {
+        'status': overall_status,
+        'timestamp': datetime.utcnow().isoformat() + 'Z',
+        'version': os.getenv('APP_VERSION', '0.2.0'),
+        'checks': checks,
+        'response_time_ms': round((time.time() - start_time) * 1000, 2)
+    }
+
+    status_code = 200 if overall_status == "ready" else 503
+    return jsonify(response), status_code
 
 @app.get("/health")
 def health():
