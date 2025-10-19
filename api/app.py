@@ -6,6 +6,7 @@ from datetime import datetime
 from functools import wraps
 
 from flask import Flask, request, jsonify, g
+from flask_cors import CORS
 import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
@@ -15,6 +16,14 @@ load_dotenv()
 
 app = Flask(__name__)
 app.start_time = time.time()
+
+# CORS configuration
+cors_origins = os.getenv("CORS_ORIGINS", "*")
+if cors_origins == "*":
+    CORS(app)  # Разрешить все источники (только для разработки!)
+else:
+    origins_list = [origin.strip() for origin in cors_origins.split(",")]
+    CORS(app, origins=origins_list)
 
 # JSON всегда в UTF-8 без \uXXXX
 app.json.ensure_ascii = False           # Flask ≥ 2.2
