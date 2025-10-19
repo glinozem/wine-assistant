@@ -35,3 +35,9 @@ Thumbs.db
 
 # Backup files
 *.backup
+
+# Test files
+tests/
+
+# Test files
+tests/
