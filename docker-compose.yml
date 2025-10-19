@@ -1,19 +1,31 @@
 services:
   db:
     image: pgvector/pgvector:pg16
+    restart: unless-stopped
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev_local_pw}
       POSTGRES_DB: wine_db
       TZ: Europe/Helsinki
     ports:
       - "127.0.0.1:${DB_PORT:-15432}:5432"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres -d wine_db" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     volumes:
       - db_data:/var/lib/postgresql/data
-      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro   # <<< добавить
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
   adminer:
     image: adminer:4
     restart: unless-stopped
     ports:
       - "127.0.0.1:${ADMINER_PORT:-18080}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
 volumes:
   db_data:
