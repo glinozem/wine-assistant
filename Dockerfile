@@ -18,6 +18,13 @@ COPY scripts/ ./scripts/
 COPY db/ ./db/
 COPY .env.example .env
 
+# Create non-root user
+RUN useradd -m -u 1000 appuser && \
+    chown -R appuser:appuser /app
+
+# Switch to non-root user
+USER appuser
+
 # Expose port
 EXPOSE 8000
 
