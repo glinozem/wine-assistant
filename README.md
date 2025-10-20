@@ -617,6 +617,165 @@ $response.Headers["Access-Control-Allow-Origin"]
 
 ## Docker Health Monitoring
 
+---
+
+## Docker API Service
+
+### Запуск через Docker Compose
+
+API теперь доступен как отдельный сервис в Docker:
+```powershell
+# Запустить все сервисы
+docker compose up -d
+
+# Проверить статус
+docker compose ps
+
+# Логи API
+docker compose logs -f api
+
+# Остановить
+docker compose down
+```
+
+### Архитектура
+```
+Docker Compose:
+├─ db (PostgreSQL + pgvector)
+│  └─ Healthcheck: pg_isready
+├─ adminer (Database UI)
+│  └─ Зависит от: db (healthy)
+└─ api (Flask API)
+   ├─ Зависит от: db (healthy)
+   └─ Healthcheck: curl /ready
+```
+
+### Healthcheck для API
+
+API настроен с автоматическим healthcheck:
+
+**Параметры:**
+- **Команда:** `curl -f http://localhost:8000/ready`
+- **Интервал:** 30 секунд
+- **Timeout:** 10 секунд
+- **Retries:** 3 попытки
+- **Start period:** 40 секунд (время на инициализацию)
+
+**Проверка статуса:**
+```powershell
+# Статус всех сервисов (должен быть "healthy")
+docker compose ps
+
+# Детальная информация о health checks
+docker inspect wine_assistant-api-1 --format='{{.State.Health.Status}}'
+
+# История последних проверок
+docker inspect wine_assistant-api-1 --format='{{json .State.Health.Log}}' | ConvertFrom-Json | Select-Object -First 3
+```
+
+### Переменные окружения
+
+API использует следующие переменные из `.env`:
+```ini
+# API Service
+FLASK_PORT=18000          # Порт на хосте (внутри контейнера всегда 8000)
+API_KEY=your_secret_key   # API ключ для защищённых эндпоинтов
+APP_VERSION=0.3.0         # Версия API
+LOG_LEVEL=INFO            # Уровень логирования (DEBUG/INFO/WARN/ERROR)
+CORS_ORIGINS=*            # CORS origins (для production указать конкретные)
+
+# Database (используется для подключения)
+PGHOST=db                 # В Docker используется имя сервиса
+PGPORT=5432               # Внутренний порт БД
+PGUSER=postgres
+PGPASSWORD=dev_local_pw
+PGDATABASE=wine_db
+```
+
+### Endpoints доступные в Docker
+
+После запуска API доступен на:
+
+- **Публичные:**
+  - http://127.0.0.1:18000/health — Базовая проверка
+  - http://127.0.0.1:18000/live — Liveness probe
+  - http://127.0.0.1:18000/ready — Readiness probe
+  - http://127.0.0.1:18000/version — Версия API
+  - http://127.0.0.1:18000/search — Поиск вин
+  - http://127.0.0.1:18000/catalog/search — Расширенный поиск
+
+- **Защищённые (требуется X-API-Key):**
+  - http://127.0.0.1:18000/sku/{code} — Карточка товара
+  - http://127.0.0.1:18000/sku/{code}/price-history — История цен
+  - http://127.0.0.1:18000/sku/{code}/inventory-history — История остатков
+
+### Troubleshooting
+
+#### API unhealthy или не запускается
+```powershell
+# 1. Проверьте логи API
+docker compose logs api
+
+# 2. Проверьте, что БД healthy
+docker compose ps db
+
+# 3. Проверьте подключение к БД изнутри контейнера
+docker compose exec api python -c "import psycopg2; print(psycopg2.connect('host=db dbname=wine_db user=postgres password=dev_local_pw'))"
+
+# 4. Перезапустите сервис
+docker compose restart api
+
+# 5. Пересоздайте контейнеры
+docker compose down
+docker compose up -d --build
+```
+
+#### API показывает старую версию
+```powershell
+# Пересоберите образ
+docker compose build --no-cache api
+docker compose up -d
+```
+
+#### Порт 18000 занят
+```powershell
+# Измените порт в .env
+FLASK_PORT=18001
+
+# Перезапустите
+docker compose down
+docker compose up -d
+```
+
+### Production Deployment
+
+Для production окружения:
+
+1. **Измените Flask на Gunicorn:**
+```dockerfile
+   # В Dockerfile замените CMD на:
+   CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:8000", "api.app:app"]
+```
+
+2. **Установите Gunicorn:**
+```
+   # В requirements.txt добавьте:
+   gunicorn==21.2.0
+```
+
+3. **Настройте environment variables:**
+```ini
+   FLASK_DEBUG=0
+   LOG_LEVEL=INFO
+   CORS_ORIGINS=https://yourdomain.com
+```
+
+4. **Используйте secrets для паролей:**
+   - Не храните пароли в `.env` в production
+   - Используйте Docker secrets или AWS Secrets Manager
+
+---
+
 ### Healthcheck для БД
 
 Docker автоматически мониторит здоровье PostgreSQL:
