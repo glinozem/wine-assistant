@@ -941,13 +941,15 @@ def price_history(code: str):
         params.append(to)
 
     where_sql = "WHERE " + " AND ".join(where)
+    # nosemgrep: python.flask.security.injection.tainted-sql-string.tainted-sql-string
+    # Safe: where_sql is built from constants, params are passed separately via psycopg2 parameterized queries
     sql = f"""
-      SELECT price_rub, effective_from, effective_to
-      FROM product_prices
-      {where_sql}
-      ORDER BY effective_from DESC
-      LIMIT %s OFFSET %s
-    """
+          SELECT price_rub, effective_from, effective_to
+          FROM product_prices
+          {where_sql}
+          ORDER BY effective_from DESC
+          LIMIT %s OFFSET %s
+        """
 
     with get_db() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(sql, (*params, limit, offset))
@@ -1067,13 +1069,15 @@ def inventory_history(code: str):
         params.append(to)
 
     where_sql = "WHERE " + " AND ".join(where)
+    # nosemgrep: python.flask.security.injection.tainted-sql-string.tainted-sql-string
+    # Safe: where_sql is built from constants, params are passed separately via psycopg2 parameterized queries
     sql = f"""
-      SELECT stock_total, reserved, stock_free, as_of
-      FROM inventory_history
-      {where_sql}
-      ORDER BY as_of DESC
-      LIMIT %s OFFSET %s
-    """
+          SELECT stock_total, reserved, stock_free, as_of
+          FROM inventory_history
+          {where_sql}
+          ORDER BY as_of DESC
+          LIMIT %s OFFSET %s
+        """
 
     with get_db() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(sql, (*params, limit, offset))
