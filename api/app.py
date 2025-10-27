@@ -942,8 +942,7 @@ def price_history(code: str):
 
     where_sql = "WHERE " + " AND ".join(where)
     # nosemgrep: python.flask.security.injection.tainted-sql-string.tainted-sql-string
-    # Safe: where_sql is built from constants, params are passed separately via psycopg2 parameterized queries
-    sql = f"""
+    sql = f"""  # Safe: where_sql built from constants, params via psycopg2
           SELECT price_rub, effective_from, effective_to
           FROM product_prices
           {where_sql}
@@ -1070,8 +1069,7 @@ def inventory_history(code: str):
 
     where_sql = "WHERE " + " AND ".join(where)
     # nosemgrep: python.flask.security.injection.tainted-sql-string.tainted-sql-string
-    # Safe: where_sql is built from constants, params are passed separately via psycopg2 parameterized queries
-    sql = f"""
+    sql = f"""  # Safe: where_sql built from constants, params via psycopg2
           SELECT stock_total, reserved, stock_free, as_of
           FROM inventory_history
           {where_sql}
