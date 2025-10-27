@@ -12,6 +12,9 @@ import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
 
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
 load_dotenv()
 
 app = Flask(__name__)
@@ -63,6 +66,26 @@ swagger_template = {
 }
 
 swagger = Swagger(app, config=swagger_config, template=swagger_template)
+
+# Rate Limiting configuration
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=[os.getenv("RATE_LIMIT_PUBLIC", "100/hour")],
+    storage_uri=os.getenv("RATE_LIMIT_STORAGE_URL", "memory://"),
+    enabled=os.getenv("RATE_LIMIT_ENABLED", "1") == "1",
+    headers_enabled=True,
+    swallow_errors=True  # Don't crash if Redis unavailable
+)
+
+@app.errorhandler(429)
+def ratelimit_handler(e):
+    """Custom handler for rate limit exceeded errors."""
+    return jsonify({
+        "error": "rate_limit_exceeded",
+        "message": "Too many requests. Please try again later.",
+        "retry_after": e.description
+    }), 429
 
 # JSON всегда в UTF-8 без \uXXXX
 app.json.ensure_ascii = False           # Flask ≥ 2.2
@@ -715,6 +738,7 @@ def catalog_search():
 
 
 @app.route('/sku/<code>', methods=['GET'])
+@limiter.limit(os.getenv("RATE_LIMIT_PROTECTED", "1000/hour"))
 @require_api_key
 def get_sku(code: str):
     """
@@ -832,6 +856,7 @@ def get_sku(code: str):
 
 
 @app.route('/sku/<code>/price-history', methods=['GET'])
+@limiter.limit(os.getenv("RATE_LIMIT_PROTECTED", "1000/hour"))
 @require_api_key
 def price_history(code: str):
     """
@@ -960,6 +985,7 @@ def price_history(code: str):
 
 
 @app.route('/sku/<code>/inventory-history', methods=['GET'])
+@limiter.limit(os.getenv("RATE_LIMIT_PROTECTED", "1000/hour"))
 @require_api_key
 def inventory_history(code: str):
     """
