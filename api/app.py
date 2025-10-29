@@ -15,10 +15,18 @@ from dotenv import load_dotenv
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
+# Импорты для structured logging
+from logging_config import setup_logging
+from request_middleware import setup_request_logging
+
 load_dotenv()
 
 app = Flask(__name__)
 app.start_time = time.time()
+
+# Настройка structured logging
+setup_logging(app)
+setup_request_logging(app)
 
 # CORS configuration
 cors_origins = os.getenv("CORS_ORIGINS", "*")
