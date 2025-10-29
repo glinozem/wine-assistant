@@ -18,6 +18,8 @@ concurrency:
 permissions:
   contents: write
   pull-requests: write
+  actions: read
+  issues: write
 
 jobs:
   build:
