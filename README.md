@@ -1,5 +1,15 @@
 # wine-assistant
 
+[![CI](https://github.com/glinozem/wine-assistant/workflows/CI/badge.svg)](https://github.com/glinozem/wine-assistant/actions)
+[![Tests](https://github.com/glinozem/wine-assistant/workflows/Tests/badge.svg)](https://github.com/glinozem/wine-assistant/actions)
+[![Release Drafter](https://github.com/glinozem/wine-assistant/workflows/Release%20Drafter/badge.svg)](https://github.com/glinozem/wine-assistant/actions)
+[![Changelog on Release](https://github.com/glinozem/wine-assistant/workflows/Changelog%20on%20Release/badge.svg)](https://github.com/glinozem/wine-assistant/actions)
+
+![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)
+![Python](https://img.shields.io/badge/python-3.11+-brightgreen.svg)
+![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
+
 Мини-сервис для поиска вин, хранения прайс-данных и истории цен/остатков. API на Flask + PostgreSQL (pg_trgm, pgvector), загрузка Excel/CSV.
 
 **Версия: 0.4.0** (Спринт 3 — Security & Rate Limiting)
