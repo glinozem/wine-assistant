@@ -14,11 +14,10 @@ concurrency:
   group: changelog-${{ github.ref || inputs.tag || 'manual' }}
   cancel-in-progress: false
 
-# Минимальные права для GITHUB_TOKEN (PR делает PAT)
+# Права для создания PR и коммитов
 permissions:
-  contents: read
-  pull-requests: read
-  statuses: read
+  contents: write
+  pull-requests: write
 
 jobs:
   build:
