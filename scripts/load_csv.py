@@ -14,6 +14,8 @@ import psycopg2.extras
 from dotenv import load_dotenv
 import openpyxl  # чтение значения скидки из фиксированной ячейки (например, S5)
 
+import logging
+
 load_dotenv()
 
 
@@ -472,7 +474,18 @@ def upsert_records(df: pd.DataFrame, asof: date | datetime):
             total += 1
 
         conn.commit()
-    print(f"Upsert done: rows={total}, products_upd={prod_upd}, price_hist={price_hist}, inventory_upd={inv_upd}")
+    # print(f"Upsert done: rows={total}, products_upd={prod_upd},
+    # price_hist={price_hist}, inventory_upd={inv_upd}")
+    logger = logging.getLogger(__name__)
+    logger.info(
+        "Upsert completed",
+        extra={
+            "total_rows": total,
+            "products_updated": prod_upd,
+            "price_history_records": price_hist,
+            "inventory_updated": inv_upd
+        }
+    )
 
 
 # =========================
