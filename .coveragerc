@@ -1,0 +1,46 @@
+[run]
+# Source code directories to measure
+source =
+    api
+    scripts
+    etl
+
+# Omit these files/directories from coverage
+omit =
+    */tests/*
+    */test_*.py
+    */__pycache__/*
+    */.venv/*
+    */venv/*
+    */migrations/*
+    */conftest.py
+    setup.py
+
+[report]
+# Show missing lines in terminal report
+show_missing = True
+
+# Fail if coverage is below this threshold
+fail_under = 15
+
+# Ignore these lines in coverage calculation
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    raise AssertionError
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:
+    @abstractmethod
+    @abc.abstractmethod
+
+# Precision for percentages
+precision = 2
+
+[html]
+# Directory for HTML coverage report
+directory = htmlcov
+
+[xml]
+# Output file for XML coverage report (for CI/CD)
+output = coverage.xml

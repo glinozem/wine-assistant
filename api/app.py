@@ -16,8 +16,8 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
 # Импорты для structured logging
-from logging_config import setup_logging
-from request_middleware import setup_request_logging
+from api.logging_config import setup_logging
+from api.request_middleware import setup_request_logging
 
 load_dotenv()
 
