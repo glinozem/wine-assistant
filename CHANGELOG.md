@@ -10,3 +10,6 @@
 * feat(docker): Add healthcheck and automatic restart policies (#42) (21887f0) by glinozem
 * Feat/add cors supportfeat(api): Add CORS support for frontend integration (#41) (f31a0af) by glinozem
 * chore: add backup files to .gitignore (#40) (4787e0d) by glinozem
+## v0.4.1
+
+* feat(api): Add structured JSON logging with request tracing (#53) (23de6f8) by glinozem
