@@ -4,6 +4,7 @@
 [![Tests](https://github.com/glinozem/wine-assistant/workflows/Tests/badge.svg)](https://github.com/glinozem/wine-assistant/actions)
 [![Release Drafter](https://github.com/glinozem/wine-assistant/workflows/Release%20Drafter/badge.svg)](https://github.com/glinozem/wine-assistant/actions)
 [![Changelog on Release](https://github.com/glinozem/wine-assistant/workflows/Changelog%20on%20Release/badge.svg)](https://github.com/glinozem/wine-assistant/actions)
+[![Coverage](https://img.shields.io/badge/coverage-26.69%25-green.svg)](https://github.com/glinozem/wine-assistant)
 
 ![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.11+-brightgreen.svg)
