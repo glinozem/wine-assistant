@@ -10,7 +10,7 @@ import os
 sys.path.insert(0, os.path.abspath(
     os.path.join(os.path.dirname(__file__), '..', '..')))
 
-from scripts.load_csv import _norm, _to_float, _to_int, _norm_key
+from scripts.load_csv import _norm, _to_float, _to_int, _norm_key, _get_discount_from_cell
 
 
 # =============================================================================
@@ -297,3 +297,148 @@ def test_norm_key_collapses_multiple_underscores():
 
     # Assert
     assert result == "цена_прайс"
+
+
+# =============================================================================
+# Tests for _get_discount_from_cell() function
+# =============================================================================
+
+class TestGetDiscountFromCell:
+    """
+    Тесты для извлечения скидки из ячейки Excel.
+
+    Функция _get_discount_from_cell() читает значение из указанной ячейки
+    Excel файла и парсит скидку в формате доли (0.0 - 1.0).
+
+    Поддерживаемые форматы:
+    - "10%" -> 0.10
+    - "0.15" -> 0.15
+    - 10 (число > 1) -> 0.10
+    - None -> None (пустая ячейка)
+    - "invalid" -> None (некорректный формат)
+    """
+
+    @pytest.mark.unit
+    def test_discount_percentage_format(self, tmp_path):
+        """
+        Test: Скидка в формате "10%" должна преобразоваться в 0.10
+
+        Arrange: Создаём тестовый Excel файл с "10%" в ячейке S5
+        Act: Вызываем _get_discount_from_cell()
+        Assert: Проверяем, что вернулось 0.10
+        """
+        # Arrange - создаём тестовый Excel файл
+        from openpyxl import Workbook
+
+        wb = Workbook()
+        ws = wb.active
+        ws['S5'] = '10%'  # Устанавливаем скидку
+
+        excel_file = tmp_path / "test_discount.xlsx"
+        wb.save(excel_file)
+
+        # Act - вызываем функцию
+        result = _get_discount_from_cell(str(excel_file), 0, 'S5')
+
+        # Assert - проверяем результат
+        assert result == 0.10
+
+    @pytest.mark.unit
+    def test_discount_decimal_format(self, tmp_path):
+        """
+        Test: Скидка в формате 0.15 (десятичная дробь) должна остаться 0.15
+
+        Arrange: Создаём Excel с числом 0.15 в S5
+        Act: Вызываем _get_discount_from_cell()
+        Assert: Проверяем, что вернулось 0.15
+        """
+        # Arrange
+        from openpyxl import Workbook
+
+        wb = Workbook()
+        ws = wb.active
+        ws['S5'] = 0.15  # Число (не строка!)
+
+        excel_file = tmp_path / "test_discount_decimal.xlsx"
+        wb.save(excel_file)
+
+        # Act
+        result = _get_discount_from_cell(str(excel_file), 0, 'S5')
+
+        # Assert
+        assert result == 0.15
+
+    @pytest.mark.unit
+    def test_discount_large_number_format(self, tmp_path):
+        """
+        Test: Скидка 10 (число > 1) должна преобразоваться в 0.10
+
+        Arrange: Создаём Excel с числом 10 в S5
+        Act: Вызываем _get_discount_from_cell()
+        Assert: Проверяем, что вернулось 0.10 (10% = 0.10)
+        """
+        # Arrange
+        from openpyxl import Workbook
+
+        wb = Workbook()
+        ws = wb.active
+        ws['S5'] = 10  # Число больше 1 -> должно разделиться на 100
+
+        excel_file = tmp_path / "test_discount_large.xlsx"
+        wb.save(excel_file)
+
+        # Act
+        result = _get_discount_from_cell(str(excel_file), 0, 'S5')
+
+        # Assert
+        assert result == 0.10
+
+    @pytest.mark.unit
+    def test_discount_empty_cell(self, tmp_path):
+        """
+        Test: Пустая ячейка S5 должна возвращать None
+
+        Arrange: Создаём Excel с пустой ячейкой S5
+        Act: Вызываем _get_discount_from_cell()
+        Assert: Проверяем, что вернулось None
+        """
+        # Arrange
+        from openpyxl import Workbook
+
+        wb = Workbook()
+        ws = wb.active
+        # S5 остаётся пустой (не устанавливаем значение)
+
+        excel_file = tmp_path / "test_discount_empty.xlsx"
+        wb.save(excel_file)
+
+        # Act
+        result = _get_discount_from_cell(str(excel_file), 0, 'S5')
+
+        # Assert
+        assert result is None
+
+    @pytest.mark.unit
+    def test_discount_invalid_format(self, tmp_path):
+        """
+        Test: Некорректный формат ("invalid") должен возвращать None
+
+        Arrange: Создаём Excel с текстом "invalid" в S5
+        Act: Вызываем _get_discount_from_cell()
+        Assert: Проверяем, что вернулось None
+        """
+        # Arrange
+        from openpyxl import Workbook
+
+        wb = Workbook()
+        ws = wb.active
+        ws['S5'] = 'invalid'  # Некорректное значение
+
+        excel_file = tmp_path / "test_discount_invalid.xlsx"
+        wb.save(excel_file)
+
+        # Act
+        result = _get_discount_from_cell(str(excel_file), 0, 'S5')
+
+        # Assert
+        assert result is None
