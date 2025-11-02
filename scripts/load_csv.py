@@ -18,7 +18,7 @@ import \
 import logging
 
 # Idempotency module for preventing duplicate imports (Issue #80)
-from idempotency import (
+from scripts.idempotency import (
     compute_file_sha256,
     check_file_exists,
     create_envelope,
