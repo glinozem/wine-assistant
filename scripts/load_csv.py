@@ -26,6 +26,9 @@ from scripts.idempotency import (
     create_price_list_entry
 )
 
+# Date extraction module for automatic date parsing (Issue #81)
+from scripts.date_extraction import get_effective_date
+
 load_dotenv()
 
 
@@ -264,7 +267,7 @@ def _excel_read(
                 top_s = _norm(top)
                 bot_s = _norm(bottom)
                 label = top_s if (
-                            bot_s in ("", "nan", None)) else f"{top_s} {bot_s}"
+                        bot_s in ("", "nan", None)) else f"{top_s} {bot_s}"
                 flat_cols.append(label)
                 # скидка в шапке?
                 if _norm_key(top_s) == "цена_со_скидкой" and re.match(
@@ -533,7 +536,12 @@ def main():
     p.add_argument("--header", type=int,
                    help="Номер строки заголовка (0-based). Если не указан — авто-поиск")
     p.add_argument("--asof",
-                   help="Дата 'среза' (YYYY-MM-DD) для истории цен и остатков; по умолчанию сегодня")
+                   help="Дата 'среза' (YYYY-MM-DD) для истории цен и остатков. "
+                        "Если не указана — автоматически извлекается из Excel ячейки или имени файла. "
+                        "Fallback: сегодняшняя дата.")
+    p.add_argument("--date-cell", default="A1",
+                   help="Ячейка Excel для извлечения даты (по умолчанию A1). "
+                        "Также проверяются B1, A2, B2 как fallback.")
     p.add_argument("--discount-cell",
                    default=os.environ.get("DISCOUNT_CELL", "S5"),
                    help="Адрес ячейки со скидкой (по умолчанию S5). Пример: T3")
@@ -541,14 +549,33 @@ def main():
                    help="Если указан флаг — финальная цена рассчитывается по скидке из ячейки даже при наличии колонки 'Цена со скидкой'")
     args = p.parse_args()
 
-    # as of date
-    asof_dt: date
-    if args.asof:
-        asof_dt = datetime.strptime(args.asof, "%Y-%m-%d").date()
-    else:
-        asof_dt = date.today()
-
     path = args.csv or args.excel
+
+    # ==========================
+    # Automatic date extraction (Issue #81)
+    # ==========================
+    # Parse --asof if provided
+    asof_override: Optional[date] = None
+    if args.asof:
+        try:
+            asof_override = datetime.strptime(args.asof, "%Y-%m-%d").date()
+        except ValueError as e:
+            print(
+                f"Error: Invalid date format for --asof. Expected YYYY-MM-DD, got: {args.asof}")
+            raise
+
+    # Get effective date (auto-extract or use override)
+    try:
+        asof_dt = get_effective_date(
+            file_path=path,
+            asof_override=asof_override,
+            date_cell=args.date_cell
+        )
+        print(f"[date] Effective date: {asof_dt} (source: "
+              f"{'--asof override' if asof_override else 'auto-extracted'})")
+    except ValueError as e:
+        print(f"Error: {e}")
+        raise
 
     # ==========================
     # Idempotency check (Issue #80)
@@ -631,7 +658,7 @@ def main():
                                         args.discount_cell) if args.excel else None
 
     prefer_s5 = args.prefer_discount_cell or (
-                os.environ.get("PREFER_S5") in ("1", "true", "True"))
+            os.environ.get("PREFER_S5") in ("1", "true", "True"))
     if prefer_s5:
         discount = disc_cell if disc_cell is not None else disc_hdr
     else:
