@@ -12,9 +12,19 @@ import pandas as pd
 import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
-import openpyxl  # чтение значения скидки из фиксированной ячейки (например, S5)
+import \
+    openpyxl  # чтение значения скидки из фиксированной ячейки (например, S5)
 
 import logging
+
+# Idempotency module for preventing duplicate imports (Issue #80)
+from idempotency import (
+    compute_file_sha256,
+    check_file_exists,
+    create_envelope,
+    update_envelope_status,
+    create_price_list_entry
+)
 
 load_dotenv()
 
@@ -177,7 +187,8 @@ def _canonicalize_headers(cols: Iterable[str]) -> Dict[str, Optional[str]]:
 
 def _find_header_row(xls_path: str, sheet: Any, max_rows: int = 30) -> int:
     """Ищем строку заголовка по наличию ключей ('код'/'code'/'артикул') в первых max_rows строках."""
-    df_top = pd.read_excel(xls_path, sheet_name=sheet, header=None, nrows=max_rows, dtype=str)
+    df_top = pd.read_excel(xls_path, sheet_name=sheet, header=None,
+                           nrows=max_rows, dtype=str)
     for i, row in df_top.iterrows():
         vals = [_norm_key(v) for v in row.values if pd.notna(v)]
         if any(tok in vals for tok in ("код", "code", "артикул")):
@@ -185,7 +196,8 @@ def _find_header_row(xls_path: str, sheet: Any, max_rows: int = 30) -> int:
     return 0
 
 
-def _get_discount_from_cell(xls_path: str, sheet: Any, cell_addr: str = "S5") -> Optional[float]:
+def _get_discount_from_cell(xls_path: str, sheet: Any,
+                            cell_addr: str = "S5") -> Optional[float]:
     """
     Возвращает скидку из указанной ячейки как долю (0..1) или None.
     sheet — индекс (int) или имя (str).
@@ -212,9 +224,9 @@ def _get_discount_from_cell(xls_path: str, sheet: Any, cell_addr: str = "S5") ->
 # Reading CSV/Excel
 # =========================
 def _excel_read(
-    path: str,
-    sheet: Any,
-    header: Optional[int],
+        path: str,
+        sheet: Any,
+        header: Optional[int],
 ) -> Tuple[pd.DataFrame, int, bool, Optional[float]]:
     """
     Читает Excel. Возвращает (df, header_row_base, used_two_rows, discount_pct_from_header)
@@ -230,8 +242,10 @@ def _excel_read(
     hdr_base = _find_header_row(path, sh) if header is None else header
 
     # посмотреть следующую строку
-    peek = pd.read_excel(path, sheet_name=sh, header=None, nrows=hdr_base + 2, dtype=str)
-    second = peek.iloc[hdr_base + 1] if len(peek.index) > hdr_base + 1 else None
+    peek = pd.read_excel(path, sheet_name=sh, header=None, nrows=hdr_base + 2,
+                         dtype=str)
+    second = peek.iloc[hdr_base + 1] if len(
+        peek.index) > hdr_base + 1 else None
     use_two_rows = False
     disc_hdr: Optional[float] = None
 
@@ -241,17 +255,20 @@ def _excel_read(
             use_two_rows = True
 
     if use_two_rows:
-        df_raw = pd.read_excel(path, sheet_name=sh, header=[hdr_base, hdr_base + 1], dtype=str)
+        df_raw = pd.read_excel(path, sheet_name=sh,
+                               header=[hdr_base, hdr_base + 1], dtype=str)
         # расплющим мультишапку и соберём % скидки, если он указан во второй строке под «Цена со скидкой»
         flat_cols = []
         if isinstance(df_raw.columns, pd.MultiIndex):
             for top, bottom in df_raw.columns:
                 top_s = _norm(top)
                 bot_s = _norm(bottom)
-                label = top_s if (bot_s in ("", "nan", None)) else f"{top_s} {bot_s}"
+                label = top_s if (
+                            bot_s in ("", "nan", None)) else f"{top_s} {bot_s}"
                 flat_cols.append(label)
                 # скидка в шапке?
-                if _norm_key(top_s) == "цена_со_скидкой" and re.match(r"^\d+\s*%$", bot_s or ""):
+                if _norm_key(top_s) == "цена_со_скидкой" and re.match(
+                        r"^\d+\s*%$", bot_s or ""):
                     try:
                         disc_hdr = int(re.sub(r"[^\d]", "", bot_s)) / 100.0
                     except Exception:
@@ -264,7 +281,7 @@ def _excel_read(
         df = pd.read_excel(path, sheet_name=sh, header=hdr_base, dtype=str)
 
     print(
-        f"[excel] sheet={sh!r}, header_row={'[{},{}]'.format(hdr_base, hdr_base+1) if use_two_rows else hdr_base}, "
+        f"[excel] sheet={sh!r}, header_row={'[{},{}]'.format(hdr_base, hdr_base + 1) if use_two_rows else hdr_base}, "
         f"header_discount={disc_hdr}, columns={list(df.columns)}"
     )
     return df, hdr_base, use_two_rows, disc_hdr
@@ -287,19 +304,23 @@ def _csv_read(path: str, sep: Optional[str]) -> Tuple[pd.DataFrame, str]:
         import csv as _csv
 
         try:
-            dialect = _csv.Sniffer().sniff(head.decode(enc, errors="ignore"), delimiters=[",", ";", "\t", "|"])
+            dialect = _csv.Sniffer().sniff(head.decode(enc, errors="ignore"),
+                                           delimiters=[",", ";", "\t", "|"])
             sep = dialect.delimiter
         except Exception:
             sep = ","
-        df = pd.read_csv(path, sep=sep, engine="python", encoding=enc, dtype=str, on_bad_lines="warn")
+        df = pd.read_csv(path, sep=sep, engine="python", encoding=enc,
+                         dtype=str, on_bad_lines="warn")
         print(f"[csv] encoding={enc}, sep='{sep}', columns={list(df.columns)}")
     else:
-        df = pd.read_csv(path, sep=sep, engine="python", dtype=str, on_bad_lines="warn")
+        df = pd.read_csv(path, sep=sep, engine="python", dtype=str,
+                         on_bad_lines="warn")
         print(f"[csv] sep='{sep}', columns={list(df.columns)}")
     return df, sep  # type: ignore[return-value]
 
 
-def read_any(path: str, sep: Optional[str] = None, sheet: Any = None, header: Optional[int] = None) -> pd.DataFrame:
+def read_any(path: str, sep: Optional[str] = None, sheet: Any = None,
+             header: Optional[int] = None) -> pd.DataFrame:
     """
     Excel:
       - авто-поиск строки заголовка
@@ -310,7 +331,8 @@ def read_any(path: str, sep: Optional[str] = None, sheet: Any = None, header: Op
     """
     ext = os.path.splitext(path)[1].lower()
     if ext in (".xlsx", ".xlsm", ".xls"):
-        df, hdr_base, used_two_rows, disc_hdr = _excel_read(path, sheet, header)
+        df, hdr_base, used_two_rows, disc_hdr = _excel_read(path, sheet,
+                                                            header)
         # нормализуем названия и маппим
         df.columns = [_norm(c) for c in df.columns]
         header_map = _canonicalize_headers(df.columns)
@@ -336,7 +358,8 @@ def read_any(path: str, sep: Optional[str] = None, sheet: Any = None, header: Op
         if candidate:
             df = df.rename(columns={candidate: "code"})
         else:
-            raise ValueError("Не нашли колонку с кодом (Код / code / Артикул). Проверь шапку файла.")
+            raise ValueError(
+                "Не нашли колонку с кодом (Код / code / Артикул). Проверь шапку файла.")
 
     # зачистка значений
     for c in df.columns:
@@ -370,37 +393,42 @@ def upsert_records(df: pd.DataFrame, asof: date | datetime):
     disc: Optional[float] = df.attrs.get("discount_pct")
 
     ins_products = """
-      INSERT INTO products(
-        code, producer, title_ru, country, region, grapes, abv, pack, volume,
-        price_list_rub, price_final_rub, price_rub
-      )
-      VALUES (%(code)s, %(producer)s, %(title_ru)s, %(country)s, %(region)s, %(grapes)s, %(abv)s, %(pack)s, %(volume)s,
-              %(price_list_rub)s, %(price_final_rub)s, %(price_rub)s)
-      ON CONFLICT (code) DO UPDATE SET
-        producer        = EXCLUDED.producer,
-        title_ru        = EXCLUDED.title_ru,
-        country         = EXCLUDED.country,
-        region          = EXCLUDED.region,
-        grapes          = EXCLUDED.grapes,
-        abv             = EXCLUDED.abv,
-        pack            = EXCLUDED.pack,
-        volume          = EXCLUDED.volume,
-        price_list_rub  = EXCLUDED.price_list_rub,
-        price_final_rub = EXCLUDED.price_final_rub,
-        price_rub       = EXCLUDED.price_rub;
-    """
+                   INSERT INTO products(code, producer, title_ru, country, \
+                                        region, grapes, abv, pack, volume, \
+                                        price_list_rub, price_final_rub, \
+                                        price_rub)
+                   VALUES (%(code)s, %(producer)s, %(title_ru)s, %(country)s, \
+                           %(region)s, %(grapes)s, %(abv)s, %(pack)s, \
+                           %(volume)s,
+                           %(price_list_rub)s, %(price_final_rub)s, \
+                           %(price_rub)s) ON CONFLICT (code) DO \
+                   UPDATE SET
+                       producer = EXCLUDED.producer, \
+                       title_ru = EXCLUDED.title_ru, \
+                       country = EXCLUDED.country, \
+                       region = EXCLUDED.region, \
+                       grapes = EXCLUDED.grapes, \
+                       abv = EXCLUDED.abv, \
+                       pack = EXCLUDED.pack, \
+                       volume = EXCLUDED.volume, \
+                       price_list_rub = EXCLUDED.price_list_rub, \
+                       price_final_rub = EXCLUDED.price_final_rub, \
+                       price_rub = EXCLUDED.price_rub; \
+                   """
 
     upsert_inventory = """
-      INSERT INTO inventory(code, stock_total, reserved, stock_free, asof_date)
-      VALUES (%s,%s,%s,%s,%s)
-      ON CONFLICT (code) DO UPDATE SET
-        stock_total = EXCLUDED.stock_total,
-        reserved    = EXCLUDED.reserved,
-        stock_free  = EXCLUDED.stock_free,
-        asof_date   = EXCLUDED.asof_date;
-    """
+                       INSERT INTO inventory(code, stock_total, reserved, \
+                                             stock_free, asof_date)
+                       VALUES (%s, %s, %s, %s, %s) ON CONFLICT (code) DO \
+                       UPDATE SET
+                           stock_total = EXCLUDED.stock_total, \
+                           reserved = EXCLUDED.reserved, \
+                           stock_free = EXCLUDED.stock_free, \
+                           asof_date = EXCLUDED.asof_date; \
+                       """
 
-    asof_dt = asof if isinstance(asof, datetime) else datetime.combine(asof, datetime.min.time())
+    asof_dt = asof if isinstance(asof, datetime) else datetime.combine(asof,
+                                                                       datetime.min.time())
 
     with get_conn() as conn, conn.cursor() as cur:
         total = 0
@@ -432,8 +460,10 @@ def upsert_records(df: pd.DataFrame, asof: date | datetime):
                 eff = price_list  # в крайнем случае, финальная = прайс
 
             # Предупреждение о расхождении (если в файле была явная колонка и S5 дал другое)
-            if price_file_disc is not None and price_calc_disc is not None and abs(price_file_disc - price_calc_disc) > 0.01:
-                print(f"[warn] {code}: price_discount mismatch -> file={price_file_disc} vs S5={price_calc_disc}")
+            if price_file_disc is not None and price_calc_disc is not None and abs(
+                    price_file_disc - price_calc_disc) > 0.01:
+                print(
+                    f"[warn] {code}: price_discount mismatch -> file={price_file_disc} vs S5={price_calc_disc}")
 
             payload = dict(
                 code=code,
@@ -464,10 +494,12 @@ def upsert_records(df: pd.DataFrame, asof: date | datetime):
                     pass
 
             # Остатки/резервы
-            if any(r.get(k) is not None for k in ("stock_total", "reserved", "stock_free")):
+            if any(r.get(k) is not None for k in
+                   ("stock_total", "reserved", "stock_free")):
                 cur.execute(
                     upsert_inventory,
-                    (code, r.get("stock_total"), r.get("reserved"), r.get("stock_free"), asof_dt.date()),
+                    (code, r.get("stock_total"), r.get("reserved"),
+                     r.get("stock_free"), asof_dt.date()),
                 )
                 inv_upd += 1
 
@@ -498,9 +530,12 @@ def main():
     g.add_argument("--excel", help="Путь к Excel (xlsx/xls)")
     p.add_argument("--sep", help="Разделитель CSV (если нужен)")
     p.add_argument("--sheet", help="Имя/индекс листа Excel (по умолчанию 0)")
-    p.add_argument("--header", type=int, help="Номер строки заголовка (0-based). Если не указан — авто-поиск")
-    p.add_argument("--asof", help="Дата 'среза' (YYYY-MM-DD) для истории цен и остатков; по умолчанию сегодня")
-    p.add_argument("--discount-cell", default=os.environ.get("DISCOUNT_CELL", "S5"),
+    p.add_argument("--header", type=int,
+                   help="Номер строки заголовка (0-based). Если не указан — авто-поиск")
+    p.add_argument("--asof",
+                   help="Дата 'среза' (YYYY-MM-DD) для истории цен и остатков; по умолчанию сегодня")
+    p.add_argument("--discount-cell",
+                   default=os.environ.get("DISCOUNT_CELL", "S5"),
                    help="Адрес ячейки со скидкой (по умолчанию S5). Пример: T3")
     p.add_argument("--prefer-discount-cell", action="store_true",
                    help="Если указан флаг — финальная цена рассчитывается по скидке из ячейки даже при наличии колонки 'Цена со скидкой'")
@@ -514,19 +549,89 @@ def main():
         asof_dt = date.today()
 
     path = args.csv or args.excel
+
+    # ==========================
+    # Idempotency check (Issue #80)
+    # ==========================
+    logger = logging.getLogger(__name__)
+
+    # Compute SHA256 hash of the file
+    file_hash = compute_file_sha256(path)
+    file_size = os.path.getsize(path)
+    file_name = os.path.basename(path)
+
+    logger.info(
+        "File fingerprint computed",
+        extra={
+            "file_name": file_name,
+            "file_hash": file_hash[:16] + "...",
+            "file_size_bytes": file_size
+        }
+    )
+
+    # Check if file already exists in database
+    conn = get_conn()
+    try:
+        existing = check_file_exists(conn, file_hash)
+
+        if existing:
+            logger.warning(
+                ">> SKIP: File already imported",
+                extra={
+                    "envelope_id": existing['envelope_id'],
+                    "file_name": existing['file_name'],
+                    "status": existing['status'],
+                    "upload_timestamp": existing[
+                        'upload_timestamp'].isoformat(),
+                    "rows_inserted": existing['rows_inserted']
+                }
+            )
+            print(f"\n>> SKIP: File already imported")
+            print(f"   Envelope ID: {existing['envelope_id']}")
+            print(f"   Status: {existing['status']}")
+            print(f"   Uploaded: {existing['upload_timestamp']}")
+            print(f"   Rows inserted: {existing['rows_inserted']}")
+            print(
+                f"\n   This file has already been processed. No action taken.")
+            conn.close()
+            return  # Exit early - file already processed
+
+        # File is new - create envelope
+        envelope_id = create_envelope(
+            conn,
+            file_name=file_name,
+            file_hash=file_hash,
+            file_path=path,
+            file_size_bytes=file_size
+        )
+
+        logger.info(
+            "Created new envelope for import",
+            extra={"envelope_id": str(envelope_id)}
+        )
+
+    except Exception as e:
+        logger.error(f"Error checking file idempotency: {e}", exc_info=True)
+        conn.close()
+        raise
+
+    # Continue with normal import process
     df = read_any(path, sep=args.sep, sheet=args.sheet, header=args.header)
 
     # Получим скидку из шапки и/или из S5, выберем согласно приоритету
-    disc_hdr = df.attrs.get("discount_pct_header")  # возможно, извлекли из второй строки заголовка
+    disc_hdr = df.attrs.get(
+        "discount_pct_header")  # возможно, извлекли из второй строки заголовка
     # sheet для S5
     sh = args.sheet
     try:
         sh = int(sh) if sh not in (None, "") else 0
     except ValueError:
         sh = sh if sh not in (None, "") else 0
-    disc_cell = _get_discount_from_cell(args.excel, sh, args.discount_cell) if args.excel else None
+    disc_cell = _get_discount_from_cell(args.excel, sh,
+                                        args.discount_cell) if args.excel else None
 
-    prefer_s5 = args.prefer_discount_cell or (os.environ.get("PREFER_S5") in ("1", "true", "True"))
+    prefer_s5 = args.prefer_discount_cell or (
+                os.environ.get("PREFER_S5") in ("1", "true", "True"))
     if prefer_s5:
         discount = disc_cell if disc_cell is not None else disc_hdr
     else:
@@ -534,11 +639,13 @@ def main():
 
     df.attrs["discount_pct_cell"] = disc_cell
     df.attrs["discount_pct"] = discount
-    print(f"[discount] header={disc_hdr}  cell({args.discount_cell})={disc_cell}  -> used={discount}")
+    print(
+        f"[discount] header={disc_hdr}  cell({args.discount_cell})={disc_cell}  -> used={discount}")
 
     # Отбираем только нужные поля
     keep = {
-        "code", "title_ru", "producer", "country", "region", "grapes", "abv", "pack", "volume",
+        "code", "title_ru", "producer", "country", "region", "grapes", "abv",
+        "pack", "volume",
         "price_rub", "price_discount",
         "stock_total", "reserved", "stock_free",
     }
@@ -565,7 +672,74 @@ def main():
     df = df.drop(columns=[c for c in ("price_rub_num", "price_discount_num") if
                           c in df.columns])
 
-    upsert_records(df, asof_dt)
+    # ==========================
+    # Import data
+    # ==========================
+    try:
+        rows_before = len(df)
+        upsert_records(df, asof_dt)
+
+        # Update envelope status to success
+        update_envelope_status(
+            conn,
+            envelope_id,
+            status='success',
+            rows_inserted=rows_before,  # All rows processed
+            rows_updated=0,
+            rows_failed=0
+        )
+
+        # Create price_list entry linking envelope to effective date
+        price_list_id = create_price_list_entry(
+            conn,
+            envelope_id,
+            effective_date=asof_dt if isinstance(asof_dt,
+                                                 date) else asof_dt.date(),
+            file_path=path,
+            discount_percent=discount
+        )
+
+        logger.info(
+            "[OK] Import completed successfully",
+            extra={
+                "envelope_id": str(envelope_id),
+                "price_list_id": str(price_list_id),
+                "rows_processed": rows_before,
+                "effective_date": asof_dt.isoformat() if isinstance(asof_dt,
+                                                                    date) else asof_dt.date().isoformat()
+            }
+        )
+
+        print(f"\n[OK] Import completed successfully")
+        print(f"   Envelope ID: {envelope_id}")
+        print(f"   Rows processed: {rows_before}")
+        print(f"   Effective date: {asof_dt}")
+
+    except Exception as e:
+        # Update envelope status to failed
+        update_envelope_status(
+            conn,
+            envelope_id,
+            status='failed',
+            rows_inserted=0,
+            rows_updated=0,
+            rows_failed=0,
+            error_message=str(e)
+        )
+
+        logger.error(
+            "[ERROR] Import failed",
+            extra={
+                "envelope_id": str(envelope_id),
+                "error": str(e)
+            },
+            exc_info=True
+        )
+
+        conn.close()
+        raise
+
+    conn.close()
 
 
 if __name__ == "__main__":
