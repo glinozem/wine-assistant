@@ -13,6 +13,7 @@ CREATE TABLE ingest_envelope (
     file_path TEXT,
     file_size_bytes BIGINT,
     status VARCHAR(20) DEFAULT 'processing' CHECK (status IN ('processing', 'success', 'failed')),
+    upload_timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     rows_inserted INT DEFAULT 0,
     rows_updated INT DEFAULT 0,
     rows_failed INT DEFAULT 0,
@@ -36,6 +37,7 @@ CREATE TABLE price_list (
 CREATE INDEX idx_ingest_envelope_sha256 ON ingest_envelope(file_sha256);
 CREATE INDEX idx_ingest_envelope_status ON ingest_envelope(status);
 CREATE INDEX idx_ingest_envelope_created_at ON ingest_envelope(created_at);
+CREATE INDEX idx_ingest_envelope_upload_timestamp ON ingest_envelope(upload_timestamp);
 CREATE INDEX idx_price_list_envelope_id ON price_list(envelope_id);
 CREATE INDEX idx_price_list_asof_date ON price_list(asof_date);
 
