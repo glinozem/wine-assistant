@@ -484,6 +484,7 @@ class TestCreatePriceListEntry:
         """
         # Arrange
         file_hash = "1" * 64
+        price_list_id = None
         envelope_id = create_envelope(
             db_connection,
             file_name="prices_link.xlsx",
@@ -531,14 +532,15 @@ class TestCreatePriceListEntry:
             assert float(record['discount_percent']) == 10.0
 
         finally:
-            cursor = db_connection.cursor()
-            cursor.execute("DELETE FROM price_list WHERE price_list_id = %s",
-                           (price_list_id,))
-            cursor.execute(
-                "DELETE FROM ingest_envelope WHERE envelope_id = %s",
-                (envelope_id,))
-            db_connection.commit()
-            cursor.close()
+            if price_list_id is not None:
+                cursor = db_connection.cursor()
+                cursor.execute("DELETE FROM price_list WHERE price_list_id = %s",
+                               (price_list_id,))
+                cursor.execute(
+                    "DELETE FROM ingest_envelope WHERE envelope_id = %s",
+                    (envelope_id,))
+                db_connection.commit()
+                cursor.close()
 
     def test_create_price_list_entry_without_optional_fields(self,
                                                              db_connection):
@@ -551,6 +553,7 @@ class TestCreatePriceListEntry:
         """
         # Arrange
         file_hash = "2" * 64
+        price_list_id = None
         envelope_id = create_envelope(
             db_connection,
             file_name="minimal_price.xlsx",
@@ -581,14 +584,15 @@ class TestCreatePriceListEntry:
             assert record['discount_percent'] is None
 
         finally:
-            cursor = db_connection.cursor()
-            cursor.execute("DELETE FROM price_list WHERE price_list_id = %s",
-                           (price_list_id,))
-            cursor.execute(
-                "DELETE FROM ingest_envelope WHERE envelope_id = %s",
-                (envelope_id,))
-            db_connection.commit()
-            cursor.close()
+            if price_list_id is not None:
+                cursor = db_connection.cursor()
+                cursor.execute("DELETE FROM price_list WHERE price_list_id = %s",
+                               (price_list_id,))
+                cursor.execute(
+                    "DELETE FROM ingest_envelope WHERE envelope_id = %s",
+                    (envelope_id,))
+                db_connection.commit()
+                cursor.close()
 
 
 # =============================================================================
