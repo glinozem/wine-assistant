@@ -28,6 +28,7 @@ CREATE TABLE price_list (
     price_list_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     envelope_id UUID NOT NULL REFERENCES ingest_envelope(envelope_id) ON DELETE CASCADE,
     supplier_code VARCHAR(100),
+    file_path TEXT,
     effective_date DATE,
     asof_date DATE NOT NULL,
     rows_count INT DEFAULT 0,
