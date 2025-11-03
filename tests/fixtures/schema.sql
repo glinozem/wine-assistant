@@ -31,6 +31,7 @@ CREATE TABLE price_list (
     file_path TEXT,
     effective_date DATE,
     asof_date DATE NOT NULL,
+    discount_percent DECIMAL(5,4),
     rows_count INT DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
