@@ -14,6 +14,7 @@ CREATE TABLE ingest_envelope (
     file_size_bytes BIGINT,
     status VARCHAR(20) DEFAULT 'processing' CHECK (status IN ('processing', 'success', 'failed')),
     upload_timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    processing_completed_at TIMESTAMP WITH TIME ZONE,
     rows_inserted INT DEFAULT 0,
     rows_updated INT DEFAULT 0,
     rows_failed INT DEFAULT 0,
