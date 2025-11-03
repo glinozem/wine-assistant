@@ -28,6 +28,7 @@ CREATE TABLE price_list (
     price_list_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     envelope_id UUID NOT NULL REFERENCES ingest_envelope(envelope_id) ON DELETE CASCADE,
     supplier_code VARCHAR(100),
+    effective_date DATE,
     asof_date DATE NOT NULL,
     rows_count INT DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -41,6 +42,7 @@ CREATE INDEX idx_ingest_envelope_created_at ON ingest_envelope(created_at);
 CREATE INDEX idx_ingest_envelope_upload_timestamp ON ingest_envelope(upload_timestamp);
 CREATE INDEX idx_price_list_envelope_id ON price_list(envelope_id);
 CREATE INDEX idx_price_list_asof_date ON price_list(asof_date);
+CREATE INDEX idx_price_list_effective_date ON price_list(effective_date);
 
 -- Trigger to auto-update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at_column()
