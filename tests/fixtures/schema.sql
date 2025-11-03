@@ -30,7 +30,7 @@ CREATE TABLE price_list (
     supplier_code VARCHAR(100),
     file_path TEXT,
     effective_date DATE,
-    asof_date DATE NOT NULL,
+    asof_date DATE,
     discount_percent DECIMAL(5,4),
     rows_count INT DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
