@@ -1,16 +1,28 @@
 """
 Unit tests for scripts/load_csv.py
 Testing data loading and processing functions.
+
+Extended version with 5 new tests for high-level functions:
+1. test_canonicalize_headers_maps_correctly - header mapping
+2. test_canonicalize_headers_handles_unnamed - unnamed columns
+3. test_read_any_detects_csv_encoding - CSV encoding detection
+4. test_read_any_handles_excel_basic - basic Excel reading
+5. test_read_any_finds_code_column - code column detection
 """
 import pytest
 import sys
 import os
+import pandas as pd
+from openpyxl import Workbook
 
 # Добавляем путь к scripts в sys.path, чтобы импортировать load_csv
 sys.path.insert(0, os.path.abspath(
     os.path.join(os.path.dirname(__file__), '..', '..')))
 
-from scripts.load_csv import _norm, _to_float, _to_int, _norm_key, _get_discount_from_cell
+from scripts.load_csv import (
+    _norm, _to_float, _to_int, _norm_key, _get_discount_from_cell,
+    _canonicalize_headers, read_any
+)
 
 
 # =============================================================================
@@ -442,3 +454,168 @@ class TestGetDiscountFromCell:
 
         # Assert
         assert result is None
+
+
+# =============================================================================
+# NEW TESTS: High-level functions
+# =============================================================================
+
+class TestCanonicalizeHeaders:
+    """
+    Тесты для функции _canonicalize_headers()
+
+    Функция маппит заголовки колонок на канонические имена согласно COLMAP.
+    """
+
+    @pytest.mark.unit
+    def test_canonicalize_headers_maps_correctly(self):
+        """
+        Test: _canonicalize_headers должна правильно маппить известные колонки
+
+        Arrange: Список колонок с русскими и английскими названиями
+        Act: Вызываем _canonicalize_headers()
+        Assert: Проверяем что колонки замапились правильно
+        """
+        # Arrange
+        cols = ["Код", "Производитель", "Название", "Цена прайс",
+                "Цена со скидкой"]
+
+        # Act
+        result = _canonicalize_headers(cols)
+
+        # Assert
+        assert result["Код"] == "code"
+        assert result["Производитель"] == "producer"
+        assert result["Название"] == "title_ru"
+        assert result["Цена прайс"] == "price_rub"
+        assert result["Цена со скидкой"] == "price_discount"
+
+    @pytest.mark.unit
+    def test_canonicalize_headers_handles_unnamed(self):
+        """
+        Test: _canonicalize_headers должна игнорировать unnamed колонки
+
+        Arrange: Список колонок с unnamed и пустыми названиями
+        Act: Вызываем _canonicalize_headers()
+        Assert: Проверяем что unnamed колонки замапились на None
+        """
+        # Arrange
+        cols = ["Unnamed: 0", "Код", "", "Цена", "unnamed_5"]
+
+        # Act
+        result = _canonicalize_headers(cols)
+
+        # Assert
+        assert result["Unnamed: 0"] is None
+        assert result["Код"] == "code"
+        assert result[""] is None
+        assert result["Цена"] == "price_rub"
+        assert result["unnamed_5"] is None
+
+    @pytest.mark.unit
+    def test_canonicalize_headers_handles_discount_with_percent(self):
+        """
+        Test: _canonicalize_headers должна распознавать "Цена со скидкой 10%"
+
+        Arrange: Колонка с процентом в названии
+        Act: Вызываем _canonicalize_headers()
+        Assert: Проверяем что замапилась на price_discount
+        """
+        # Arrange
+        cols = ["Код", "Цена со скидкой 10%"]
+
+        # Act
+        result = _canonicalize_headers(cols)
+
+        # Assert
+        assert result["Код"] == "code"
+        assert result["Цена со скидкой 10%"] == "price_discount"
+
+
+class TestReadAny:
+    """
+    Тесты для функции read_any()
+
+    Функция универсального чтения CSV/Excel файлов с авто-определением параметров.
+    """
+
+    @pytest.mark.unit
+    def test_read_any_detects_csv_encoding(self, tmp_path):
+        """
+        Test: read_any должна автоматически определять кодировку CSV
+
+        Arrange: Создаём CSV файл в cp1251
+        Act: Вызываем read_any()
+        Assert: Проверяем что данные прочитались корректно
+        """
+        # Arrange - создаём CSV с русскими символами в cp1251
+        csv_file = tmp_path / "test_encoding.csv"
+        csv_content = "Код,Название,Цена\n123,Тестовое вино,1000\n456,Другое вино,2000"
+        csv_file.write_bytes(csv_content.encode('cp1251'))
+
+        # Act
+        df = read_any(str(csv_file))
+
+        # Assert
+        assert "code" in df.columns
+        assert len(df) == 2
+        assert df.iloc[0]["code"] == "123"
+
+    @pytest.mark.unit
+    def test_read_any_handles_excel_basic(self, tmp_path):
+        """
+        Test: read_any должна читать базовый Excel файл
+
+        Arrange: Создаём простой Excel с заголовками
+        Act: Вызываем read_any()
+        Assert: Проверяем что колонки замапились правильно
+        """
+        # Arrange
+        wb = Workbook()
+        ws = wb.active
+        ws['A1'] = 'Код'
+        ws['B1'] = 'Название'
+        ws['C1'] = 'Цена'
+        ws['A2'] = '123'
+        ws['B2'] = 'Вино'
+        ws['C2'] = '1000'
+
+        excel_file = tmp_path / "test_basic.xlsx"
+        wb.save(excel_file)
+
+        # Act
+        df = read_any(str(excel_file))
+
+        # Assert
+        assert "code" in df.columns
+        assert "title_ru" in df.columns
+        assert "price_rub" in df.columns
+        assert len(df) == 1
+        assert df.iloc[0]["code"] == "123"
+
+    @pytest.mark.unit
+    def test_read_any_finds_code_column(self, tmp_path):
+        """
+        Test: read_any должна находить колонку с кодом по разным вариантам
+
+        Arrange: Создаём Excel с колонкой "Артикул" вместо "Код"
+        Act: Вызываем read_any()
+        Assert: Проверяем что колонка переименовалась в "code"
+        """
+        # Arrange
+        wb = Workbook()
+        ws = wb.active
+        ws['A1'] = 'Артикул'
+        ws['B1'] = 'Название'
+        ws['A2'] = 'WINE123'
+        ws['B2'] = 'Красное вино'
+
+        excel_file = tmp_path / "test_article.xlsx"
+        wb.save(excel_file)
+
+        # Act
+        df = read_any(str(excel_file))
+
+        # Assert
+        assert "code" in df.columns
+        assert df.iloc[0]["code"] == "WINE123"

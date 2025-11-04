@@ -14,6 +14,9 @@ data/raw/**
 data/out/
 *.xlsx
 *.xls
+data/archive/
+data/sample/
+logs/
 
 # python
 __pycache__/
