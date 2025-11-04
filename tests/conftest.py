@@ -5,6 +5,7 @@ from flask import Flask
 
 # Import your Flask app
 import sys
+
 sys.path.insert(0, os.path.abspath('.'))
 from api.app import app as flask_app
 
@@ -44,11 +45,13 @@ def client(app):
 # Database Fixtures
 # =============================================================================
 
-@pytest.fixture(scope='session')
+@pytest.fixture(scope='function')
 def db_connection():
     '''
-    PostgreSQL connection fixture (session-scoped).
-    Creates connection once, closes after all tests.
+    PostgreSQL connection fixture (function-scoped with auto-rollback).
+    Creates fresh connection for each test and rolls back changes.
+
+    This ensures test isolation - changes made in one test don't affect others.
 
     Usage:
         def test_query(db_connection):
@@ -63,8 +66,18 @@ def db_connection():
         password=os.getenv('PGPASSWORD', 'postgres'),
         dbname=os.getenv('PGDATABASE', 'wine_db'),
     )
+    # Disable autocommit to enable rollback
+    conn.autocommit = False
+
     yield conn
-    conn.close()
+
+    # Rollback any uncommitted changes after test
+    try:
+        conn.rollback()
+    except Exception:
+        pass  # Connection might be closed already
+    finally:
+        conn.close()
 
 
 @pytest.fixture(scope='function')
@@ -99,8 +112,10 @@ def mock_env(monkeypatch):
             mock_env('API_KEY', 'test_key_123')
             assert os.getenv('API_KEY') == 'test_key_123'
     '''
+
     def _set_env(key, value):
         monkeypatch.setenv(key, value)
+
     return _set_env
 
 
