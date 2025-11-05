@@ -4,11 +4,12 @@ Date extraction module for ETL processes.
 Automatically extracts effective dates from Excel files or filenames.
 Issue: #81
 """
-import re
 import logging
-from datetime import datetime, date
+import re
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
+
 import openpyxl
 
 logger = logging.getLogger(__name__)

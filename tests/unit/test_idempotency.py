@@ -6,20 +6,21 @@ Issue: #91
 
 Coverage target: 25.00% → 80%+
 """
-import os
-import pytest
 import hashlib
+import os
 from datetime import date, datetime
 from uuid import UUID
-import psycopg2.extras
-from scripts.idempotency import (
-    compute_file_sha256,
-    check_file_exists,
-    create_envelope,
-    update_envelope_status,
-    create_price_list_entry
-)
 
+import psycopg2.extras
+import pytest
+
+from scripts.idempotency import (
+    check_file_exists,
+    compute_file_sha256,
+    create_envelope,
+    create_price_list_entry,
+    update_envelope_status,
+)
 
 # =============================================================================
 # Tests for compute_file_sha256()

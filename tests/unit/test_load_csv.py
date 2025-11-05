@@ -9,10 +9,11 @@ Extended version with 5 new tests for high-level functions:
 4. test_read_any_handles_excel_basic - basic Excel reading
 5. test_read_any_finds_code_column - code column detection
 """
-import pytest
-import sys
 import os
+import sys
+
 import pandas as pd
+import pytest
 from openpyxl import Workbook
 
 # Добавляем путь к scripts в sys.path, чтобы импортировать load_csv
@@ -20,10 +21,14 @@ sys.path.insert(0, os.path.abspath(
     os.path.join(os.path.dirname(__file__), '..', '..')))
 
 from scripts.load_csv import (
-    _norm, _to_float, _to_int, _norm_key, _get_discount_from_cell,
-    _canonicalize_headers, read_any
+    _canonicalize_headers,
+    _get_discount_from_cell,
+    _norm,
+    _norm_key,
+    _to_float,
+    _to_int,
+    read_any,
 )
-
 
 # =============================================================================
 # Tests for _norm() function
