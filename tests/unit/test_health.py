@@ -4,7 +4,6 @@ These are smoke tests - if they fail, nothing else will work.
 '''
 import pytest
 
-
 # =============================================================================
 # Smoke Tests - Critical endpoints
 # =============================================================================

@@ -1,33 +1,31 @@
 # scripts/load_csv.py
 from __future__ import annotations
 
+import argparse
+import logging
+import math
 import os
 import re
-import math
-import argparse
 from datetime import date, datetime
 from typing import Any, Dict, Iterable, Optional, Tuple
 
+import openpyxl  # чтение значения скидки из фиксированной ячейки (например, S5)
 import pandas as pd
 import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
-import \
-    openpyxl  # чтение значения скидки из фиксированной ячейки (например, S5)
-
-import logging
-
-# Idempotency module for preventing duplicate imports (Issue #80)
-from scripts.idempotency import (
-    compute_file_sha256,
-    check_file_exists,
-    create_envelope,
-    update_envelope_status,
-    create_price_list_entry
-)
 
 # Date extraction module for automatic date parsing (Issue #81)
 from scripts.date_extraction import get_effective_date
+
+# Idempotency module for preventing duplicate imports (Issue #80)
+from scripts.idempotency import (
+    check_file_exists,
+    compute_file_sha256,
+    create_envelope,
+    create_price_list_entry,
+    update_envelope_status,
+)
 
 load_dotenv()
 

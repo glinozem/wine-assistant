@@ -5,13 +5,12 @@ import time
 from datetime import datetime
 from functools import wraps
 
-from flask import Flask, request, jsonify, g
-from flask_cors import CORS
-from flasgger import Swagger
 import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
-
+from flasgger import Swagger
+from flask import Flask, g, jsonify, request
+from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 

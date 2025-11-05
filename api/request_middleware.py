@@ -9,10 +9,11 @@ Middleware для трейсинга HTTP запросов и автоматич
 - Добавление Request ID в заголовки ответов
 """
 
+import logging
 import time
 import uuid
-from flask import request, g
-import logging
+
+from flask import g, request
 
 
 def generate_request_id():

@@ -1,8 +1,12 @@
-import os, argparse, json
+import argparse
+import json
+import os
+
 import pandas as pd
-import psycopg2, psycopg2.extras
+import psycopg2
+import psycopg2.extras
 from dotenv import load_dotenv
-from utils import parse_abv, normalize_volume, to_number, norm_str
+from utils import norm_str, normalize_volume, parse_abv, to_number
 
 load_dotenv()
 
