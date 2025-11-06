@@ -1,5 +1,8 @@
 -- Minimal test database schema for CI
--- tables required for idempotency tests (Issue #80, Issue #91)
+-- Tables required for idempotency tests (Issue #80, Issue #91)
+
+-- UUID helpers for gen_random_uuid()
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- Drop tables if exist (for clean CI runs)
 DROP TABLE IF EXISTS price_list CASCADE;

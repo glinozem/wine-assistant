@@ -68,8 +68,10 @@ jobs:
             echo "Waiting for Postgres... ($i)"
             sleep 2
           done
-          psql "postgresql://postgres:${PGPASSWORD}@localhost:15432/wine_db" -c "SELECT version();" -t
+          # Схема идемпотентности (уже с pgcrypto в начале)
           psql "postgresql://postgres:${PGPASSWORD}@localhost:15432/wine_db" -f tests/fixtures/schema.sql
+          # Схема продуктов/складских остатков для upsert_records()
+          psql "postgresql://postgres:${PGPASSWORD}@localhost:15432/wine_db" -f tests/fixtures/schema_prices.sql
 
       - name: Check tables
         env:
