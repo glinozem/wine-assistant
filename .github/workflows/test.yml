@@ -14,15 +14,14 @@ jobs:
       postgres:
         image: pgvector/pgvector:pg16
         env:
-          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: dev_local_pw
           POSTGRES_DB: wine_db
-        options: >-
-          --health-cmd="pg_isready -U postgres -d wine_db"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
         ports:
           - 15432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d wine_db"
+          --health-interval=5s --health-timeout=5s --health-retries=20
 
     steps:
       - name: Checkout code
@@ -55,23 +54,29 @@ jobs:
         if: github.event_name == 'push'
         run: ruff check . --fix
 
-      - name: Setup test database schema
+      - name: Install Postgres client
         run: |
-          sudo apt-get update && sudo apt-get install -y postgresql-client
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Wait for Postgres & apply schema
+        env:
+          PGPASSWORD: dev_local_pw
+        run: |
           for i in {1..60}; do
             pg_isready -h localhost -p 15432 -U postgres -d wine_db && break
+            echo "Waiting for Postgres... ($i)"
             sleep 2
           done
-          PGPASSWORD=postgres psql -h localhost -p 15432 -U postgres -d wine_db -f tests/fixtures/schema.sql
-        env:
-          PGPASSWORD: postgres
+          psql "postgresql://postgres:${PGPASSWORD}@localhost:15432/wine_db" -c "SELECT version();" -t
+          psql "postgresql://postgres:${PGPASSWORD}@localhost:15432/wine_db" -f tests/fixtures/schema.sql
 
       - name: Run tests with coverage
         env:
           PGHOST: localhost
           PGPORT: 15432
           PGUSER: postgres
-          PGPASSWORD: postgres
+          PGPASSWORD: dev_local_pw
           PGDATABASE: wine_db
           API_KEY: test_key_for_ci
           FLASK_DEBUG: 0
