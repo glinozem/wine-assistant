@@ -71,6 +71,12 @@ jobs:
           psql "postgresql://postgres:${PGPASSWORD}@localhost:15432/wine_db" -c "SELECT version();" -t
           psql "postgresql://postgres:${PGPASSWORD}@localhost:15432/wine_db" -f tests/fixtures/schema.sql
 
+      - name: Check tables
+        env:
+          PGPASSWORD: dev_local_pw
+        run: |
+          psql "postgresql://postgres:${PGPASSWORD}@localhost:15432/wine_db" -c "\dt"
+
       - name: Run tests with coverage
         env:
           PGHOST: localhost

@@ -1,5 +1,5 @@
 -- Minimal test database schema for CI
--- Tables required for idempotency tests (Issue #80, Issue #91)
+-- tables required for idempotency tests (Issue #80, Issue #91)
 
 -- Drop tables if exist (for clean CI runs)
 DROP TABLE IF EXISTS price_list CASCADE;
