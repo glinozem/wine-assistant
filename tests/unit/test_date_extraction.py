@@ -6,23 +6,23 @@ Issue: #91
 
 Coverage target: 0% → 80%+
 """
-from datetime import date, timedelta
-from pathlib import Path
 
-import openpyxl
 import pytest
-
+from datetime import date, timedelta
+import openpyxl
 from scripts.date_extraction import (
-    _parse_date_from_text,
     extract_date_from_excel,
     extract_date_from_filename,
-    get_effective_date,
     validate_date,
+    get_effective_date,
+    _parse_date_from_text,
 )
+
 
 # =============================================================================
 # Tests for extract_date_from_excel()
 # =============================================================================
+
 
 @pytest.mark.unit
 class TestExtractDateFromExcel:
@@ -40,7 +40,7 @@ class TestExtractDateFromExcel:
         test_file = tmp_path / "test_prices.xlsx"
         workbook = openpyxl.Workbook()
         sheet = workbook.active
-        sheet['A1'] = "Прайс-лист от 20.01.2025"
+        sheet["A1"] = "Прайс-лист от 20.01.2025"
         workbook.save(test_file)
         workbook.close()
 
@@ -63,8 +63,8 @@ class TestExtractDateFromExcel:
         test_file = tmp_path / "test_fallback.xlsx"
         workbook = openpyxl.Workbook()
         sheet = workbook.active
-        sheet['A1'] = None  # Пустая ячейка
-        sheet['B1'] = "2025-01-20"
+        sheet["A1"] = None  # Пустая ячейка
+        sheet["B1"] = "2025-01-20"
         workbook.save(test_file)
         workbook.close()
 
@@ -87,8 +87,8 @@ class TestExtractDateFromExcel:
         test_file = tmp_path / "test_no_date.xlsx"
         workbook = openpyxl.Workbook()
         sheet = workbook.active
-        sheet['A1'] = "Just some text without dates"
-        sheet['B1'] = "More text"
+        sheet["A1"] = "Just some text without dates"
+        sheet["B1"] = "More text"
         workbook.save(test_file)
         workbook.close()
 
@@ -112,10 +112,10 @@ class TestExtractDateFromExcel:
         sheet = workbook.active
 
         test_formats = {
-            'A1': "20.01.2025",  # DD.MM.YYYY
-            'A2': "2025-01-20",  # YYYY-MM-DD
-            'A3': "20/01/2025",  # DD/MM/YYYY
-            'A4': "20-01-2025",  # DD-MM-YYYY
+            "A1": "20.01.2025",  # DD.MM.YYYY
+            "A2": "2025-01-20",  # YYYY-MM-DD
+            "A3": "20/01/2025",  # DD/MM/YYYY
+            "A4": "20-01-2025",  # DD-MM-YYYY
         }
 
         for cell, value in test_formats.items():
@@ -126,10 +126,10 @@ class TestExtractDateFromExcel:
 
         # Act & Assert
         for cell in test_formats.keys():
-            result = extract_date_from_excel(str(test_file), cell=cell,
-                                             fallback_cells=[])
-            assert result == date(2025, 1, 20), \
-                f"Failed to parse date from cell {cell}"
+            result = extract_date_from_excel(
+                str(test_file), cell=cell, fallback_cells=[]
+            )
+            assert result == date(2025, 1, 20), f"Failed to parse date from cell {cell}"
 
     def test_extract_date_from_excel_handles_corrupted_file(self, tmp_path):
         """
@@ -153,6 +153,7 @@ class TestExtractDateFromExcel:
 # =============================================================================
 # Tests for extract_date_from_filename()
 # =============================================================================
+
 
 @pytest.mark.unit
 class TestExtractDateFromFilename:
@@ -269,6 +270,7 @@ class TestExtractDateFromFilename:
 # Tests for _parse_date_from_text()
 # =============================================================================
 
+
 @pytest.mark.unit
 class TestParseDateFromText:
     """Тесты для внутренней функции _parse_date_from_text()"""
@@ -346,6 +348,7 @@ class TestParseDateFromText:
 # Tests for validate_date()
 # =============================================================================
 
+
 @pytest.mark.unit
 class TestValidateDate:
     """Тесты для функции validate_date()"""
@@ -419,6 +422,7 @@ class TestValidateDate:
 # Tests for get_effective_date()
 # =============================================================================
 
+
 @pytest.mark.unit
 class TestGetEffectiveDate:
     """Тесты для главной функции get_effective_date()"""
@@ -437,14 +441,10 @@ class TestGetEffectiveDate:
         override_date = date(2025, 1, 20)
 
         # Act
-        result = get_effective_date(
-            str(test_file),
-            asof_override=override_date
-        )
+        result = get_effective_date(str(test_file), asof_override=override_date)
 
         # Assert
-        assert result == override_date, \
-            "asof_override должен иметь наивысший приоритет"
+        assert result == override_date, "asof_override должен иметь наивысший приоритет"
 
     def test_get_effective_date_priority_excel_cell(self, tmp_path):
         """
@@ -458,7 +458,7 @@ class TestGetEffectiveDate:
         test_file = tmp_path / "test_excel_priority.xlsx"
         workbook = openpyxl.Workbook()
         sheet = workbook.active
-        sheet['A1'] = "20.01.2025"
+        sheet["A1"] = "20.01.2025"
         workbook.save(test_file)
         workbook.close()
 
@@ -480,7 +480,7 @@ class TestGetEffectiveDate:
         test_file = tmp_path / "Price_2025_01_20.xlsx"
         workbook = openpyxl.Workbook()
         sheet = workbook.active
-        sheet['A1'] = "Some text without date"
+        sheet["A1"] = "Some text without date"
         workbook.save(test_file)
         workbook.close()
 
@@ -520,41 +520,34 @@ class TestGetEffectiveDate:
         test_file1 = tmp_path / "Price_2025_01_10.xlsx"
         workbook = openpyxl.Workbook()
         sheet = workbook.active
-        sheet['A1'] = "15.01.2025"
+        sheet["A1"] = "15.01.2025"
         workbook.save(test_file1)
         workbook.close()
 
-        result1 = get_effective_date(
-            str(test_file1),
-            asof_override=date(2025, 1, 20)
-        )
-        assert result1 == date(2025, 1, 20), \
-            "asof должен побеждать Excel и filename"
+        result1 = get_effective_date(str(test_file1), asof_override=date(2025, 1, 20))
+        assert result1 == date(2025, 1, 20), "asof должен побеждать Excel и filename"
 
         # Test 2: Excel побеждает filename
         result2 = get_effective_date(str(test_file1))
-        assert result2 == date(2025, 1, 15), \
-            "Excel должен побеждать filename"
+        assert result2 == date(2025, 1, 15), "Excel должен побеждать filename"
 
         # Test 3: filename если нет Excel
         test_file2 = tmp_path / "Price_2025_01_25.xlsx"
         workbook = openpyxl.Workbook()
         sheet = workbook.active
-        sheet['A1'] = "No date here"
+        sheet["A1"] = "No date here"
         workbook.save(test_file2)
         workbook.close()
 
         result3 = get_effective_date(str(test_file2))
-        assert result3 == date(2025, 1, 25), \
-            "Должен использовать дату из filename"
+        assert result3 == date(2025, 1, 25), "Должен использовать дату из filename"
 
         # Test 4: fallback на today если ничего нет
         test_file3 = tmp_path / "nodates.csv"
         test_file3.write_text("data")
 
         result4 = get_effective_date(str(test_file3))
-        assert result4 == date.today(), \
-            "Должен fallback на сегодняшнюю дату"
+        assert result4 == date.today(), "Должен fallback на сегодняшнюю дату"
 
     def test_get_effective_date_validates_extracted_date(self, tmp_path):
         """
@@ -578,6 +571,7 @@ class TestGetEffectiveDate:
 # Integration Tests
 # =============================================================================
 
+
 @pytest.mark.unit
 class TestDateExtractionIntegration:
     """
@@ -596,7 +590,7 @@ class TestDateExtractionIntegration:
         test_file = tmp_path / "Price_2025_01_15.xlsx"
         workbook = openpyxl.Workbook()
         sheet = workbook.active
-        sheet['A1'] = "Прайс-лист от 20.01.2025"
+        sheet["A1"] = "Прайс-лист от 20.01.2025"
         workbook.save(test_file)
         workbook.close()
 

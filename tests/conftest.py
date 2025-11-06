@@ -1,35 +1,37 @@
-﻿import os
+import os
+import pytest
+import psycopg2
 
 # Import your Flask app
 import sys
 
-import psycopg2
-import pytest
-from flask import Flask
-
-sys.path.insert(0, os.path.abspath('.'))
+sys.path.insert(0, os.path.abspath("."))
 from api.app import app as flask_app
+
 
 # =============================================================================
 # Flask App Fixtures
 # =============================================================================
 
-@pytest.fixture(scope='session')
+
+@pytest.fixture(scope="session")
 def app():
-    '''
+    """
     Flask application fixture (session-scoped).
     Created once per test session.
-    '''
-    flask_app.config.update({
-        'TESTING': True,
-        'DEBUG': False,
-    })
+    """
+    flask_app.config.update(
+        {
+            "TESTING": True,
+            "DEBUG": False,
+        }
+    )
     yield flask_app
 
 
-@pytest.fixture(scope='function')
+@pytest.fixture(scope="function")
 def client(app):
-    '''
+    """
     Flask test client fixture (function-scoped).
     Created for each test function.
 
@@ -37,7 +39,7 @@ def client(app):
         def test_health(client):
             response = client.get('/health')
             assert response.status_code == 200
-    '''
+    """
     return app.test_client()
 
 
@@ -45,9 +47,10 @@ def client(app):
 # Database Fixtures
 # =============================================================================
 
-@pytest.fixture(scope='function')
+
+@pytest.fixture(scope="function")
 def db_connection():
-    '''
+    """
     PostgreSQL connection fixture (function-scoped with auto-rollback).
     Creates fresh connection for each test and rolls back changes.
 
@@ -58,13 +61,13 @@ def db_connection():
             cur = db_connection.cursor()
             cur.execute('SELECT 1')
             assert cur.fetchone()[0] == 1
-    '''
+    """
     conn = psycopg2.connect(
-        host=os.getenv('PGHOST', '127.0.0.1'),
-        port=int(os.getenv('PGPORT', '5432')),
-        user=os.getenv('PGUSER', 'postgres'),
-        password=os.getenv('PGPASSWORD', 'postgres'),
-        dbname=os.getenv('PGDATABASE', 'wine_db'),
+        host=os.getenv("PGHOST", "127.0.0.1"),
+        port=int(os.getenv("PGPORT", "5432")),
+        user=os.getenv("PGUSER", "postgres"),
+        password=os.getenv("PGPASSWORD", "postgres"),
+        dbname=os.getenv("PGDATABASE", "wine_db"),
     )
     # Disable autocommit to enable rollback
     conn.autocommit = False
@@ -80,9 +83,9 @@ def db_connection():
         conn.close()
 
 
-@pytest.fixture(scope='function')
+@pytest.fixture(scope="function")
 def db_cursor(db_connection):
-    '''
+    """
     Database cursor fixture (function-scoped).
     Auto-rollback after each test (no data pollution).
 
@@ -90,7 +93,7 @@ def db_cursor(db_connection):
         def test_insert(db_cursor):
             db_cursor.execute('INSERT INTO products ...')
             # Automatically rolled back after test
-    '''
+    """
     db_connection.autocommit = False
     cursor = db_connection.cursor()
     yield cursor
@@ -102,16 +105,17 @@ def db_cursor(db_connection):
 # Environment Variables Fixtures
 # =============================================================================
 
-@pytest.fixture(scope='function')
+
+@pytest.fixture(scope="function")
 def mock_env(monkeypatch):
-    '''
+    """
     Mock environment variables fixture.
 
     Usage:
         def test_api_key(mock_env):
             mock_env('API_KEY', 'test_key_123')
             assert os.getenv('API_KEY') == 'test_key_123'
-    '''
+    """
 
     def _set_env(key, value):
         monkeypatch.setenv(key, value)
@@ -123,31 +127,32 @@ def mock_env(monkeypatch):
 # Sample Data Fixtures
 # =============================================================================
 
+
 @pytest.fixture
 def sample_product():
-    '''
+    """
     Sample product data for testing.
 
     Usage:
         def test_product_creation(sample_product):
             assert sample_product['code'] == 'TEST001'
-    '''
+    """
     return {
-        'code': 'TEST001',
-        'producer': 'Test Winery',
-        'title_ru': 'Test Wine',
-        'country': 'Italy',
-        'region': 'Tuscany',
-        'price_list_rub': 1000.0,
-        'price_final_rub': 900.0,
+        "code": "TEST001",
+        "producer": "Test Winery",
+        "title_ru": "Test Wine",
+        "country": "Italy",
+        "region": "Tuscany",
+        "price_list_rub": 1000.0,
+        "price_final_rub": 900.0,
     }
 
 
 @pytest.fixture
 def sample_csv_data():
-    '''
+    """
     Sample CSV data for ETL testing.
-    '''
-    return '''code,producer,title_ru,price_rub
+    """
+    return """code,producer,title_ru,price_rub
 TEST001,Test Winery,Test Wine,1000
-TEST002,Another Winery,Another Wine,1500'''
+TEST002,Another Winery,Another Wine,1500"""

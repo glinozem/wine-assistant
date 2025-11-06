@@ -1,13 +1,13 @@
-import pathlib
 import re
 import sys
+import pathlib
 
 PATS = [
-  r'AKIA[0-9A-Z]{16}',
-  r'ASIA[0-9A-Z]{16}',
-  r'AIza[0-9A-Za-z\-_]{35}',
-  r'-----BEGIN (RSA|EC) PRIVATE KEY-----',
-  r'AzureStorageKey|SharedAccessKey|AccountKey='
+    r"AKIA[0-9A-Z]{16}",
+    r"ASIA[0-9A-Z]{16}",
+    r"AIza[0-9A-Za-z\-_]{35}",
+    r"-----BEGIN (RSA|EC) PRIVATE KEY-----",
+    r"AzureStorageKey|SharedAccessKey|AccountKey=",
 ]
 bad = False
 for p in map(pathlib.Path, sys.argv[1:]):

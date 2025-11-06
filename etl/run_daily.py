@@ -1,23 +1,23 @@
-import argparse
-import json
 import os
-
+import argparse
 import pandas as pd
 import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
-from utils import norm_str, normalize_volume, parse_abv, to_number
+from utils import parse_abv, normalize_volume, to_number, norm_str
 
 load_dotenv()
 
+
 def get_conn():
     return psycopg2.connect(
-        host=os.getenv("PGHOST","localhost"),
-        port=int(os.getenv("PGPORT","5432")),
-        user=os.getenv("PGUSER","postgres"),
-        password=os.getenv("PGPASSWORD","postgres"),
-        dbname=os.getenv("PGDATABASE","wine_db"),
+        host=os.getenv("PGHOST", "localhost"),
+        port=int(os.getenv("PGPORT", "5432")),
+        user=os.getenv("PGUSER", "postgres"),
+        password=os.getenv("PGPASSWORD", "postgres"),
+        dbname=os.getenv("PGDATABASE", "wine_db"),
     )
+
 
 def upsert_product(cur, row):
     sql = """
@@ -41,40 +41,57 @@ def upsert_product(cur, row):
     """
     cur.execute(sql, row)
 
-    cur.execute("""
+    cur.execute(
+        """
         SELECT price_rub FROM product_prices
         WHERE code=%s AND effective_to IS NULL
         ORDER BY effective_from DESC LIMIT 1
-    """, (row["code"],))
+    """,
+        (row["code"],),
+    )
     last = cur.fetchone()
     if last is None or float(last[0]) != float(row["price_rub"] or 0):
-        cur.execute("""
+        cur.execute(
+            """
             UPDATE product_prices SET effective_to = now()
             WHERE code=%s AND effective_to IS NULL
-        """, (row["code"],))
-        cur.execute("""
+        """,
+            (row["code"],),
+        )
+        cur.execute(
+            """
             INSERT INTO product_prices (code, price_rub) VALUES (%s, %s)
-        """, (row["code"], row["price_rub"]))
+        """,
+            (row["code"], row["price_rub"]),
+        )
+
 
 def detect_mapping(df, mapping_template):
     mt = mapping_template.get("mapping") or {}
     if mt and all(str(v) in df.columns for v in mt.values()):
-        return {k:v for k,v in mt.items() if v in df.columns}
+        return {k: v for k, v in mt.items() if v in df.columns}
 
     aliases = {
-        "code": ["код","артикул","sku","код товара","id"],
-        "producer": ["производитель","бренд","house","winery"],
-        "title_ru": ["наименование","наим.","продукт","вино","название"],
-        "title_en": ["name_en","title_en","англ","en"],
+        "code": ["код", "артикул", "sku", "код товара", "id"],
+        "producer": ["производитель", "бренд", "house", "winery"],
+        "title_ru": ["наименование", "наим.", "продукт", "вино", "название"],
+        "title_en": ["name_en", "title_en", "англ", "en"],
         "country": ["страна"],
-        "region": ["регион","аппел", "апел", "область"],
+        "region": ["регион", "аппел", "апел", "область"],
         "color": ["цвет"],
-        "style": ["стиль","тип","категория"],
-        "grapes": ["сорт","сорта","сортовой состав","виноград"],
-        "abv": ["крепость","алк","алкоголь","alc","abv"],
-        "pack": ["упаковка","коробке","кол-во"],
-        "volume": ["объем","объём","емк","емкость","литраж","тара"],
-        "price_rub": ["цена","цена руб","цена, руб","цена (руб)","стоимость","опт"]
+        "style": ["стиль", "тип", "категория"],
+        "grapes": ["сорт", "сорта", "сортовой состав", "виноград"],
+        "abv": ["крепость", "алк", "алкоголь", "alc", "abv"],
+        "pack": ["упаковка", "коробке", "кол-во"],
+        "volume": ["объем", "объём", "емк", "емкость", "литраж", "тара"],
+        "price_rub": [
+            "цена",
+            "цена руб",
+            "цена, руб",
+            "цена (руб)",
+            "стоимость",
+            "опт",
+        ],
     }
     mapping = {}
     for tgt, keys in aliases.items():
@@ -84,6 +101,7 @@ def detect_mapping(df, mapping_template):
                 mapping[tgt] = c
                 break
     return mapping
+
 
 def normalize_row(raw, m):
     row = {
@@ -99,17 +117,20 @@ def normalize_row(raw, m):
         "abv": parse_abv(raw.get(m.get("abv"))),
         "pack": norm_str(raw.get(m.get("pack"))),
         "volume": normalize_volume(raw.get(m.get("volume"))),
-        "price_rub": to_number(raw.get(m.get("price_rub")))
+        "price_rub": to_number(raw.get(m.get("price_rub"))),
     }
     return row
 
+
 def is_valid(row):
     return bool(row["code"] and row["title_ru"] and (row["price_rub"] is not None))
+
 
 def run_etl(xlsx_path=None, csv_path=None, sheet=None, mapping_path=None):
     mapping_template = {}
     if mapping_path and os.path.exists(mapping_path):
         import json
+
         with open(mapping_path, "r", encoding="utf-8") as f:
             mapping_template = json.load(f)
 
@@ -147,11 +168,16 @@ def run_etl(xlsx_path=None, csv_path=None, sheet=None, mapping_path=None):
         conn.commit()
     print(f"ETL completed: processed={len(rows)}")
 
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--xlsx", help="Path to daily Excel file")
-    ap.add_argument("--csv", help="Fallback CSV path", default="data/sample/dw_sample_products.csv")
+    ap.add_argument(
+        "--csv", help="Fallback CSV path", default="data/sample/dw_sample_products.csv"
+    )
     ap.add_argument("--sheet", help="Specific sheet name")
-    ap.add_argument("--mapping", help="Mapping JSON path", default="etl/mapping_template.json")
+    ap.add_argument(
+        "--mapping", help="Mapping JSON path", default="etl/mapping_template.json"
+    )
     args = ap.parse_args()
     run_etl(args.xlsx, args.csv, args.sheet, args.mapping)
