@@ -1,4 +1,7 @@
-import re, sys, pathlib
+import pathlib
+import re
+import sys
+
 PATS = [
   r'AKIA[0-9A-Z]{16}',
   r'ASIA[0-9A-Z]{16}',
