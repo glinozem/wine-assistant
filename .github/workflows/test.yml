@@ -17,12 +17,12 @@ jobs:
           POSTGRES_PASSWORD: test_password
           POSTGRES_DB: wine_db
         options: >-
-          --health-cmd pg_isready
+          --health-cmd="pg_isready -U postgres -d wine_db"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
         ports:
-          - 5432:5432
+          - 15432:5432
 
     steps:
       - name: Checkout code
@@ -57,14 +57,19 @@ jobs:
 
       - name: Setup test database schema
         run: |
-          PGPASSWORD=test_password psql -h localhost -U postgres -d wine_db -f tests/fixtures/schema.sql
+          sudo apt-get update && sudo apt-get install -y postgresql-client
+          for i in {1..60}; do
+            pg_isready -h localhost -p 15432 -U postgres -d wine_db && break
+            sleep 2
+          done
+          PGPASSWORD=test_password psql -h localhost -p 15432 -U postgres -d wine_db -f tests/fixtures/schema.sql
         env:
           PGPASSWORD: test_password
 
       - name: Run tests with coverage
         env:
           PGHOST: localhost
-          PGPORT: 5432
+          PGPORT: 15432
           PGUSER: postgres
           PGPASSWORD: test_password
           PGDATABASE: wine_db
