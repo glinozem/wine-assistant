@@ -48,7 +48,7 @@ swagger_config = {
     ],
     "static_url_path": "/flasgger_static",
     "swagger_ui": True,
-    "specs_route": "/docs"
+    "specs_route": "/docs",
 }
 
 swagger_template = {
@@ -58,18 +58,18 @@ swagger_template = {
         "version": os.getenv("APP_VERSION", "0.3.0"),
         "contact": {
             "name": "Wine Assistant Team",
-            "url": "https://github.com/glinozem/wine-assistant"
-        }
+            "url": "https://github.com/glinozem/wine-assistant",
+        },
     },
     "securityDefinitions": {
         "ApiKeyAuth": {
             "type": "apiKey",
             "name": "X-API-Key",
             "in": "header",
-            "description": "API ключ для доступа к защищённым эндпоинтам"
+            "description": "API ключ для доступа к защищённым эндпоинтам",
         }
     },
-    "security": []
+    "security": [],
 }
 
 swagger = Swagger(app, config=swagger_config, template=swagger_template)
@@ -82,21 +82,25 @@ limiter = Limiter(
     storage_uri=os.getenv("RATE_LIMIT_STORAGE_URL", "memory://"),
     enabled=os.getenv("RATE_LIMIT_ENABLED", "1") == "1",
     headers_enabled=True,
-    swallow_errors=True  # Don't crash if Redis unavailable
+    swallow_errors=True,  # Don't crash if Redis unavailable
 )
+
 
 @app.errorhandler(429)
 def ratelimit_handler(e):
     """Custom handler for rate limit exceeded errors."""
-    return jsonify({
-        "error": "rate_limit_exceeded",
-        "message": "Too many requests. Please try again later.",
-        "retry_after": e.description
-    }), 429
+    return jsonify(
+        {
+            "error": "rate_limit_exceeded",
+            "message": "Too many requests. Please try again later.",
+            "retry_after": e.description,
+        }
+    ), 429
+
 
 # JSON всегда в UTF-8 без \uXXXX
-app.json.ensure_ascii = False           # Flask ≥ 2.2
-app.config["JSON_AS_ASCII"] = False     # совместимость
+app.json.ensure_ascii = False  # Flask ≥ 2.2
+app.config["JSON_AS_ASCII"] = False  # совместимость
 
 
 @app.after_request
@@ -116,6 +120,7 @@ def require_api_key(f):
         if API_KEY and (request.headers.get("X-API-Key") != API_KEY):
             return jsonify({"error": "forbidden"}), 403
         return f(*a, **kw)
+
     return wrapped
 
 
@@ -130,7 +135,7 @@ def get_db():
     )
 
 
-@app.route('/health', methods=['GET'])
+@app.route("/health", methods=["GET"])
 def health():
     """
     Basic health check
@@ -154,7 +159,7 @@ def health():
     return jsonify({"ok": True})
 
 
-@app.route('/live', methods=['GET'])
+@app.route("/live", methods=["GET"])
 def liveness():
     """
     Liveness probe
@@ -194,15 +199,17 @@ def liveness():
           }
     """
     uptime = time.time() - app.start_time
-    return jsonify({
-        'status': 'alive',
-        'version': os.getenv('APP_VERSION', 'unknown'),
-        'uptime_seconds': uptime,
-        'timestamp': datetime.now().isoformat() + 'Z',
-    })
+    return jsonify(
+        {
+            "status": "alive",
+            "version": os.getenv("APP_VERSION", "unknown"),
+            "uptime_seconds": uptime,
+            "timestamp": datetime.now().isoformat() + "Z",
+        }
+    )
 
 
-@app.route('/ready', methods=['GET'])
+@app.route("/ready", methods=["GET"])
 def readiness():
     """
     Readiness probe
@@ -308,39 +315,42 @@ def readiness():
                     "products": "products" in existing_tables,
                     "product_prices": "product_prices" in existing_tables,
                     "inventory": "inventory" in existing_tables,
-                    "inventory_history": "inventory_history" in existing_tables
+                    "inventory_history": "inventory_history" in existing_tables,
                 },
                 "indexes": {
                     "products_code_idx": "products_code_idx" in existing_indexes,
                     "products_search_idx": "products_search_idx" in existing_indexes,
-                    "product_prices_sku_effective_from_idx": "product_prices_sku_effective_from_idx" in existing_indexes
+                    "product_prices_sku_effective_from_idx": "product_prices_sku_effective_from_idx"
+                    in existing_indexes,
                 },
-                "constraints": {
-                    "products_pkey": "products_pkey" in existing_constraints
-                }
+                "constraints": {"products_pkey": "products_pkey" in existing_constraints},
             }
         }
 
         response_time = (time.time() - start_time) * 1000
 
-        return jsonify({
-            "status": "ready",
-            "version": os.getenv("APP_VERSION", "unknown"),
-            "response_time_ms": round(response_time, 2),
-            "timestamp": datetime.now().isoformat() + "Z",
-            "checks": checks
-        }), 200
+        return jsonify(
+            {
+                "status": "ready",
+                "version": os.getenv("APP_VERSION", "unknown"),
+                "response_time_ms": round(response_time, 2),
+                "timestamp": datetime.now().isoformat() + "Z",
+                "checks": checks,
+            }
+        ), 200
 
     except Exception as e:
-        return jsonify({
-            "status": "not ready",
-            "version": os.getenv("APP_VERSION", "unknown"),
-            "error": str(e),
-            "checks": {"database": {"ok": False, "error": str(e)}}
-        }), 503
+        return jsonify(
+            {
+                "status": "not ready",
+                "version": os.getenv("APP_VERSION", "unknown"),
+                "error": str(e),
+                "checks": {"database": {"ok": False, "error": str(e)}},
+            }
+        ), 503
 
 
-@app.route('/version', methods=['GET'])
+@app.route("/version", methods=["GET"])
 def version():
     """
     Get API version
@@ -364,7 +374,7 @@ def version():
     return jsonify({"version": os.getenv("APP_VERSION", "0.3.0")})
 
 
-@app.route('/search', methods=['GET'])
+@app.route("/search", methods=["GET"])
 def search():
     """
     Search wines in catalog
@@ -534,7 +544,7 @@ def search():
     return jsonify({"items": rows, "query": q})
 
 
-@app.route('/catalog/search', methods=['GET'])
+@app.route("/catalog/search", methods=["GET"])
 def catalog_search():
     """
     Advanced catalog search with pagination and inventory
@@ -687,15 +697,20 @@ def catalog_search():
 
     where, params = [], []
     if max_price is not None:
-        where.append("p.price_final_rub <= %s"); params.append(max_price)
+        where.append("p.price_final_rub <= %s")
+        params.append(max_price)
     if color:
-        where.append("p.color ILIKE %s");  params.append(f"%{color}%")
+        where.append("p.color ILIKE %s")
+        params.append(f"%{color}%")
     if region:
-        where.append("p.region ILIKE %s"); params.append(f"%{region}%")
+        where.append("p.region ILIKE %s")
+        params.append(f"%{region}%")
     if style:
-        where.append("p.style ILIKE %s");  params.append(f"%{style}%")
+        where.append("p.style ILIKE %s")
+        params.append(f"%{style}%")
     if grape:
-        where.append("p.grapes ILIKE %s"); params.append(f"%{grape}%")
+        where.append("p.grapes ILIKE %s")
+        params.append(f"%{grape}%")
 
     # Наличие
     if in_stock == "true":
@@ -744,7 +759,7 @@ def catalog_search():
     return jsonify({"items": rows, "total": total, "limit": limit, "offset": offset, "query": q})
 
 
-@app.route('/sku/<code>', methods=['GET'])
+@app.route("/sku/<code>", methods=["GET"])
 @limiter.limit(os.getenv("RATE_LIMIT_PROTECTED", "1000/hour"))
 @require_api_key
 def get_sku(code: str):
@@ -862,7 +877,7 @@ def get_sku(code: str):
         return jsonify(row)
 
 
-@app.route('/sku/<code>/price-history', methods=['GET'])
+@app.route("/sku/<code>/price-history", methods=["GET"])
 @limiter.limit(os.getenv("RATE_LIMIT_PROTECTED", "1000/hour"))
 @require_api_key
 def price_history(code: str):
@@ -959,10 +974,10 @@ def price_history(code: str):
       403:
         description: Forbidden - invalid or missing API key
     """
-    limit  = request.args.get("limit",  default=50, type=int)
-    offset = request.args.get("offset", default=0,  type=int)
-    frm    = request.args.get("from")
-    to     = request.args.get("to")
+    limit = request.args.get("limit", default=50, type=int)
+    offset = request.args.get("offset", default=0, type=int)
+    frm = request.args.get("from")
+    to = request.args.get("to")
 
     where, params = ["code = %s"], [code]
     if frm:
@@ -991,7 +1006,7 @@ def price_history(code: str):
     return jsonify({"code": code, "items": rows, "limit": limit, "offset": offset})
 
 
-@app.route('/sku/<code>/inventory-history', methods=['GET'])
+@app.route("/sku/<code>/inventory-history", methods=["GET"])
 @limiter.limit(os.getenv("RATE_LIMIT_PROTECTED", "1000/hour"))
 @require_api_key
 def inventory_history(code: str):
@@ -1090,10 +1105,10 @@ def inventory_history(code: str):
       403:
         description: Forbidden - invalid or missing API key
     """
-    limit  = request.args.get("limit",  default=50, type=int)
-    offset = request.args.get("offset", default=0,  type=int)
-    frm    = request.args.get("from")
-    to     = request.args.get("to")
+    limit = request.args.get("limit", default=50, type=int)
+    offset = request.args.get("offset", default=0, type=int)
+    frm = request.args.get("from")
+    to = request.args.get("to")
 
     where, params = ["code = %s"], [code]
     if frm:

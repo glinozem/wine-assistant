@@ -14,15 +14,14 @@ jobs:
       postgres:
         image: pgvector/pgvector:pg16
         env:
-          POSTGRES_PASSWORD: test_password
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: dev_local_pw
           POSTGRES_DB: wine_db
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
         ports:
-          - 5432:5432
+          - 15432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d wine_db"
+          --health-interval=5s --health-timeout=5s --health-retries=20
 
     steps:
       - name: Checkout code
@@ -55,18 +54,37 @@ jobs:
         if: github.event_name == 'push'
         run: ruff check . --fix
 
-      - name: Setup test database schema
+      - name: Install Postgres client
         run: |
-          PGPASSWORD=test_password psql -h localhost -U postgres -d wine_db -f tests/fixtures/schema.sql
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Wait for Postgres & apply schema
         env:
-          PGPASSWORD: test_password
+          PGPASSWORD: dev_local_pw
+        run: |
+          for i in {1..60}; do
+            pg_isready -h localhost -p 15432 -U postgres -d wine_db && break
+            echo "Waiting for Postgres... ($i)"
+            sleep 2
+          done
+          # Схема идемпотентности (уже с pgcrypto в начале)
+          psql "postgresql://postgres:${PGPASSWORD}@localhost:15432/wine_db" -f tests/fixtures/schema.sql
+          # Схема продуктов/складских остатков для upsert_records()
+          psql "postgresql://postgres:${PGPASSWORD}@localhost:15432/wine_db" -f tests/fixtures/schema_prices.sql
+
+      - name: Check tables
+        env:
+          PGPASSWORD: dev_local_pw
+        run: |
+          psql "postgresql://postgres:${PGPASSWORD}@localhost:15432/wine_db" -c "\dt"
 
       - name: Run tests with coverage
         env:
           PGHOST: localhost
-          PGPORT: 5432
+          PGPORT: 15432
           PGUSER: postgres
-          PGPASSWORD: test_password
+          PGPASSWORD: dev_local_pw
           PGDATABASE: wine_db
           API_KEY: test_key_for_ci
           FLASK_DEBUG: 0
