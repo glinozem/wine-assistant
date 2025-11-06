@@ -14,7 +14,7 @@ jobs:
       postgres:
         image: pgvector/pgvector:pg16
         env:
-          POSTGRES_PASSWORD: test_password
+          POSTGRES_PASSWORD: postgres
           POSTGRES_DB: wine_db
         options: >-
           --health-cmd="pg_isready -U postgres -d wine_db"
@@ -62,16 +62,16 @@ jobs:
             pg_isready -h localhost -p 15432 -U postgres -d wine_db && break
             sleep 2
           done
-          PGPASSWORD=test_password psql -h localhost -p 15432 -U postgres -d wine_db -f tests/fixtures/schema.sql
+          PGPASSWORD=postgres psql -h localhost -p 15432 -U postgres -d wine_db -f tests/fixtures/schema.sql
         env:
-          PGPASSWORD: test_password
+          PGPASSWORD: postgres
 
       - name: Run tests with coverage
         env:
           PGHOST: localhost
           PGPORT: 15432
           PGUSER: postgres
-          PGPASSWORD: test_password
+          PGPASSWORD: postgres
           PGDATABASE: wine_db
           API_KEY: test_key_for_ci
           FLASK_DEBUG: 0
