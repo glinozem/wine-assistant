@@ -1,13 +1,13 @@
 import os
-import pytest
-import psycopg2
 
 # Import your Flask app
 import sys
 
+import psycopg2
+import pytest
+
 sys.path.insert(0, os.path.abspath("."))
 from api.app import app as flask_app
-
 
 # =============================================================================
 # Flask App Fixtures

@@ -7,17 +7,18 @@ Issue: #91
 Coverage target: 0% → 80%+
 """
 
-import pytest
 from datetime import date, timedelta
+
 import openpyxl
+import pytest
+
 from scripts.date_extraction import (
+    _parse_date_from_text,
     extract_date_from_excel,
     extract_date_from_filename,
-    validate_date,
     get_effective_date,
-    _parse_date_from_text,
+    validate_date,
 )
-
 
 # =============================================================================
 # Tests for extract_date_from_excel()
@@ -126,9 +127,7 @@ class TestExtractDateFromExcel:
 
         # Act & Assert
         for cell in test_formats.keys():
-            result = extract_date_from_excel(
-                str(test_file), cell=cell, fallback_cells=[]
-            )
+            result = extract_date_from_excel(str(test_file), cell=cell, fallback_cells=[])
             assert result == date(2025, 1, 20), f"Failed to parse date from cell {cell}"
 
     def test_extract_date_from_excel_handles_corrupted_file(self, tmp_path):

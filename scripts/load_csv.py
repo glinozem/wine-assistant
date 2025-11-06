@@ -1,34 +1,32 @@
 # scripts/load_csv.py
 from __future__ import annotations
 
-import os
 import argparse
+import logging
+import os
 from datetime import date, datetime
 from typing import Optional
 
 from dotenv import load_dotenv
 
-from scripts.load_utils import (
-    get_conn,
-    _to_float,
-    _get_discount_from_cell,
-    read_any,
-    upsert_records,
-)
-
-import logging
+# Date extraction module for automatic date parsing (Issue #81)
+from scripts.date_extraction import get_effective_date
 
 # Idempotency module for preventing duplicate imports (Issue #80)
 from scripts.idempotency import (
-    compute_file_sha256,
     check_file_exists,
+    compute_file_sha256,
     create_envelope,
-    update_envelope_status,
     create_price_list_entry,
+    update_envelope_status,
 )
-
-# Date extraction module for automatic date parsing (Issue #81)
-from scripts.date_extraction import get_effective_date
+from scripts.load_utils import (
+    _get_discount_from_cell,
+    _to_float,
+    get_conn,
+    read_any,
+    upsert_records,
+)
 
 load_dotenv()
 
@@ -83,9 +81,7 @@ def main():
         try:
             asof_override = datetime.strptime(args.asof, "%Y-%m-%d").date()
         except ValueError:
-            print(
-                f"Error: Invalid date format for --asof. Expected YYYY-MM-DD, got: {args.asof}"
-            )
+            print(f"Error: Invalid date format for --asof. Expected YYYY-MM-DD, got: {args.asof}")
             raise
 
     # Get effective date (auto-extract or use override)
@@ -154,9 +150,7 @@ def main():
             file_size_bytes=file_size,
         )
 
-        logger.info(
-            "Created new envelope for import", extra={"envelope_id": str(envelope_id)}
-        )
+        logger.info("Created new envelope for import", extra={"envelope_id": str(envelope_id)})
 
     except Exception as e:
         logger.error(f"Error checking file idempotency: {e}", exc_info=True)
@@ -167,24 +161,16 @@ def main():
     df = read_any(path, sep=args.sep, sheet=args.sheet, header=args.header)
 
     # Получим скидку из шапки и/или из S5, выберем согласно приоритету
-    disc_hdr = df.attrs.get(
-        "discount_pct_header"
-    )  # возможно, извлекли из второй строки заголовка
+    disc_hdr = df.attrs.get("discount_pct_header")  # возможно, извлекли из второй строки заголовка
     # sheet для S5
     sh = args.sheet
     try:
         sh = int(sh) if sh not in (None, "") else 0
     except ValueError:
         sh = sh if sh not in (None, "") else 0
-    disc_cell = (
-        _get_discount_from_cell(args.excel, sh, args.discount_cell)
-        if args.excel
-        else None
-    )
+    disc_cell = _get_discount_from_cell(args.excel, sh, args.discount_cell) if args.excel else None
 
-    prefer_s5 = args.prefer_discount_cell or (
-        os.environ.get("PREFER_S5") in ("1", "true", "True")
-    )
+    prefer_s5 = args.prefer_discount_cell or (os.environ.get("PREFER_S5") in ("1", "true", "True"))
     if prefer_s5:
         discount = disc_cell if disc_cell is not None else disc_hdr
     else:
@@ -233,9 +219,7 @@ def main():
         df["price_discount_num"] = df["price_discount"].map(_to_float)
     if "price_rub_num" in df.columns and "price_discount_num" in df.columns:
         df = df[df["price_rub_num"].notna() | df["price_discount_num"].notna()]
-    df = df.drop(
-        columns=[c for c in ("price_rub_num", "price_discount_num") if c in df.columns]
-    )
+    df = df.drop(columns=[c for c in ("price_rub_num", "price_discount_num") if c in df.columns])
 
     # ==========================
     # Import data

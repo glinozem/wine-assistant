@@ -7,17 +7,16 @@
 - upsert в базу данных
 """
 
+import logging
+import math
 import os
 import re
-import math
-from typing import Any, Dict, Iterable, Optional, Tuple
-import pandas as pd
-import logging
-
 from datetime import date, datetime
-import psycopg2
+from typing import Any, Dict, Iterable, Optional, Tuple
 
 import openpyxl  # чтение значения скидки из фиксированной ячейки (например, S5)
+import pandas as pd
+import psycopg2
 
 __all__ = [
     "get_conn",
@@ -185,9 +184,7 @@ def _canonicalize_headers(cols: Iterable[str]) -> Dict[str, Optional[str]]:
 
 def _find_header_row(xls_path: str, sheet: Any, max_rows: int = 30) -> int:
     """Ищем строку заголовка по наличию ключей ('код'/'code'/'артикул') в первых max_rows строках."""
-    df_top = pd.read_excel(
-        xls_path, sheet_name=sheet, header=None, nrows=max_rows, dtype=str
-    )
+    df_top = pd.read_excel(xls_path, sheet_name=sheet, header=None, nrows=max_rows, dtype=str)
     for i, row in df_top.iterrows():
         vals = [_norm_key(v) for v in row.values if pd.notna(v)]
         if any(tok in vals for tok in ("код", "code", "артикул")):
@@ -195,9 +192,7 @@ def _find_header_row(xls_path: str, sheet: Any, max_rows: int = 30) -> int:
     return 0
 
 
-def _get_discount_from_cell(
-    xls_path: str, sheet: Any, cell_addr: str = "S5"
-) -> Optional[float]:
+def _get_discount_from_cell(xls_path: str, sheet: Any, cell_addr: str = "S5") -> Optional[float]:
     """
     Возвращает скидку из указанной ячейки как долю (0..1) или None.
     sheet — индекс (int) или имя (str).
@@ -242,9 +237,7 @@ def _excel_read(
     hdr_base = _find_header_row(path, sh) if header is None else header
 
     # посмотреть следующую строку
-    peek = pd.read_excel(
-        path, sheet_name=sh, header=None, nrows=hdr_base + 2, dtype=str
-    )
+    peek = pd.read_excel(path, sheet_name=sh, header=None, nrows=hdr_base + 2, dtype=str)
     second = peek.iloc[hdr_base + 1] if len(peek.index) > hdr_base + 1 else None
     use_two_rows = False
     disc_hdr: Optional[float] = None
@@ -255,9 +248,7 @@ def _excel_read(
             use_two_rows = True
 
     if use_two_rows:
-        df_raw = pd.read_excel(
-            path, sheet_name=sh, header=[hdr_base, hdr_base + 1], dtype=str
-        )
+        df_raw = pd.read_excel(path, sheet_name=sh, header=[hdr_base, hdr_base + 1], dtype=str)
         # расплющим мультишапку и соберём % скидки, если он указан во второй строке под «Цена со скидкой»
         flat_cols = []
         if isinstance(df_raw.columns, pd.MultiIndex):
@@ -267,9 +258,7 @@ def _excel_read(
                 label = top_s if (bot_s in ("", "nan", None)) else f"{top_s} {bot_s}"
                 flat_cols.append(label)
                 # скидка в шапке?
-                if _norm_key(top_s) == "цена_со_скидкой" and re.match(
-                    r"^\d+\s*%$", bot_s or ""
-                ):
+                if _norm_key(top_s) == "цена_со_скидкой" and re.match(r"^\d+\s*%$", bot_s or ""):
                     try:
                         disc_hdr = int(re.sub(r"[^\d]", "", bot_s)) / 100.0
                     except Exception:
@@ -431,11 +420,7 @@ def upsert_records(df: pd.DataFrame, asof: date | datetime):
                            asof_date = EXCLUDED.asof_date;
                        """
 
-    asof_dt = (
-        asof
-        if isinstance(asof, datetime)
-        else datetime.combine(asof, datetime.min.time())
-    )
+    asof_dt = asof if isinstance(asof, datetime) else datetime.combine(asof, datetime.min.time())
 
     with get_conn() as conn, conn.cursor() as cur:
         total = 0
@@ -492,16 +477,12 @@ def upsert_records(df: pd.DataFrame, asof: date | datetime):
                 try:
                     eff_num = float(eff)
                     if math.isfinite(eff_num):
-                        cur.execute(
-                            "SELECT upsert_price(%s, %s, %s);", (code, eff_num, asof_dt)
-                        )
+                        cur.execute("SELECT upsert_price(%s, %s, %s);", (code, eff_num, asof_dt))
                         price_hist += 1
                 except Exception:
                     pass
 
-            if any(
-                r.get(k) is not None for k in ("stock_total", "reserved", "stock_free")
-            ):
+            if any(r.get(k) is not None for k in ("stock_total", "reserved", "stock_free")):
                 cur.execute(
                     upsert_inventory,
                     (

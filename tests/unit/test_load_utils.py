@@ -1,24 +1,25 @@
-import pytest
-import sys
 import os
-import pandas as pd
-import psycopg2
-from openpyxl import Workbook
+import sys
 import uuid
 from datetime import date
+
+import pandas as pd
+import psycopg2
+import pytest
+from openpyxl import Workbook
 
 # Добавляем путь к scripts в sys.path, чтобы импортировать load_csv
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from scripts.load_utils import (
+    _canonicalize_headers,
+    _get_discount_from_cell,
     _norm,
+    _norm_key,
     _to_float,
     _to_int,
-    _norm_key,
-    _get_discount_from_cell,
-    _canonicalize_headers,
-    read_any,
     get_conn,
+    read_any,
     upsert_records,
 )
 

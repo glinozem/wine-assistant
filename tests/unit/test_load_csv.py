@@ -1,9 +1,11 @@
 import sys
-import pandas as pd
-from scripts.load_utils import get_conn, _csv_read, _excel_read
-from scripts.load_csv import main
 from unittest.mock import patch
+
+import pandas as pd
 import pytest
+
+from scripts.load_csv import main
+from scripts.load_utils import _csv_read, _excel_read, get_conn
 
 
 def test_get_conn_returns_connection():

@@ -42,9 +42,7 @@ def setup_logging(app):
                 record: LogRecord — оригинальный Python лог
                 message_dict: dict — дополнительные поля
             """
-            super(CustomJsonFormatter, self).add_fields(
-                log_record, record, message_dict
-            )
+            super(CustomJsonFormatter, self).add_fields(log_record, record, message_dict)
 
             # Добавляем обязательные поля
             log_record["timestamp"] = record.created  # Unix timestamp

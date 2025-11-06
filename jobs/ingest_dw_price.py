@@ -5,14 +5,13 @@
 Issue: #82
 """
 
-import sys
-from pathlib import Path
 # Остальные импорты
 import logging
+import sys
 from datetime import datetime
+from pathlib import Path
 
 from scripts.load_csv import main as load_csv_main
-
 
 # Добавить корневую директорию проекта в sys.path
 project_root = Path(__file__).parent.parent

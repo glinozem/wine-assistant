@@ -5,11 +5,12 @@ Automatically extracts effective dates from Excel files or filenames.
 Issue: #81
 """
 
-import re
 import logging
-from datetime import datetime, date
+import re
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
+
 import openpyxl
 
 logger = logging.getLogger(__name__)
@@ -226,9 +227,7 @@ def get_effective_date(
     # Priority 1: Explicit override
     if asof_override:
         validate_date(asof_override)
-        logger.info(
-            "Using date from --asof override", extra={"date": asof_override.isoformat()}
-        )
+        logger.info("Using date from --asof override", extra={"date": asof_override.isoformat()})
         return asof_override
 
     # Priority 2: Excel cell (for .xlsx, .xls files)

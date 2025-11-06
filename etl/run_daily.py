@@ -1,10 +1,11 @@
-import os
 import argparse
+import os
+
 import pandas as pd
 import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
-from utils import parse_abv, normalize_volume, to_number, norm_str
+from utils import norm_str, normalize_volume, parse_abv, to_number
 
 load_dotenv()
 
@@ -172,12 +173,8 @@ def run_etl(xlsx_path=None, csv_path=None, sheet=None, mapping_path=None):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--xlsx", help="Path to daily Excel file")
-    ap.add_argument(
-        "--csv", help="Fallback CSV path", default="data/sample/dw_sample_products.csv"
-    )
+    ap.add_argument("--csv", help="Fallback CSV path", default="data/sample/dw_sample_products.csv")
     ap.add_argument("--sheet", help="Specific sheet name")
-    ap.add_argument(
-        "--mapping", help="Mapping JSON path", default="etl/mapping_template.json"
-    )
+    ap.add_argument("--mapping", help="Mapping JSON path", default="etl/mapping_template.json")
     args = ap.parse_args()
     run_etl(args.xlsx, args.csv, args.sheet, args.mapping)

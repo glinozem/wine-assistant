@@ -5,13 +5,12 @@ import time
 from datetime import datetime
 from functools import wraps
 
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from flasgger import Swagger
 import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
-
+from flasgger import Swagger
+from flask import Flask, jsonify, request
+from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
@@ -324,9 +323,7 @@ def readiness():
                     "product_prices_sku_effective_from_idx": "product_prices_sku_effective_from_idx"
                     in existing_indexes,
                 },
-                "constraints": {
-                    "products_pkey": "products_pkey" in existing_constraints
-                },
+                "constraints": {"products_pkey": "products_pkey" in existing_constraints},
             }
         }
 
@@ -765,9 +762,7 @@ def catalog_search():
     for r in rows:
         r.pop("total_count", None)
 
-    return jsonify(
-        {"items": rows, "total": total, "limit": limit, "offset": offset, "query": q}
-    )
+    return jsonify({"items": rows, "total": total, "limit": limit, "offset": offset, "query": q})
 
 
 @app.route("/sku/<code>", methods=["GET"])

@@ -8,8 +8,9 @@ Issue: #80
 import hashlib
 import logging
 from datetime import date
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 from uuid import UUID
+
 import psycopg2
 
 logger = logging.getLogger(__name__)

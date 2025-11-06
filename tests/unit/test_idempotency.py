@@ -7,19 +7,20 @@ Issue: #91
 Coverage target: 25.00% → 80%+
 """
 
-import pytest
 import hashlib
 from datetime import date
 from uuid import UUID
-import psycopg2.extras
-from scripts.idempotency import (
-    compute_file_sha256,
-    check_file_exists,
-    create_envelope,
-    update_envelope_status,
-    create_price_list_entry,
-)
 
+import psycopg2.extras
+import pytest
+
+from scripts.idempotency import (
+    check_file_exists,
+    compute_file_sha256,
+    create_envelope,
+    create_price_list_entry,
+    update_envelope_status,
+)
 
 # =============================================================================
 # Tests for compute_file_sha256()
@@ -115,9 +116,7 @@ class TestComputeFileSHA256:
         assert len(result) == 64
         # Проверить что хеш соответствует ожидаемому (вычислить эталонный)
         expected_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        assert result == expected_hash, (
-            "SHA256 для большого файла должен быть вычислен корректно"
-        )
+        assert result == expected_hash, "SHA256 для большого файла должен быть вычислен корректно"
 
 
 # =============================================================================
@@ -144,9 +143,7 @@ class TestCheckFileExists:
         result = check_file_exists(db_connection, fake_hash)
 
         # Assert
-        assert result is None, (
-            "check_file_exists должен возвращать None для несуществующего хеша"
-        )
+        assert result is None, "check_file_exists должен возвращать None для несуществующего хеша"
 
     def test_check_file_exists_returns_dict_for_existing_hash(self, db_connection):
         """
@@ -187,9 +184,7 @@ class TestCheckFileExists:
 
         finally:
             # Cleanup
-            cursor.execute(
-                "DELETE FROM ingest_envelope WHERE envelope_id = %s", (envelope_id,)
-            )
+            cursor.execute("DELETE FROM ingest_envelope WHERE envelope_id = %s", (envelope_id,))
             db_connection.commit()
             cursor.close()
 
@@ -233,18 +228,14 @@ class TestCheckFileExists:
                 "rows_failed",
             ]
             for field in required_fields:
-                assert field in result, (
-                    f"Поле {field} должно присутствовать в результате"
-                )
+                assert field in result, f"Поле {field} должно присутствовать в результате"
 
             assert result["rows_inserted"] == 100
             assert result["rows_updated"] == 50
             assert result["rows_failed"] == 5
 
         finally:
-            cursor.execute(
-                "DELETE FROM ingest_envelope WHERE envelope_id = %s", (envelope_id,)
-            )
+            cursor.execute("DELETE FROM ingest_envelope WHERE envelope_id = %s", (envelope_id,))
             db_connection.commit()
             cursor.close()
 
@@ -297,9 +288,7 @@ class TestCreateEnvelope:
 
             # Проверить что запись создана в БД
             cursor = db_connection.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-            cursor.execute(
-                "SELECT * FROM ingest_envelope WHERE envelope_id = %s", (envelope_id,)
-            )
+            cursor.execute("SELECT * FROM ingest_envelope WHERE envelope_id = %s", (envelope_id,))
             record = cursor.fetchone()
             cursor.close()
 
@@ -313,9 +302,7 @@ class TestCreateEnvelope:
         finally:
             # Cleanup
             cursor = db_connection.cursor()
-            cursor.execute(
-                "DELETE FROM ingest_envelope WHERE file_sha256 = %s", (file_hash,)
-            )
+            cursor.execute("DELETE FROM ingest_envelope WHERE file_sha256 = %s", (file_hash,))
             db_connection.commit()
             cursor.close()
 
@@ -333,9 +320,7 @@ class TestCreateEnvelope:
 
         try:
             # Act
-            envelope_id = create_envelope(
-                db_connection, file_name=file_name, file_hash=file_hash
-            )
+            envelope_id = create_envelope(db_connection, file_name=file_name, file_hash=file_hash)
 
             # Assert
             cursor = db_connection.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -346,15 +331,11 @@ class TestCreateEnvelope:
             status = cursor.fetchone()["status"]
             cursor.close()
 
-            assert status == "processing", (
-                "Статус по умолчанию должен быть 'processing'"
-            )
+            assert status == "processing", "Статус по умолчанию должен быть 'processing'"
 
         finally:
             cursor = db_connection.cursor()
-            cursor.execute(
-                "DELETE FROM ingest_envelope WHERE file_sha256 = %s", (file_hash,)
-            )
+            cursor.execute("DELETE FROM ingest_envelope WHERE file_sha256 = %s", (file_hash,))
             db_connection.commit()
             cursor.close()
 
@@ -420,9 +401,7 @@ class TestUpdateEnvelopeStatus:
 
         finally:
             cursor = db_connection.cursor()
-            cursor.execute(
-                "DELETE FROM ingest_envelope WHERE envelope_id = %s", (envelope_id,)
-            )
+            cursor.execute("DELETE FROM ingest_envelope WHERE envelope_id = %s", (envelope_id,))
             db_connection.commit()
             cursor.close()
 
@@ -470,9 +449,7 @@ class TestUpdateEnvelopeStatus:
 
         finally:
             cursor = db_connection.cursor()
-            cursor.execute(
-                "DELETE FROM ingest_envelope WHERE envelope_id = %s", (envelope_id,)
-            )
+            cursor.execute("DELETE FROM ingest_envelope WHERE envelope_id = %s", (envelope_id,))
             db_connection.commit()
             cursor.close()
 
@@ -546,12 +523,8 @@ class TestCreatePriceListEntry:
         finally:
             if price_list_id is not None:
                 cursor = db_connection.cursor()
-                cursor.execute(
-                    "DELETE FROM price_list WHERE price_list_id = %s", (price_list_id,)
-                )
-                cursor.execute(
-                    "DELETE FROM ingest_envelope WHERE envelope_id = %s", (envelope_id,)
-                )
+                cursor.execute("DELETE FROM price_list WHERE price_list_id = %s", (price_list_id,))
+                cursor.execute("DELETE FROM ingest_envelope WHERE envelope_id = %s", (envelope_id,))
                 db_connection.commit()
                 cursor.close()
 
@@ -596,12 +569,8 @@ class TestCreatePriceListEntry:
         finally:
             if price_list_id is not None:
                 cursor = db_connection.cursor()
-                cursor.execute(
-                    "DELETE FROM price_list WHERE price_list_id = %s", (price_list_id,)
-                )
-                cursor.execute(
-                    "DELETE FROM ingest_envelope WHERE envelope_id = %s", (envelope_id,)
-                )
+                cursor.execute("DELETE FROM price_list WHERE price_list_id = %s", (price_list_id,))
+                cursor.execute("DELETE FROM ingest_envelope WHERE envelope_id = %s", (envelope_id,))
                 db_connection.commit()
                 cursor.close()
 
@@ -665,12 +634,8 @@ class TestIdempotencyWorkflow:
         # Cleanup
         cursor = db_connection.cursor()
         try:
-            cursor.execute(
-                "DELETE FROM price_list WHERE price_list_id = %s", (price_list_id,)
-            )
-            cursor.execute(
-                "DELETE FROM ingest_envelope WHERE envelope_id = %s", (envelope_id,)
-            )
+            cursor.execute("DELETE FROM price_list WHERE price_list_id = %s", (price_list_id,))
+            cursor.execute("DELETE FROM ingest_envelope WHERE envelope_id = %s", (envelope_id,))
             db_connection.commit()
         finally:
             cursor.close()
@@ -704,8 +669,6 @@ class TestIdempotencyWorkflow:
 
         finally:
             cursor = db_connection.cursor()
-            cursor.execute(
-                "DELETE FROM ingest_envelope WHERE envelope_id = %s", (envelope_id,)
-            )
+            cursor.execute("DELETE FROM ingest_envelope WHERE envelope_id = %s", (envelope_id,))
             db_connection.commit()
             cursor.close()

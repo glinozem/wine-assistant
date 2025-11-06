@@ -1,6 +1,6 @@
+import pathlib
 import re
 import sys
-import pathlib
 
 PATS = [
     r"AKIA[0-9A-Z]{16}",
