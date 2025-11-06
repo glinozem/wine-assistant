@@ -8,17 +8,24 @@ import uuid
 from datetime import date
 
 # Добавляем путь к scripts в sys.path, чтобы импортировать load_csv
-sys.path.insert(0, os.path.abspath(
-    os.path.join(os.path.dirname(__file__), '..', '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from scripts.load_utils import (
-    _norm, _to_float, _to_int, _norm_key, _get_discount_from_cell,
-    _canonicalize_headers, read_any, get_conn, upsert_records
+    _norm,
+    _to_float,
+    _to_int,
+    _norm_key,
+    _get_discount_from_cell,
+    _canonicalize_headers,
+    read_any,
+    get_conn,
+    upsert_records,
 )
 
 # =============================================================================
 # Tests for _norm() function
 # =============================================================================
+
 
 @pytest.mark.unit
 def test_norm_removes_leading_and_trailing_spaces():
@@ -83,6 +90,7 @@ def test_norm_collapses_multiple_spaces():
 # =============================================================================
 # Tests for _to_float() function
 # =============================================================================
+
 
 @pytest.mark.unit
 def test_to_float_converts_string_to_float():
@@ -163,6 +171,7 @@ def test_to_float_handles_negative_numbers():
 # Tests for _to_int() function
 # =============================================================================
 
+
 @pytest.mark.unit
 def test_to_int_converts_string_to_int():
     """
@@ -211,6 +220,7 @@ def test_to_int_handles_none():
 # =============================================================================
 # Tests for _norm_key() function
 # =============================================================================
+
 
 @pytest.mark.unit
 def test_norm_key_converts_to_lowercase():
@@ -306,6 +316,7 @@ def test_norm_key_collapses_multiple_underscores():
 # Tests for _get_discount_from_cell() function
 # =============================================================================
 
+
 class TestGetDiscountFromCell:
     """
     Тесты для извлечения скидки из ячейки Excel.
@@ -335,13 +346,13 @@ class TestGetDiscountFromCell:
 
         wb = Workbook()
         ws = wb.active
-        ws['S5'] = '10%'  # Устанавливаем скидку
+        ws["S5"] = "10%"  # Устанавливаем скидку
 
         excel_file = tmp_path / "test_discount.xlsx"
         wb.save(excel_file)
 
         # Act - вызываем функцию
-        result = _get_discount_from_cell(str(excel_file), 0, 'S5')
+        result = _get_discount_from_cell(str(excel_file), 0, "S5")
 
         # Assert - проверяем результат
         assert result == 0.10
@@ -360,13 +371,13 @@ class TestGetDiscountFromCell:
 
         wb = Workbook()
         ws = wb.active
-        ws['S5'] = 0.15  # Число (не строка!)
+        ws["S5"] = 0.15  # Число (не строка!)
 
         excel_file = tmp_path / "test_discount_decimal.xlsx"
         wb.save(excel_file)
 
         # Act
-        result = _get_discount_from_cell(str(excel_file), 0, 'S5')
+        result = _get_discount_from_cell(str(excel_file), 0, "S5")
 
         # Assert
         assert result == 0.15
@@ -385,13 +396,13 @@ class TestGetDiscountFromCell:
 
         wb = Workbook()
         ws = wb.active
-        ws['S5'] = 10  # Число больше 1 -> должно разделиться на 100
+        ws["S5"] = 10  # Число больше 1 -> должно разделиться на 100
 
         excel_file = tmp_path / "test_discount_large.xlsx"
         wb.save(excel_file)
 
         # Act
-        result = _get_discount_from_cell(str(excel_file), 0, 'S5')
+        result = _get_discount_from_cell(str(excel_file), 0, "S5")
 
         # Assert
         assert result == 0.10
@@ -409,14 +420,14 @@ class TestGetDiscountFromCell:
         from openpyxl import Workbook
 
         wb = Workbook()
-        ws = wb.active
+        _ = wb.active
         # S5 остаётся пустой (не устанавливаем значение)
 
         excel_file = tmp_path / "test_discount_empty.xlsx"
         wb.save(excel_file)
 
         # Act
-        result = _get_discount_from_cell(str(excel_file), 0, 'S5')
+        result = _get_discount_from_cell(str(excel_file), 0, "S5")
 
         # Assert
         assert result is None
@@ -435,13 +446,13 @@ class TestGetDiscountFromCell:
 
         wb = Workbook()
         ws = wb.active
-        ws['S5'] = 'invalid'  # Некорректное значение
+        ws["S5"] = "invalid"  # Некорректное значение
 
         excel_file = tmp_path / "test_discount_invalid.xlsx"
         wb.save(excel_file)
 
         # Act
-        result = _get_discount_from_cell(str(excel_file), 0, 'S5')
+        result = _get_discount_from_cell(str(excel_file), 0, "S5")
 
         # Assert
         assert result is None
@@ -450,6 +461,7 @@ class TestGetDiscountFromCell:
 # =============================================================================
 # NEW TESTS: High-level functions
 # =============================================================================
+
 
 class TestCanonicalizeHeaders:
     """
@@ -468,8 +480,7 @@ class TestCanonicalizeHeaders:
         Assert: Проверяем что колонки замапились правильно
         """
         # Arrange
-        cols = ["Код", "Производитель", "Название", "Цена прайс",
-                "Цена со скидкой"]
+        cols = ["Код", "Производитель", "Название", "Цена прайс", "Цена со скидкой"]
 
         # Act
         result = _canonicalize_headers(cols)
@@ -542,7 +553,7 @@ class TestReadAny:
         # Arrange - создаём CSV с русскими символами в cp1251
         csv_file = tmp_path / "test_encoding.csv"
         csv_content = "Код,Название,Цена\n123,Тестовое вино,1000\n456,Другое вино,2000"
-        csv_file.write_bytes(csv_content.encode('cp1251'))
+        csv_file.write_bytes(csv_content.encode("cp1251"))
 
         # Act
         df = read_any(str(csv_file))
@@ -564,12 +575,12 @@ class TestReadAny:
         # Arrange
         wb = Workbook()
         ws = wb.active
-        ws['A1'] = 'Код'
-        ws['B1'] = 'Название'
-        ws['C1'] = 'Цена'
-        ws['A2'] = '123'
-        ws['B2'] = 'Вино'
-        ws['C2'] = '1000'
+        ws["A1"] = "Код"
+        ws["B1"] = "Название"
+        ws["C1"] = "Цена"
+        ws["A2"] = "123"
+        ws["B2"] = "Вино"
+        ws["C2"] = "1000"
 
         excel_file = tmp_path / "test_basic.xlsx"
         wb.save(excel_file)
@@ -596,10 +607,10 @@ class TestReadAny:
         # Arrange
         wb = Workbook()
         ws = wb.active
-        ws['A1'] = 'Артикул'
-        ws['B1'] = 'Название'
-        ws['A2'] = 'WINE123'
-        ws['B2'] = 'Красное вино'
+        ws["A1"] = "Артикул"
+        ws["B1"] = "Название"
+        ws["A2"] = "WINE123"
+        ws["B2"] = "Красное вино"
 
         excel_file = tmp_path / "test_article.xlsx"
         wb.save(excel_file)
@@ -644,13 +655,17 @@ def test_upsert_records_insert_and_update(monkeypatch):
     test_uuid = uuid.uuid4()
 
     # DataFrame вместо списка словарей
-    df = pd.DataFrame([{
-        "code": "TEST001",
-        "envelope_id": test_uuid,
-        "price_rub": 100.0,
-        "price_discount": 90.0,
-        "price_final_rub": 90.0,
-    }])
+    df = pd.DataFrame(
+        [
+            {
+                "code": "TEST001",
+                "envelope_id": test_uuid,
+                "price_rub": 100.0,
+                "price_discount": 90.0,
+                "price_final_rub": 90.0,
+            }
+        ]
+    )
 
     # Тестовая дата
     today = date.today()

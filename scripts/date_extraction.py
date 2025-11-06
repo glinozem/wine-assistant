@@ -4,6 +4,11 @@ Date extraction module for ETL processes.
 Automatically extracts effective dates from Excel files or filenames.
 Issue: #81
 """
+<<<<<<< HEAD
+=======
+
+import re
+>>>>>>> 50fa7f9 (style(ruff): sort imports; make CI lint happy)
 import logging
 import re
 from datetime import date, datetime
@@ -16,9 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 def extract_date_from_excel(
-        file_path: str,
-        cell: str = "A1",
-        fallback_cells: Optional[list[str]] = None
+    file_path: str, cell: str = "A1", fallback_cells: Optional[list[str]] = None
 ) -> Optional[date]:
     """
     Extract date from Excel cell.
@@ -48,8 +51,7 @@ def extract_date_from_excel(
     cells_to_check = [cell] + fallback_cells
 
     try:
-        workbook = openpyxl.load_workbook(file_path, data_only=True,
-                                          read_only=True)
+        workbook = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
         sheet = workbook.active
 
         for check_cell in cells_to_check:
@@ -68,8 +70,8 @@ def extract_date_from_excel(
                         "file": file_path,
                         "cell": check_cell,
                         "cell_value": str(cell_value),
-                        "extracted_date": extracted_date.isoformat()
-                    }
+                        "extracted_date": extracted_date.isoformat(),
+                    },
                 )
                 workbook.close()
                 return extracted_date
@@ -107,9 +109,9 @@ def extract_date_from_filename(file_path: str) -> Optional[date]:
 
     # Pattern 1: YYYY_MM_DD or YYYY-MM-DD
     patterns = [
-        r'(\d{4})[_-](\d{2})[_-](\d{2})',  # 2025_01_20 or 2025-01-20
-        r'(\d{4})(\d{2})(\d{2})',  # 20250120
-        r'(\d{2})[._-](\d{2})[._-](\d{4})',  # 20.01.2025 or 20-01-2025
+        r"(\d{4})[_-](\d{2})[_-](\d{2})",  # 2025_01_20 or 2025-01-20
+        r"(\d{4})(\d{2})(\d{2})",  # 20250120
+        r"(\d{2})[._-](\d{2})[._-](\d{4})",  # 20.01.2025 or 20-01-2025
     ]
 
     for pattern in patterns:
@@ -119,21 +121,19 @@ def extract_date_from_filename(file_path: str) -> Optional[date]:
 
             # Determine format based on pattern
             if len(groups[0]) == 4:  # YYYY format
-                year, month, day = int(groups[0]), int(groups[1]), int(
-                    groups[2])
+                year, month, day = int(groups[0]), int(groups[1]), int(groups[2])
             else:  # DD format
-                day, month, year = int(groups[0]), int(groups[1]), int(
-                    groups[2])
+                day, month, year = int(groups[0]), int(groups[1]), int(groups[2])
 
             try:
                 extracted_date = date(year, month, day)
                 logger.info(
-                    f"Date extracted from filename",
+                    "Date extracted from filename",
                     extra={
                         "filename": filename,
                         "pattern": pattern,
-                        "extracted_date": extracted_date.isoformat()
-                    }
+                        "extracted_date": extracted_date.isoformat(),
+                    },
                 )
                 return extracted_date
             except ValueError:
@@ -151,10 +151,10 @@ def _parse_date_from_text(text: str) -> Optional[date]:
     """
     # Date patterns to try
     patterns = [
-        (r'(\d{2})\.(\d{2})\.(\d{4})', '%d.%m.%Y'),  # 20.01.2025
-        (r'(\d{4})-(\d{2})-(\d{2})', '%Y-%m-%d'),  # 2025-01-20
-        (r'(\d{2})/(\d{2})/(\d{4})', '%d/%m/%Y'),  # 20/01/2025
-        (r'(\d{2})-(\d{2})-(\d{4})', '%d-%m-%Y'),  # 20-01-2025
+        (r"(\d{2})\.(\d{2})\.(\d{4})", "%d.%m.%Y"),  # 20.01.2025
+        (r"(\d{4})-(\d{2})-(\d{2})", "%Y-%m-%d"),  # 2025-01-20
+        (r"(\d{2})/(\d{2})/(\d{4})", "%d/%m/%Y"),  # 20/01/2025
+        (r"(\d{2})-(\d{2})-(\d{4})", "%d-%m-%Y"),  # 20-01-2025
     ]
 
     for pattern, date_format in patterns:
@@ -191,24 +191,17 @@ def validate_date(extracted_date: date) -> bool:
 
     # Check 1: Not in future
     if extracted_date > today:
-        raise ValueError(
-            f"Date {extracted_date} is in the future! "
-            f"Today is {today}."
-        )
+        raise ValueError(f"Date {extracted_date} is in the future! Today is {today}.")
 
     # Check 2: Not too old (after 2000)
     if extracted_date.year < 2000:
-        raise ValueError(
-            f"Date {extracted_date} is too old (before 2000)!"
-        )
+        raise ValueError(f"Date {extracted_date} is too old (before 2000)!")
 
     return True
 
 
 def get_effective_date(
-        file_path: str,
-        asof_override: Optional[date] = None,
-        date_cell: str = "A1"
+    file_path: str, asof_override: Optional[date] = None, date_cell: str = "A1"
 ) -> date:
     """
     Get effective date with priority system.
@@ -239,13 +232,12 @@ def get_effective_date(
     if asof_override:
         validate_date(asof_override)
         logger.info(
-            "Using date from --asof override",
-            extra={"date": asof_override.isoformat()}
+            "Using date from --asof override", extra={"date": asof_override.isoformat()}
         )
         return asof_override
 
     # Priority 2: Excel cell (for .xlsx, .xls files)
-    if file_path.endswith(('.xlsx', '.xls', '.xlsm')):
+    if file_path.endswith((".xlsx", ".xls", ".xlsm")):
         date_from_excel = extract_date_from_excel(file_path, date_cell)
         if date_from_excel:
             validate_date(date_from_excel)
@@ -261,9 +253,6 @@ def get_effective_date(
     today = date.today()
     logger.warning(
         "Could not extract date from file. Using today as fallback.",
-        extra={
-            "file": file_path,
-            "fallback_date": today.isoformat()
-        }
+        extra={"file": file_path, "fallback_date": today.isoformat()},
     )
     return today

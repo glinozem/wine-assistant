@@ -17,17 +17,24 @@ import logging
 from datetime import date, datetime
 import psycopg2
 
-import \
-    openpyxl  # чтение значения скидки из фиксированной ячейки (например, S5)
+import openpyxl  # чтение значения скидки из фиксированной ячейки (например, S5)
 
 __all__ = [
-    "get_conn", "_norm", "_norm_key", "_to_float", "_to_int",
-    "_canonicalize_headers", "_get_discount_from_cell",
-    "_excel_read", "_csv_read", "read_any", "COLMAP"
+    "get_conn",
+    "_norm",
+    "_norm_key",
+    "_to_float",
+    "_to_int",
+    "_canonicalize_headers",
+    "_get_discount_from_cell",
+    "_excel_read",
+    "_csv_read",
+    "read_any",
+    "COLMAP",
 ]
 
 # Date extraction module for automatic date parsing (Issue #81)
-from scripts.date_extraction import get_effective_date
+
 
 # =========================
 # DB
@@ -94,13 +101,11 @@ COLMAP: Dict[str, Optional[str]] = {
     "код": "code",
     "code": "code",
     "артикул": "code",
-
     # наименование
     "наименование": "title_ru",
     "наименование_вина": "title_ru",
     "название": "title_ru",
     "title": "title_ru",
-
     # производитель/страна/регион
     "производитель": "producer",
     "бренд": "producer",
@@ -109,48 +114,41 @@ COLMAP: Dict[str, Optional[str]] = {
     "регион": "region",
     "провинция": "region",
     "область": "region",
-
     # сорт
     "сорт": "grapes",
     "сорт_винограда": "grapes",
     "виноград": "grapes",
     "grapes": "grapes",
-
     # алк
     "алк": "abv",
     "алк_%": "abv",
     "алк_": "abv",
     "алкоголь": "abv",
     "abv": "abv",
-
     # объём
     "емк_л": "volume",
     "емкость": "volume",
     "объем": "volume",
     "объём": "volume",
     "volume_l": "volume",
-
     # упаковка
     "бут_в_кор": "pack",
     "бут_в_кор_": "pack",
     "упаковка": "pack",
     "короб": "pack",
     "pack": "pack",
-
     # цены
     "цена_прайс": "price_rub",
     "цена": "price_rub",
     "price": "price_rub",
     "price_rub": "price_rub",
     "цена_со_скидкой": "price_discount",
-
     # остатки
     "остатки": "stock_total",
     "остаток": "stock_total",
     "резерв": "reserved",
     "свободный_остаток": "stock_free",
     "свободный": "stock_free",
-
     # игнор
     "unnamed": None,
     "vivino": None,
@@ -167,7 +165,7 @@ COLMAP: Dict[str, Optional[str]] = {
 
 
 def _canonicalize_headers(cols: Iterable[str]) -> Dict[str, Optional[str]]:
-    """ old_col -> canonical_name (или None для игнора) """
+    """old_col -> canonical_name (или None для игнора)"""
     mapping: Dict[str, Optional[str]] = {}
     for c in cols:
         key = _norm_key(c)
@@ -187,8 +185,9 @@ def _canonicalize_headers(cols: Iterable[str]) -> Dict[str, Optional[str]]:
 
 def _find_header_row(xls_path: str, sheet: Any, max_rows: int = 30) -> int:
     """Ищем строку заголовка по наличию ключей ('код'/'code'/'артикул') в первых max_rows строках."""
-    df_top = pd.read_excel(xls_path, sheet_name=sheet, header=None,
-                           nrows=max_rows, dtype=str)
+    df_top = pd.read_excel(
+        xls_path, sheet_name=sheet, header=None, nrows=max_rows, dtype=str
+    )
     for i, row in df_top.iterrows():
         vals = [_norm_key(v) for v in row.values if pd.notna(v)]
         if any(tok in vals for tok in ("код", "code", "артикул")):
@@ -196,8 +195,9 @@ def _find_header_row(xls_path: str, sheet: Any, max_rows: int = 30) -> int:
     return 0
 
 
-def _get_discount_from_cell(xls_path: str, sheet: Any,
-                            cell_addr: str = "S5") -> Optional[float]:
+def _get_discount_from_cell(
+    xls_path: str, sheet: Any, cell_addr: str = "S5"
+) -> Optional[float]:
     """
     Возвращает скидку из указанной ячейки как долю (0..1) или None.
     sheet — индекс (int) или имя (str).
@@ -224,9 +224,9 @@ def _get_discount_from_cell(xls_path: str, sheet: Any,
 # Reading CSV/Excel
 # =========================
 def _excel_read(
-        path: str,
-        sheet: Any,
-        header: Optional[int],
+    path: str,
+    sheet: Any,
+    header: Optional[int],
 ) -> Tuple[pd.DataFrame, int, bool, Optional[float]]:
     """
     Читает Excel. Возвращает (df, header_row_base, used_two_rows, discount_pct_from_header)
@@ -242,10 +242,10 @@ def _excel_read(
     hdr_base = _find_header_row(path, sh) if header is None else header
 
     # посмотреть следующую строку
-    peek = pd.read_excel(path, sheet_name=sh, header=None, nrows=hdr_base + 2,
-                         dtype=str)
-    second = peek.iloc[hdr_base + 1] if len(
-        peek.index) > hdr_base + 1 else None
+    peek = pd.read_excel(
+        path, sheet_name=sh, header=None, nrows=hdr_base + 2, dtype=str
+    )
+    second = peek.iloc[hdr_base + 1] if len(peek.index) > hdr_base + 1 else None
     use_two_rows = False
     disc_hdr: Optional[float] = None
 
@@ -255,20 +255,21 @@ def _excel_read(
             use_two_rows = True
 
     if use_two_rows:
-        df_raw = pd.read_excel(path, sheet_name=sh,
-                               header=[hdr_base, hdr_base + 1], dtype=str)
+        df_raw = pd.read_excel(
+            path, sheet_name=sh, header=[hdr_base, hdr_base + 1], dtype=str
+        )
         # расплющим мультишапку и соберём % скидки, если он указан во второй строке под «Цена со скидкой»
         flat_cols = []
         if isinstance(df_raw.columns, pd.MultiIndex):
             for top, bottom in df_raw.columns:
                 top_s = _norm(top)
                 bot_s = _norm(bottom)
-                label = top_s if (
-                        bot_s in ("", "nan", None)) else f"{top_s} {bot_s}"
+                label = top_s if (bot_s in ("", "nan", None)) else f"{top_s} {bot_s}"
                 flat_cols.append(label)
                 # скидка в шапке?
                 if _norm_key(top_s) == "цена_со_скидкой" and re.match(
-                        r"^\d+\s*%$", bot_s or ""):
+                    r"^\d+\s*%$", bot_s or ""
+                ):
                     try:
                         disc_hdr = int(re.sub(r"[^\d]", "", bot_s)) / 100.0
                     except Exception:
@@ -304,23 +305,28 @@ def _csv_read(path: str, sep: Optional[str]) -> Tuple[pd.DataFrame, str]:
         import csv as _csv
 
         try:
-            dialect = _csv.Sniffer().sniff(head.decode(enc, errors="ignore"),
-                                           delimiters=[",", ";", "\t", "|"])
+            dialect = _csv.Sniffer().sniff(
+                head.decode(enc, errors="ignore"), delimiters=[",", ";", "\t", "|"]
+            )
             sep = dialect.delimiter
         except Exception:
             sep = ","
-        df = pd.read_csv(path, sep=sep, engine="python", encoding=enc,
-                         dtype=str, on_bad_lines="warn")
+        df = pd.read_csv(
+            path, sep=sep, engine="python", encoding=enc, dtype=str, on_bad_lines="warn"
+        )
         print(f"[csv] encoding={enc}, sep='{sep}', columns={list(df.columns)}")
     else:
-        df = pd.read_csv(path, sep=sep, engine="python", dtype=str,
-                         on_bad_lines="warn")
+        df = pd.read_csv(path, sep=sep, engine="python", dtype=str, on_bad_lines="warn")
         print(f"[csv] sep='{sep}', columns={list(df.columns)}")
     return df, sep  # type: ignore[return-value]
 
 
-def read_any(path: str, sep: Optional[str] = None, sheet: Any = None,
-             header: Optional[int] = None) -> pd.DataFrame:
+def read_any(
+    path: str,
+    sep: Optional[str] = None,
+    sheet: Any = None,
+    header: Optional[int] = None,
+) -> pd.DataFrame:
     """
     Excel:
       - авто-поиск строки заголовка
@@ -331,8 +337,7 @@ def read_any(path: str, sep: Optional[str] = None, sheet: Any = None,
     """
     ext = os.path.splitext(path)[1].lower()
     if ext in (".xlsx", ".xlsm", ".xls"):
-        df, hdr_base, used_two_rows, disc_hdr = _excel_read(path, sheet,
-                                                            header)
+        df, hdr_base, used_two_rows, disc_hdr = _excel_read(path, sheet, header)
         # нормализуем названия и маппим
         df.columns = [_norm(c) for c in df.columns]
         header_map = _canonicalize_headers(df.columns)
@@ -359,7 +364,8 @@ def read_any(path: str, sep: Optional[str] = None, sheet: Any = None,
             df = df.rename(columns={candidate: "code"})
         else:
             raise ValueError(
-                "Не нашли колонку с кодом (Код / code / Артикул). Проверь шапку файла.")
+                "Не нашли колонку с кодом (Код / code / Артикул). Проверь шапку файла."
+            )
 
     # зачистка значений
     for c in df.columns:
@@ -425,7 +431,11 @@ def upsert_records(df: pd.DataFrame, asof: date | datetime):
                            asof_date = EXCLUDED.asof_date;
                        """
 
-    asof_dt = asof if isinstance(asof, datetime) else datetime.combine(asof, datetime.min.time())
+    asof_dt = (
+        asof
+        if isinstance(asof, datetime)
+        else datetime.combine(asof, datetime.min.time())
+    )
 
     with get_conn() as conn, conn.cursor() as cur:
         total = 0
@@ -445,16 +455,21 @@ def upsert_records(df: pd.DataFrame, asof: date | datetime):
             if disc is not None and price_list is not None:
                 price_calc_disc = round(price_list * (1.0 - disc), 2)
 
-            prefer_s5 = (os.environ.get("PREFER_S5") in ("1", "true", "True"))
+            prefer_s5 = os.environ.get("PREFER_S5") in ("1", "true", "True")
             eff = price_calc_disc if prefer_s5 else price_file_disc
             if eff is None:
                 eff = price_file_disc if prefer_s5 else price_calc_disc
             if eff is None:
                 eff = price_list
 
-            if price_file_disc is not None and price_calc_disc is not None and abs(
-                    price_file_disc - price_calc_disc) > 0.01:
-                print(f"[warn] {code}: price_discount mismatch -> file={price_file_disc} vs S5={price_calc_disc}")
+            if (
+                price_file_disc is not None
+                and price_calc_disc is not None
+                and abs(price_file_disc - price_calc_disc) > 0.01
+            ):
+                print(
+                    f"[warn] {code}: price_discount mismatch -> file={price_file_disc} vs S5={price_calc_disc}"
+                )
 
             payload = dict(
                 code=code,
@@ -477,21 +492,34 @@ def upsert_records(df: pd.DataFrame, asof: date | datetime):
                 try:
                     eff_num = float(eff)
                     if math.isfinite(eff_num):
-                        cur.execute("SELECT upsert_price(%s, %s, %s);", (code, eff_num, asof_dt))
+                        cur.execute(
+                            "SELECT upsert_price(%s, %s, %s);", (code, eff_num, asof_dt)
+                        )
                         price_hist += 1
                 except Exception:
                     pass
 
-            if any(r.get(k) is not None for k in ("stock_total", "reserved", "stock_free")):
-                cur.execute(upsert_inventory, (
-                    code, r.get("stock_total"), r.get("reserved"), r.get("stock_free"), asof_dt.date()
-                ))
+            if any(
+                r.get(k) is not None for k in ("stock_total", "reserved", "stock_free")
+            ):
+                cur.execute(
+                    upsert_inventory,
+                    (
+                        code,
+                        r.get("stock_total"),
+                        r.get("reserved"),
+                        r.get("stock_free"),
+                        asof_dt.date(),
+                    ),
+                )
                 inv_upd += 1
 
             total += 1
 
         conn.commit()
         logger = logging.getLogger(__name__)
-        logger.info(f"Upsert done: rows={total}, products_upd={prod_upd}, price_hist={price_hist}, inventory_upd={inv_upd}")
+        logger.info(
+            f"Upsert done: rows={total}, products_upd={prod_upd}, price_hist={price_hist}, inventory_upd={inv_upd}"
+        )
 
     return total

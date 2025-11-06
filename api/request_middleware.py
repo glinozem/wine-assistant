@@ -66,7 +66,7 @@ def setup_request_logging(app):
         # Получаем IP адрес клиента
         # request.remote_addr — IP из TCP соединения
         # request.headers.get('X-Forwarded-For') — если запрос идёт через прокси/load balancer
-        client_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+        client_ip = request.headers.get("X-Forwarded-For", request.remote_addr)
 
         # Логируем входящий запрос
         app.logger.info(
@@ -75,11 +75,11 @@ def setup_request_logging(app):
                 "request_id": g.request_id,
                 "method": request.method,  # GET, POST, PUT и т.д.
                 "path": request.path,  # /search, /sku/D011283 и т.д.
-                "query_string": request.query_string.decode('utf-8'),
+                "query_string": request.query_string.decode("utf-8"),
                 # ?q=вино&max_price=3000
                 "client_ip": client_ip,
-                "user_agent": request.headers.get('User-Agent', 'unknown')
-            }
+                "user_agent": request.headers.get("User-Agent", "unknown"),
+            },
         )
 
     @app.after_request
@@ -99,14 +99,13 @@ def setup_request_logging(app):
         - Добавляет Request ID в заголовок ответа
         """
         # Вычисляем время выполнения запроса (в миллисекундах)
-        if hasattr(g, 'start_time'):
-            duration_ms = (
-                                      time.time() - g.start_time) * 1000  # секунды -> миллисекунды
+        if hasattr(g, "start_time"):
+            duration_ms = (time.time() - g.start_time) * 1000  # секунды -> миллисекунды
         else:
             duration_ms = 0
 
         # Получаем Request ID (если он был создан)
-        request_id = getattr(g, 'request_id', 'unknown')
+        request_id = getattr(g, "request_id", "unknown")
 
         # Определяем уровень логирования в зависимости от статус кода
         if response.status_code >= 500:
@@ -126,12 +125,12 @@ def setup_request_logging(app):
                 "path": request.path,
                 "status_code": response.status_code,
                 "duration_ms": round(duration_ms, 2),
-                "response_size_bytes": response.content_length or 0
-            }
+                "response_size_bytes": response.content_length or 0,
+            },
         )
 
         # Добавляем Request ID в заголовок HTTP ответа
         # Теперь клиент может увидеть Request ID в HTTP заголовках!
-        response.headers['X-Request-ID'] = request_id
+        response.headers["X-Request-ID"] = request_id
 
         return response
