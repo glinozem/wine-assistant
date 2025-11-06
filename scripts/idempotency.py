@@ -4,6 +4,7 @@ Idempotency module for ETL processes.
 Implements file fingerprinting using SHA256 to prevent duplicate imports.
 Issue: #80
 """
+
 import hashlib
 import logging
 from datetime import date, datetime
@@ -31,7 +32,7 @@ def compute_file_sha256(file_path: str) -> str:
     """
     sha256 = hashlib.sha256()
 
-    with open(file_path, 'rb') as f:
+    with open(file_path, "rb") as f:
         # Read file in chunks to handle large files
         while True:
             chunk = f.read(8192)  # 8KB chunks
@@ -44,8 +45,9 @@ def compute_file_sha256(file_path: str) -> str:
     return file_hash
 
 
-def check_file_exists(conn: psycopg2.extensions.connection, file_hash: str) -> \
-Optional[Dict[str, Any]]:
+def check_file_exists(
+    conn: psycopg2.extensions.connection, file_hash: str
+) -> Optional[Dict[str, Any]]:
     """
     Check if a file with given SHA256 hash already exists in the database.
 
@@ -63,7 +65,8 @@ Optional[Dict[str, Any]]:
     """
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    cursor.execute("""
+    cursor.execute(
+        """
                    SELECT envelope_id,
                           file_name,
                           file_sha256,
@@ -74,7 +77,9 @@ Optional[Dict[str, Any]]:
                           rows_failed
                    FROM ingest_envelope
                    WHERE file_sha256 = %s
-                   """, (file_hash,))
+                   """,
+        (file_hash,),
+    )
 
     result = cursor.fetchone()
     cursor.close()
@@ -83,22 +88,22 @@ Optional[Dict[str, Any]]:
         logger.info(
             f"File already exists in database",
             extra={
-                "envelope_id": str(result['envelope_id']),
-                "file_name": result['file_name'],
-                "status": result['status'],
-                "upload_timestamp": result['upload_timestamp'].isoformat()
-            }
+                "envelope_id": str(result["envelope_id"]),
+                "file_name": result["file_name"],
+                "status": result["status"],
+                "upload_timestamp": result["upload_timestamp"].isoformat(),
+            },
         )
 
     return dict(result) if result else None
 
 
 def create_envelope(
-        conn: psycopg2.extensions.connection,
-        file_name: str,
-        file_hash: str,
-        file_path: Optional[str] = None,
-        file_size_bytes: Optional[int] = None
+    conn: psycopg2.extensions.connection,
+    file_name: str,
+    file_hash: str,
+    file_path: Optional[str] = None,
+    file_size_bytes: Optional[int] = None,
 ) -> UUID:
     """
     Create a new ingest envelope in the database.
@@ -119,14 +124,17 @@ def create_envelope(
     """
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
                    INSERT INTO ingest_envelope (file_name,
                                                 file_sha256,
                                                 file_path,
                                                 file_size_bytes,
                                                 status)
                    VALUES (%s, %s, %s, %s, 'processing') RETURNING envelope_id
-                   """, (file_name, file_hash, file_path, file_size_bytes))
+                   """,
+        (file_name, file_hash, file_path, file_size_bytes),
+    )
 
     envelope_id = cursor.fetchone()[0]
     conn.commit()
@@ -137,21 +145,21 @@ def create_envelope(
         extra={
             "envelope_id": str(envelope_id),
             "file_name": file_name,
-            "file_hash": file_hash[:16] + "..."
-        }
+            "file_hash": file_hash[:16] + "...",
+        },
     )
 
     return envelope_id
 
 
 def update_envelope_status(
-        conn: psycopg2.extensions.connection,
-        envelope_id: UUID,
-        status: str,
-        rows_inserted: int = 0,
-        rows_updated: int = 0,
-        rows_failed: int = 0,
-        error_message: Optional[str] = None
+    conn: psycopg2.extensions.connection,
+    envelope_id: UUID,
+    status: str,
+    rows_inserted: int = 0,
+    rows_updated: int = 0,
+    rows_failed: int = 0,
+    error_message: Optional[str] = None,
 ) -> None:
     """
     Update the status of an envelope after processing.
@@ -170,7 +178,8 @@ def update_envelope_status(
     """
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
                    UPDATE ingest_envelope
                    SET status                  = %s,
                        processing_completed_at = now(),
@@ -179,8 +188,9 @@ def update_envelope_status(
                        rows_failed             = %s,
                        error_message           = %s
                    WHERE envelope_id = %s
-                   """, (status, rows_inserted, rows_updated, rows_failed,
-                         error_message, envelope_id))
+                   """,
+        (status, rows_inserted, rows_updated, rows_failed, error_message, envelope_id),
+    )
 
     conn.commit()
     cursor.close()
@@ -192,17 +202,17 @@ def update_envelope_status(
             "status": status,
             "rows_inserted": rows_inserted,
             "rows_updated": rows_updated,
-            "rows_failed": rows_failed
-        }
+            "rows_failed": rows_failed,
+        },
     )
 
 
 def create_price_list_entry(
-        conn: psycopg2.extensions.connection,
-        envelope_id: UUID,
-        effective_date: date,
-        file_path: Optional[str] = None,
-        discount_percent: Optional[float] = None
+    conn: psycopg2.extensions.connection,
+    envelope_id: UUID,
+    effective_date: date,
+    file_path: Optional[str] = None,
+    discount_percent: Optional[float] = None,
 ) -> UUID:
     """
     Create a price_list entry linking the envelope to an effective date.
@@ -224,14 +234,16 @@ def create_price_list_entry(
     """
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
                    INSERT INTO price_list (envelope_id,
                                            effective_date,
                                            file_path,
                                            discount_percent)
                    VALUES (%s, %s, %s, %s) RETURNING price_list_id
                    """,
-                   (envelope_id, effective_date, file_path, discount_percent))
+        (envelope_id, effective_date, file_path, discount_percent),
+    )
 
     price_list_id = cursor.fetchone()[0]
     conn.commit()
@@ -243,8 +255,8 @@ def create_price_list_entry(
             "price_list_id": str(price_list_id),
             "envelope_id": str(envelope_id),
             "effective_date": effective_date.isoformat(),
-            "discount_percent": discount_percent
-        }
+            "discount_percent": discount_percent,
+        },
     )
 
     return price_list_id

@@ -42,30 +42,25 @@ def setup_logging(app):
                 record: LogRecord — оригинальный Python лог
                 message_dict: dict — дополнительные поля
             """
-            super(CustomJsonFormatter, self).add_fields(log_record, record,
-                                                        message_dict)
+            super(CustomJsonFormatter, self).add_fields(log_record, record, message_dict)
 
             # Добавляем обязательные поля
-            log_record['timestamp'] = record.created  # Unix timestamp
-            log_record['level'] = record.levelname  # DEBUG/INFO/WARNING/ERROR
-            log_record[
-                'logger'] = record.name  # Имя логгера (например, 'api.app')
-            log_record[
-                'module'] = record.module  # Имя модуля (например, 'app')
-            log_record['function'] = record.funcName  # Имя функции
+            log_record["timestamp"] = record.created  # Unix timestamp
+            log_record["level"] = record.levelname  # DEBUG/INFO/WARNING/ERROR
+            log_record["logger"] = record.name  # Имя логгера (например, 'api.app')
+            log_record["module"] = record.module  # Имя модуля (например, 'app')
+            log_record["function"] = record.funcName  # Имя функции
 
             # Если есть информация об исключении, добавляем её
             if record.exc_info:
-                log_record['exception'] = self.formatException(record.exc_info)
+                log_record["exception"] = self.formatException(record.exc_info)
 
     # Создаём handler (обработчик), который будет выводить логи в консоль
     console_handler = logging.StreamHandler()
     console_handler.setLevel(numeric_level)
 
     # Устанавливаем JSON форматтер для handler'а
-    formatter = CustomJsonFormatter(
-        '%(timestamp)s %(level)s %(name)s %(message)s'
-    )
+    formatter = CustomJsonFormatter("%(timestamp)s %(level)s %(name)s %(message)s")
     console_handler.setFormatter(formatter)
 
     # Настраиваем корневой логгер приложения
@@ -74,13 +69,10 @@ def setup_logging(app):
     app.logger.addHandler(console_handler)
 
     # Отключаем дублирование логов от Werkzeug (Flask HTTP server)
-    logging.getLogger('werkzeug').setLevel(logging.WARNING)
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
     # Логируем успешную инициализацию
     app.logger.info(
         "JSON logging initialized",
-        extra={
-            "log_level": log_level,
-            "version": os.getenv("APP_VERSION", "unknown")
-        }
+        extra={"log_level": log_level, "version": os.getenv("APP_VERSION", "unknown")},
     )
