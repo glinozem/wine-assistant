@@ -3,34 +3,31 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install curl for healthcheck
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl && \
-    rm -rf /var/lib/apt/lists/*
+# чтобы Python не писал .pyc и лог стримился сразу
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
 
-# Copy requirements first for better caching
+# curl нужен для healthcheck контейнера api (compose дергает /ready)
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl \
+ && rm -rf /var/lib/apt/lists/*
+
+# зависимости
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# код приложения
 COPY api/ ./api/
 COPY scripts/ ./scripts/
 COPY db/ ./db/
 COPY .env.example .env
 
-# Create non-root user
-RUN useradd -m -u 1000 appuser && \
-    chown -R appuser:appuser /app
-
-# Switch to non-root user
+# безопасный пользователь
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
 
-# Expose port
 EXPOSE 8000
 
-# Healthcheck
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:8000/ready || exit 1
-
-# Run the application
-CMD ["python", "api/app.py"]
+# КЛЮЧЕВАЯ правка: запускать модульно, а не как файл
+CMD ["python", "-m", "api.app"]

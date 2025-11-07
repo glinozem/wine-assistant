@@ -1,371 +1,589 @@
-# 🍷 Wine Assistant
+# Wine Assistant — API & ETL
 
-[![CI](https://github.com/glinozem/wine-assistant/workflows/CI/badge.svg)](https://github.com/glinozem/wine-assistant/actions)
-[![Tests](https://github.com/glinozem/wine-assistant/workflows/Tests/badge.svg)](https://github.com/glinozem/wine-assistant/actions)
-[![Release Drafter](https://github.com/glinozem/wine-assistant/workflows/Release%20Drafter/badge.svg)](https://github.com/glinozem/wine-assistant/actions)
-[![Coverage](https://img.shields.io/badge/coverage-60.64%25-green.svg)](https://github.com/glinozem/wine-assistant)
-[![Version](https://img.shields.io/badge/version-0.5.0-blue.svg)](https://github.com/glinozem/wine-assistant/releases)
-[![Python](https://img.shields.io/badge/python-3.11+-brightgreen.svg)](https://www.python.org/)
-[![Docker](https://img.shields.io/badge/docker-compose-blue.svg)](https://docs.docker.com/compose/)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![CI](https://github.com/glinozem/wine-assistant/actions/workflows/test.yml/badge.svg)](../../actions/workflows/test.yml)
+![Coverage](https://img.shields.io/badge/coverage-61%25-brightgreen)
+![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
+![Postgres](https://img.shields.io/badge/PostgreSQL-16.x-blue)
+![License](https://img.shields.io/badge/license-MIT-informational)
 
-> **Современная система каталога и управления ценами на вино**
->
-> Production‑ready Flask API + PostgreSQL (pg_trgm, *опционально* pgvector) с битемпоральной моделью данных, автоматизированным ETL, идемпотентным импортом и структурированным логированием.
-
-**Текущая версия:** 0.5.0 (Спринт 4a — ETL Automation & Data Quality)
-**Последнее обновление:** 7 ноября 2025
+Проект для загрузки прайс‑листов, нормализации данных, дедупликации и отдачи агрегированного API поверх PostgreSQL.
+Поддерживает идемпотентную обработку входных файлов, хранение истории цен, поиск, health‑пробы и готовое локальное окружение в Docker.
 
 ---
 
-## 📋 Содержание
+## Содержание
 
-- [Возможности](#-возможности)
-- [Что нового](#-что-нового-в-v050)
-- [Архитектура](#-архитектура)
-- [Быстрый старт](#-быстрый-старт)
-- [Автоматизированный ETL](#-автоматизированный-etl-импорт)
-- [Документация API](#-документация-api)
-- [Конфигурация](#-конфигурация)
-- [Разработка](#-разработка)
-- [Тестирование](#-тестирование)
-- [Mini: как поднимается БД в CI](#-mini-как-поднимается-бд-в-ci-github-actions)
-- [Развертывание](#-развертывание)
-- [Мониторинг и наблюдаемость](#-мониторинг-и-наблюдаемость)
-- [Устранение неполадок](#-устранение-неполадок)
-- [Дорожная карта](#-дорожная-карта)
-- [Участие в разработке](#-участие-в-разработке)
-- [Лицензия](#-лицензия)
+- [Что нового](#что-нового)
+- [Быстрый старт](#быстрый-старт)
+- [API: эндпоинты и Swagger](#api-эндпоинты-и-swagger)
+- [ETL: загрузка прайсов](#etl-загрузка-прайсов)
+- [Переменные окружения](#переменные-окружения)
+- [Docker Compose (полный)](#docker-compose-полный)
+- [Фрагменты кода (apppy, миграции)](#фрагменты-кода-apppy-миграции)
+- [Как поднимается БД в CI](#как-поднимается-бд-в-ci)
+- [Миграции и схема](#миграции-и-схема)
+- [Тесты и покрытие](#тесты-и-покрытие)
+- [Траблшутинг](#траблшутинг)
 
 ---
 
-## 🚀 Возможности
+## Что нового
 
-### Основной функционал
-- 📦 **Управление каталогом вин** — Товары, цены, остатки с полной историей.
-- 📈 **Битемпоральная архитектура** — Отслеживание «эффективной» даты и «системного» времени.
-- 🔍 **Поиск** — Полнотекстовый поиск с pg_trgm + фильтры.
-- 💰 **Двойная система цен** — Базовая (`price_list_rub`) и финальная (`price_final_rub`) цена; гибкая логика скидок.
-- 📊 **История** — Полный аудит изменений цен и остатков.
-- 📥 **ETL-конвейер** — Автоимпорт Excel/CSV с автоопределением кодировки и дат.
+- **CI:** Postgres 14 на `15432` + readiness (в локальном Docker — Postgres 16 + pgvector).
+- **CI:** Автозагрузка схем (idempotency + products/inventory) и запуск миграций перед тестами.
+- **Тесты:** стабилизация `upsert_records()` в CI, проверка индексов и таблиц на `/ready`.
+- **Документация:** пример Swagger docstrings, мини OpenAPI‑файл, обновлённый README с разделом про CI‑БД.
 
-### Автоматизация ETL (НОВОЕ! v0.5.0)
-- 🤖 **Планировщик** — Ежедневный импорт (Пн–Пт 12:10 MSK).
-- 🔐 **Идемпотентность** — SHA256 fingerprinting; таблица `dw_files`.
-- 📅 **Автоизвлечение даты** — Из имени файла или заголовков Excel (строки 2–8).
-- 📁 **Архив** — Успешные файлы → `data/archive/YYYY-MM-DD/`.
-- 📝 **Логи** — Структурированные JSON‑логи в `logs/import.log`.
-
-### Для production
-- 🛡️ **Rate limiting** (Flask‑Limiter), CORS, API‑Key.
-- 🏥 **Health** — `/live`, `/ready`, `/version`.
-- 🐳 **Docker Compose** — Сервисная зависимость и healthchecks.
-- 🧪 **Тесты** — pytest, покрытие (на CI: **60.64%**).
+_Фоллоуапы — отдельными PR при необходимости._
 
 ---
 
-## 🎉 Что нового в v0.5.0
-
-### Sprint 4a: ETL Automation & Data Quality ✨
-
-- **ETL планировщик** (ежедневно Пн–Пт 12:10 MSK).
-- **Идемпотентность загрузок** через SHA256 и таблицу `dw_files`.
-- **Извлечение `price_date`** из файла/Excel‑шапки + fallback.
-- **Архивирование** успешных загрузок и подробные логи.
-
-#### CI‑улучшения (инфраструктура)
-- **CI: PostgreSQL 14 на `localhost:15432` + readiness‑проба.**
-- **CI: автозагрузка схем** (`tests/fixtures/schema.sql` + `tests/fixtures/schema_prices.sql`, включая `CREATE EXTENSION IF NOT EXISTS pgcrypto;`).
-- **Тесты:** стабилизация `upsert_records()` в CI (фиксация порядка загрузки схем и прогрева подключения).
-
----
-
-## 🏗️ Архитектура
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Wine Assistant                           │
-├─────────────────────────────────────────────────────────────────┤
-│  ETL (Excel/CSV, SHA256, Scheduler)  →  Flask API  → PostgreSQL  │
-│  • Auto-date • Archive • Logs         • Swagger • Limits • Auth  │
-│  • Idempotency • Validation           • Health • JSON‑logging    │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Технологический стек
-
-| Компонент | Технология | Назначение |
-|---|---|---|
-| Backend | Flask 3.0 | REST API |
-| БД | PostgreSQL 16 (локально), **PostgreSQL 14 (CI)** | Хранилище |
-| Поиск | pg_trgm | Full‑text по сходству |
-| Auth | API‑Key | Простая аутентификация |
-| Лимиты | Flask‑Limiter | Защита от злоупотреблений |
-| Логи | python‑json‑logger | JSON‑логи |
-| Документация | Flasgger / OpenAPI | Swagger UI `/docs` |
-| ETL | pandas + openpyxl | Загрузка и нормализация |
-| Контейнеры | Docker Compose | Локальная среда |
-| CI | GitHub Actions | Тесты, релизы |
-
-> ℹ️ В локальном Docker используется образ `pgvector/pgvector:pg16` (для будущего векторного поиска), в CI — минимальный `postgres:14` ради скорости.
-
----
-
-## ⚡ Быстрый старт
+## Быстрый старт
 
 ```bash
-git clone https://github.com/glinozem/wine-assistant.git
-cd wine-assistant
-
-# Запуск PostgreSQL + API + Adminer
+# 1) Локально запустить стек
 docker compose up -d
 
-# Проверка
-docker compose ps
-curl http://localhost:18000/health
+# 2) Проверить готовность
+curl -s http://127.0.0.1:18000/live  | python -m json.tool
+curl -s http://127.0.0.1:18000/ready | python -m json.tool
+
+# 3) Открыть Adminer
+# http://127.0.0.1:18080  (System: PostgreSQL; Server: db; User: postgres; Pass: dev_local_pw; DB: wine_db)
+
+# 4) (опционально) прогнать миграции принудительно
+pwsh ./db/migrate.ps1
+# либо под Linux/macOS
+bash  ./db/migrate.sh
 ```
 
-**Порты по умолчанию:**
-- 🗄 PostgreSQL: `localhost:15432` (user: `postgres`, pass: `dev_local_pw`, db: `wine_db`)
-- 🌐 API: `http://localhost:18000`
-- 🛠 Adminer: `http://localhost:18080`
+**Порты по умолчанию**
+- API: `127.0.0.1:18000`
+- DB:  `127.0.0.1:15432` (наружу), внутри сети — `db:5432`
+- Adminer: `127.0.0.1:18080`
 
-### Минимальный `.env`
+---
 
-```env
-PGHOST=127.0.0.1
-PGPORT=15432
-PGUSER=postgres
-PGPASSWORD=dev_local_pw
-PGDATABASE=wine_db
+## API: эндпоинты и Swagger
 
-API_KEY=your-secret-api-key-minimum-32-chars
-FLASK_HOST=127.0.0.1
-FLASK_PORT=18000
-FLASK_DEBUG=0
-APP_VERSION=0.5.0
+### Базовые проверки
+- `GET /live` — liveness probe
+- `GET /ready` — readiness + быстрые проверки таблиц/индексов
+- `GET /version` — версия сервиса
 
-CORS_ORIGINS=*
-LOG_LEVEL=INFO
-RATE_LIMIT_ENABLED=1
-RATE_LIMIT_PUBLIC=100/hour
-RATE_LIMIT_PROTECTED=1000/hour
+### Каталог, цены, остатки (V1)
+- `GET /v1/products/search?query={text}&limit=20` — поиск по каталогу (ILIKE + триграммы).
+- `GET /v1/products/{code}` — карточка товара (каталог).
+- `GET /v1/prices/{code}` — текущая цена и/или история цен.
+- `GET /v1/inventory/{code}` — складские остатки.
+
+> Реальные эндпоинты могут отличаться — ориентируйся по текущему `api/app.py` в репозитории.
+
+### Пример Swagger‑docstring (Flasgger‑стиль) в `api/app.py`
+
+```python
+@app.get("/live")
+def live():
+    \"\"\"
+    Liveness probe
+    ---
+    tags: [Health]
+    summary: Проба живости
+    responses:
+      200:
+        description: Сервис жив
+        examples:
+          application/json:
+            status: alive
+            version: 0.3.0
+    \"\"\"
+    return jsonify({"status": "alive", "version": VERSION, "uptime_seconds": get_uptime()}), 200
+```
+
+```python
+@app.get("/v1/products/<string:code>")
+def get_product(code: str):
+    \"\"\"
+    Получить карточку товара
+    ---
+    tags: [Products]
+    parameters:
+      - in: path
+        name: code
+        required: true
+        schema:
+          type: string
+        description: SKU / внутренний код
+    responses:
+      200:
+        description: ОК
+        content:
+          application/json:
+            example:
+              code: "TEST001"
+              title_ru: "Пример товара"
+              country: "France"
+              price_final_rub: 1590.0
+      404:
+        description: Не найдено
+    \"\"\"
+    ...
+```
+
+### Мини‑OpenAPI (фрагмент)
+
+```yaml
+openapi: 3.0.3
+info:
+  title: Wine Assistant API
+  version: "0.3.0"
+paths:
+  /live:
+    get:
+      tags: [Health]
+      summary: Liveness probe
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+                  version: { type: string }
+  /v1/products/{code}:
+    get:
+      tags: [Products]
+      summary: Карточка товара
+      parameters:
+        - in: path
+          name: code
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+        "404":
+          description: Not Found
 ```
 
 ---
 
-## 🤖 Автоматизированный ETL (импорт)
+## ETL: загрузка прайсов
 
-Подробный раздел сохранён из предыдущей версии README: архитектура потока, расписание, директории `data/inbox` → `data/archive`, примеры запуска (`jobs/ingest_dw_price.py`, `scripts/load_csv.py`), идемпотентность через `dw_files`, логи и диагностика.
+ETL реализован в `scripts/`:
+- `load_csv.py` — универсальная точка входа (CSV/XLSX, авто‑дата по файлу/ячейке, контроль идемпотентности).
+- `load_utils.py` — нормализация значений, агрегации и UPSERT в `products`, `inventory`, `product_prices`.
+- `idempotency.py` — SHA‑256 файла, `envelopes` и `price_list_entries` (дедупликация входов).
+- `date_extraction.py` — поиск даты в A1/B1 Excel, имени файла, тексте; валидация «не из будущего».
 
-См. примеры CLI:
+### Примеры запуска
+
 ```bash
-# Автоопределение даты (из файла/шапки Excel)
-python scripts/load_csv.py --excel "data/inbox/Price_2025_01_20.xlsx"
+# Загрузка Excel/CSV с прайсом
+python scripts/load_csv.py --file ./data/price_2025-11-06.xlsx --asof 2025-11-06
 
-# Явная дата и скидка из ячейки
-python scripts/load_csv.py --excel "Price.xlsx" --asof 2025-01-20 --discount-cell S5
+# Жёстко задать скидку из S5 (если есть), а не из файла
+PREFER_S5=true python scripts/load_csv.py --file ./data/price.xlsx
 
-# CSV
-python scripts/load_csv.py --csv "products.csv" --asof 2025-01-20
+# Пропустить файл как дубликат
+python scripts/load_csv.py --file ./data/price.xlsx --skip-duplicates
 ```
 
----
+Основные таблицы:
+- `products(code PK, ... price_list_rub, price_final_rub, price_rub)`
+- `product_prices(code, effective_from, effective_to, price_rub, ...)`
+- `inventory(code, stock_total, reserved, stock_free, asof_date)`
+- `inventory_history(code, changed_at, stock_total, reserved, stock_free)`
 
-## 📚 Документация API
-
-- **Swagger UI:** `http://localhost:18000/docs`
-- **Health:** `/health`, `/live`, `/ready`
-- **Поиск:** `/search`
-- **SKU:** `/sku/{code}`, `/sku/{code}/price_history`
-
-> Для защищённых эндпоинтов установите заголовок `X-API-Key`.
+Индексы для поиска и аналитики включены миграциями (см. ниже).
 
 ---
 
-## ⚙️ Конфигурация
+## Переменные окружения
 
-См. `.env.example` и минимальный `.env` выше. В Docker Compose сервис API зависит от здоровья БД; для локальной разработки при необходимости выполните скрипт миграций (см. раздел «Разработка»).
+| Имя            | Назначение                                   | По умолчанию (Docker) |
+|----------------|-----------------------------------------------|-----------------------|
+| `PGHOST`       | Хост БД                                       | `db`                  |
+| `PGPORT`       | Порт БД                                       | `5432`                |
+| `PGUSER`       | Пользователь БД                               | `postgres`            |
+| `PGPASSWORD`   | Пароль                                        | `dev_local_pw`        |
+| `PGDATABASE`   | Имя базы                                      | `wine_db`             |
+| `PREFER_S5`    | Брать скидку из S5 (Excel) в приоритете       | `false`               |
+| `API_PORT`     | Порт Flask‑приложения внутри контейнера       | `8000`                |
+| `TZ`           | Таймзона                                      | `Europe/Moscow`       |
 
----
-
-## 🛠️ Разработка
-
-```bash
-python -m venv .venv
-# Windows:
-.\.venv\Scripts\Activate.ps1
-# Linux/macOS:
-source .venv/bin/activate
-
-pip install -r requirements.txt
-pre-commit install
-
-# База в Docker
-docker compose up -d db
-
-# (Опционально) миграции/инициализация
-powershell -ExecutionPolicy Bypass -File .\scripts\migrate.ps1
-
-# Запуск API
-python -m api.main
-```
+> Для локального запуска вне Docker можно использовать файл `.env` (см. `.env.example`).
 
 ---
 
-## 🧪 Тестирование
+## Docker Compose (полный)
 
-```bash
-# Все тесты
-pytest
+> **Важно:** `version` в Compose больше не нужен — удалён. Таймзона выставлена в `Europe/Moscow`.
 
-# Покрытие
-pytest --cov=api --cov=scripts --cov=etl --cov-report=term --cov-report=html
-# HTML отчёт будет в htmlcov/index.html
-```
-
-> На CI текущее покрытие: **60.64%**.
-
----
-
-## 🧩 Mini: как поднимается БД в CI (GitHub Actions)
-
-> Короткий разрез того, что делает `test.yml`, чтобы тесты не зависели от внешней БД и были стабильны.
-
-**1) Service: PostgreSQL 14 на `localhost:15432`**
-В `services:` поднимается контейнер `postgres:14` с переменными:
 ```yaml
 services:
-  postgres:
-    image: postgres:14
-    env:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: wine-assistant-db-1
+    environment:
       POSTGRES_DB: wine_db
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: dev_local_pw
+      TZ: Europe/Moscow
     ports:
-      - 15432:5432
-    options: >-
-      --health-cmd="pg_isready -U postgres -d wine_db"
-      --health-interval=10s
-      --health-timeout=5s
-      --health-retries=10
-```
-*Почему 14?* Быстро стартует на GitHub‑раннере; локально остаётся 16 с pgvector.
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d wine_db -h localhost -p 5432"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
 
-**2) Readiness‑ожидание**
-Шаг workflow ожидает, пока `pg_isready` вернёт «наличие»:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: wine-assistant-api:latest
+    container_name: wine-assistant-api-1
+    command: python -m api.app
+    environment:
+      FLASK_ENV: development
+      API_PORT: "8000"
+      PGHOST: db
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: dev_local_pw
+      PGDATABASE: wine_db
+      TZ: Europe/Moscow
+    ports:
+      - "127.0.0.1:18000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/live || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  adminer:
+    image: adminer:4
+    container_name: wine-assistant-adminer-1
+    environment:
+      - TZ=Europe/Moscow
+    ports:
+      - "127.0.0.1:18080:8080"
+    depends_on:
+      - db
+
+volumes:
+  db_data:
+```
+
+### Dockerfile (фрагмент)
+
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY api/ ./api/
+COPY scripts/ ./scripts/
+COPY db/ ./db/
+COPY .env.example .env
+
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 8000
+CMD ["python", "-m", "api.app"]
+```
+
+---
+
+## Фрагменты кода (app.py, миграции)
+
+### `api/app.py` — Health/Ready/Version (с докстрингами)
+
+```python
+from flask import Flask, jsonify
+from api.logging_config import setup_logging
+from api.request_middleware import before_request, after_request
+from scripts.load_utils import get_conn
+
+VERSION = "0.3.0"
+app = Flask(__name__)
+setup_logging(app)
+app.before_request(before_request)
+app.after_request(after_request)
+
+@app.get("/live")
+def live():
+    \"\"\"
+    Liveness probe
+    ---
+    tags: [Health]
+    summary: Проба живости
+    responses:
+      200:
+        description: Сервис жив
+    \"\"\"
+    return jsonify({"status": "alive", "version": VERSION, "uptime_seconds": 0.0}), 200
+
+@app.get("/ready")
+def ready():
+    \"\"\"
+    Readiness probe (+проверки схемы)
+    ---
+    tags: [Health]
+    summary: Готовность сервиса
+    responses:
+      200:
+        description: OK
+    \"\"\"
+    checks = {}
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(\"\"\"
+          SELECT
+            to_regclass('public.products') IS NOT NULL AS products,
+            to_regclass('public.product_prices') IS NOT NULL AS product_prices,
+            to_regclass('public.inventory') IS NOT NULL AS inventory,
+            to_regclass('public.inventory_history') IS NOT NULL AS inventory_history
+        \"\"\")
+        row = cur.fetchone()
+        checks["database"] = {
+          "tables": {
+            "products": row[0], "product_prices": row[1],
+            "inventory": row[2], "inventory_history": row[3]
+          },
+          "ok": all(row)
+        }
+    return jsonify({"status": "ready", "checks": checks, "version": VERSION}), 200
+
+@app.get("/version")
+def version():
+    \"\"\"
+    Версия API
+    ---
+    tags: [Health]
+    summary: Версия сервиса
+    responses:
+      200:
+        description: Версия
+    \"\"\"
+    return jsonify({"version": VERSION}), 200
+```
+
+### `db/migrate.ps1` (Windows, PowerShell) — сокращённая версия
+
+> Полная версия лежит в `db/migrate.ps1`. Ниже — та же логика в компактном виде.
+
+```powershell
+param([switch]$StartDb)
+
+function Info($m){ Write-Host $m -ForegroundColor Cyan }
+function Warn($m){ Write-Host $m -ForegroundColor Yellow }
+function Err ($m){ Write-Host $m -ForegroundColor Red }
+
+$PGHOST     = $env:PGHOST     ? $env:PGHOST     : "localhost"
+$PGPORT     = $env:PGPORT     ? $env:PGPORT     : "15432"
+$PGUSER     = $env:PGUSER     ? $env:PGUSER     : "postgres"
+$PGPASSWORD = $env:PGPASSWORD ? $env:PGPASSWORD : "dev_local_pw"
+$PGDATABASE = $env:PGDATABASE ? $env:PGDATABASE : "wine_db"
+
+if ($StartDb) { docker compose up -d db | Out-Null }
+
+Info "Waiting for Postgres readiness..."
+$ready = $false; 1..60 | ForEach-Object {
+  $out = docker compose exec -T db pg_isready -U $PGUSER -d $PGDATABASE -h localhost -p 5432 2>$null
+  if ($LASTEXITCODE -eq 0 -or "$out" -match "accepting connections") { $ready = $true; break }
+  Start-Sleep -Seconds 2
+}
+if (-not $ready) { Err "DB is not ready"; exit 1 }
+
+# Базовая таблица миграций и расширения
+docker compose exec -T db psql -U $PGUSER -d $PGDATABASE -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
+docker compose exec -T db psql -U $PGUSER -d $PGDATABASE -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS vector;"
+docker compose exec -T db psql -U $PGUSER -d $PGDATABASE -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;"
+docker compose exec -T db psql -U $PGUSER -d $PGDATABASE -v ON_ERROR_STOP=1 -c @"
+CREATE TABLE IF NOT EXISTS public.schema_migrations(
+  filename   text PRIMARY KEY,
+  sha256     char(64),
+  applied_at timestamptz NOT NULL DEFAULT now()
+);
+"@
+
+# Применение *.sql
+$migrations = Get-ChildItem -Path "./db/migrations" -Filter "*.sql" | Sort-Object Name
+foreach ($f in $migrations) {
+  $name = $f.Name
+  $hash = (Get-FileHash -Path $f.FullName -Algorithm SHA256).Hash.ToLower()
+  $exists = docker compose exec -T db psql -U $PGUSER -d $PGDATABASE -A -t -c "SELECT 1 FROM public.schema_migrations WHERE filename='$name' LIMIT 1;"
+
+  if ($exists.Trim() -eq "1") {
+    Info ">> SKIP $name (already applied)"
+    continue
+  }
+  Info ">> Applying $name"
+  docker compose exec -T db psql -U $PGUSER -d $PGDATABASE -v ON_ERROR_STOP=1 -f "/docker-entrypoint-initdb.d/$name" | Out-Null
+  docker compose exec -T db psql -U $PGUSER -d $PGDATABASE -v ON_ERROR_STOP=1 -c "INSERT INTO public.schema_migrations(filename, sha256) VALUES ('$name', '$hash') ON CONFLICT (filename) DO NOTHING;" | Out-Null
+}
+
+# Представление и витрина последних миграций
+docker compose exec -T db psql -U $PGUSER -d $PGDATABASE -v ON_ERROR_STOP=1 -c @"
+CREATE OR REPLACE VIEW public.schema_migrations_recent AS
+SELECT split_part(filename, '_', 1) AS version,
+       filename,
+       sha256 AS checksum,
+       applied_at,
+       (applied_at AT TIME ZONE 'Europe/Moscow') AS applied_msk
+FROM public.schema_migrations
+ORDER BY applied_at DESC;
+"@
+
+Info "`n=== Recent migrations ==="
+docker compose exec -T db psql -U $PGUSER -d $PGDATABASE -c "SELECT * FROM public.schema_migrations_recent LIMIT 8;"
+Info "`nAll migrations applied."
+```
+
+### `db/migrate.sh` (Linux/macOS, bash)
+
 ```bash
-for i in {1..30}; do
-  pg_isready -h localhost -p 15432 -U postgres -d wine_db && break
+#!/usr/bin/env bash
+set -euo pipefail
+
+PGHOST="${PGHOST:-localhost}"
+PGPORT="${PGPORT:-15432}"
+PGUSER="${PGUSER:-postgres}"
+PGPASSWORD="${PGPASSWORD:-dev_local_pw}"
+PGDATABASE="${PGDATABASE:-wine_db}"
+export PGPASSWORD
+
+docker compose up -d db
+
+echo "Waiting for Postgres readiness..."
+for i in {1..60}; do
+  if docker compose exec -T db pg_isready -U "$PGUSER" -d "$PGDATABASE" -h localhost -p 5432 >/dev/null 2>&1; then
+    break
+  fi
   sleep 2
 done
+
+psql_cmd=(docker compose exec -T db psql -U "$PGUSER" -d "$PGDATABASE" -v ON_ERROR_STOP=1 -c)
+"${psql_cmd[@]}" "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
+"${psql_cmd[@]}" "CREATE EXTENSION IF NOT EXISTS vector;"
+"${psql_cmd[@]}" "CREATE EXTENSION IF NOT EXISTS pgcrypto;"
+"${psql_cmd[@]}" "CREATE TABLE IF NOT EXISTS public.schema_migrations(filename text PRIMARY KEY, sha256 char(64), applied_at timestamptz NOT NULL DEFAULT now());"
+
+for f in db/migrations/*.sql; do
+  [ -f "$f" ] || continue
+  name="$(basename "$f")"
+  sha=$(sha256sum "$f" | awk '{print tolower($1)}')
+  exists=$(docker compose exec -T db psql -U "$PGUSER" -d "$PGDATABASE" -At -c "SELECT 1 FROM public.schema_migrations WHERE filename='${name}' LIMIT 1;")
+  if [ "$exists" = "1" ]; then
+    echo ">> SKIP $name (already applied)"; continue
+  fi
+  echo ">> Applying $name"
+  docker compose exec -T db psql -U "$PGUSER" -d "$PGDATABASE" -v ON_ERROR_STOP=1 -f "/docker-entrypoint-initdb.d/${name}"
+  "${psql_cmd[@]}" "INSERT INTO public.schema_migrations(filename, sha256) VALUES ('${name}', '${sha}') ON CONFLICT (filename) DO NOTHING;"
+done
+
+"${psql_cmd[@]}" "CREATE OR REPLACE VIEW public.schema_migrations_recent AS
+SELECT split_part(filename, '_', 1) AS version,
+       filename,
+       sha256 AS checksum,
+       applied_at,
+       (applied_at AT TIME ZONE 'Europe/Moscow') AS applied_msk
+FROM public.schema_migrations
+ORDER BY applied_at DESC;"
+
+docker compose exec -T db psql -U "$PGUSER" -d "$PGDATABASE" -c "SELECT * FROM public.schema_migrations_recent LIMIT 8;"
+echo "All migrations applied."
 ```
 
-**3) Автозагрузка схем**
-Схемы из репозитория применяются **до** запуска тестов:
-```bash
-# Расширения на будущее (UUID и пр.)
-psql "postgresql://postgres:dev_local_pw@localhost:15432/wine_db" \
-  -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;"
+---
 
-# Идемпотентность/файлы/конверты
-psql "postgresql://postgres:dev_local_pw@localhost:15432/wine_db" \
-  -f tests/fixtures/schema.sql
+## Как поднимается БД в CI
 
-# Продукты / остатки / историзация цен
-psql "postgresql://postgres:dev_local_pw@localhost:15432/wine_db" \
-  -f tests/fixtures/schema_prices.sql
+В пайплайне перед тестами запускается `db`, затем применяются миграции:
+
+```yaml
+# .github/workflows/test.yml (фрагмент)
+- name: Start DB
+  run: docker compose up -d db
+
+- name: Wait for DB readiness
+  run: |
+    for i in {1..60}; do
+      if docker compose exec -T db pg_isready -U postgres -d wine_db -h localhost -p 5432 >/dev/null 2>&1; then
+        exit 0
+      fi
+      sleep 2
+    done
+    echo "DB not ready"; exit 1
+
+- name: Apply SQL migrations
+  run: pwsh ./db/migrate.ps1
+  shell: pwsh
+
+- name: Run tests
+  run: pytest -v --cov=api --cov=scripts --cov=etl --cov-report=xml --cov-report=term
 ```
 
-**4) Экспорт переменных окружения для тестов**
-```bash
-export PGHOST=localhost
-export PGPORT=15432
-export PGUSER=postgres
-export PGPASSWORD=dev_local_pw
-export PGDATABASE=wine_db
-```
+**Плюс:** `/ready` в тестах проверяет наличие ключевых таблиц и индексов — это помогает ловить расхождения схемы.
 
-**5) Запуск pytest с покрытием**
+---
+
+## Миграции и схема
+
+Миграции находятся в `db/migrations/` и включают:
+
+- `0000_schema_migrations.sql` — регистрация применённых миграций.
+- `0001_prices-and-search.sql` — `products`, `product_prices`, `inventory`, индексы (в т.ч. триграммы).
+- `0002_price-history-guardrails.sql` — `btree_gist`, уникальные ограничения по периоду, guardrails.
+- `0003_inventory-columns-and-asof.sql` — дополнительные поля остатков и индексы.
+- `0004_diagnostics.sql`, `0005_price-check.sql` — диагностические и проверочные функции/представления.
+- `0006_add-idempotency-tables.sql` — `envelopes`, `price_list_entries`.
+- `0007_schema-migrations-view.sql` — удобная витрина `schema_migrations_recent`.
+
+> Расширения: `pg_trgm`, `vector`, `pgcrypto` создаются автоматически.
+
+---
+
+## Тесты и покрытие
+
+Локально:
+
 ```bash
 pytest -v --cov=api --cov=scripts --cov=etl --cov-report=xml --cov-report=term
 ```
 
-> ✅ Итог: тест `test_upsert_records_insert_and_update` больше не падает из‑за отсутствующих таблиц; коннект стабилен, потому что БД готова до старта pytest.
-
-**Локально повторить CI‑среду**
-```bash
-# Поднять Postgres 14 на 15432 (необязательно, можно оставить 16)
-docker run -it --rm -e POSTGRES_PASSWORD=dev_local_pw -e POSTGRES_DB=wine_db \
-  -p 15432:5432 postgres:14
-
-# Загрузить схемы
-psql "postgresql://postgres:dev_local_pw@localhost:15432/wine_db" -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;"
-psql "postgresql://postgres:dev_local_pw@localhost:15432/wine_db" -f tests/fixtures/schema.sql
-psql "postgresql://postgres:dev_local_pw@localhost:15432/wine_db" -f tests/fixtures/schema_prices.sql
-
-# Запустить тесты
-pytest -q
-```
+В CI — те же команды, БД и миграции запускаются автоматически. Покрытие сейчас ~**61%** (см. бейдж вверху).
 
 ---
 
-## 🚀 Развертывание
+## Траблшутинг
 
-**Production checklist (кратко):** HTTPS, надёжный `API_KEY`, CORS, резервное копирование БД, алерты, лимиты запросов, слежение за `/ready`, ротация логов, ограничения ресурсов контейнеров.
-
-**Reverse proxy (nginx) пример:**
-```nginx
-location / {
-  proxy_pass http://localhost:18000;
-  proxy_set_header X-Forwarded-Proto $scheme;
-  proxy_set_header X-Real-IP $remote_addr;
-  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-}
-```
+- **API контейнер «крутится» (restarting)** — проверь, что `api` запускается командой `python -m api.app` и каталог `api/` скопирован в образ (`Dockerfile`).
+- **`/ready` показывает `products_search_idx: false`** — прогоните миграции: `pwsh ./db/migrate.ps1` или `bash ./db/migrate.sh`.
+- **Ошибка `UndefinedTable` при `upsert_records()`** — отсутствуют таблицы/индексы: примените миграции.
+- **Windows PowerShell не видит `jq`** — используйте `curl.exe ... | python -m json.tool` или `Invoke-WebRequest`.
+- **Таймзона** — в Docker установлена `Europe/Moscow`; при необходимости поменяйте в `docker-compose.yml`.
 
 ---
 
-## 📊 Мониторинг и наблюдаемость
+## Лицензия
 
-- **Structured logging (JSON)** — удобно для ELK/Loki/Datadog.
-- **Health‑скрипты** — периодическая проверка `/ready`.
-- **DB‑метрики** — активные сессии, размер БД, медленные запросы.
-
----
-
-## 🔧 Устранение неполадок
-
-- **401** — проверьте `X-API-Key` и значение `API_KEY` в `.env`.
-- **429** — превысили лимиты (заголовки `X-RateLimit-*` подскажут детали).
-- **503 на /ready** — проверьте здоровье БД и наличие схем/расширений.
-- **ETL** — загляните в `logs/import.log`, проверьте формат/кодировку файлов.
-
----
-
-## 🗺️ Дорожная карта
-
-- Спринт 4b — Тестирование/качество (интеграционные и E2E тесты).
-- Спринт 5 — Расширенный поиск (векторный), Telegram‑бот, экспорт.
-- Спринт 6+ — Интеграции (Email/Telegram), аналитика, multi‑tenant.
-
----
-
-## 🤝 Участие в разработке
-
-- Conventional Commits, pre‑commit hooks, обязательные тесты.
-- PR‑шаблоны и Release Drafter — релизные заметки собираются автоматически.
-
----
-
-## 📄 Лицензия
-
-Проект распространяется по лицензии MIT — см. файл [LICENSE](LICENSE).
-
----
-
-<div align="center">
-
-**Сделано с ❤️ для винной индустрии 🍷**
-
-</div>
+MIT
