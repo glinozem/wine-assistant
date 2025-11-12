@@ -6,3 +6,10 @@
 *.sh   text eol=lf
 *.bat  text eol=crlf
 *.ps1  text eol=crlf
+
+# Нормализуем к LF по умолчанию
+* text=auto eol=lf
+
+# Для Windows-скриптов сохраняем CRLF
+*.ps1 text eol=crlf
+*.bat text eol=crlf
