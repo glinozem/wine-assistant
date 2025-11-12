@@ -1,76 +1,75 @@
+# Убрали устаревший ключ `version`
+name: wine-assistant
+
 services:
   db:
-    image: pgvector/pgvector:pg16
-    container_name: wine-assistant-db-1
+    image: postgres:16-alpine
+    container_name: wine-assistant-db
     environment:
+      POSTGRES_DB: wine_db
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: dev_local_pw
-      POSTGRES_DB: wine_db
       TZ: Europe/Moscow
     ports:
-      - "15432:5432"
+      - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -h localhost"]
-      interval: 3s
+      test: ["CMD-SHELL", "pg_isready -U postgres -d wine_db -h 127.0.0.1"]
+      interval: 5s
       timeout: 3s
       retries: 20
     volumes:
       - db_data:/var/lib/postgresql/data
-      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    restart: unless-stopped
 
   api:
     build:
       context: .
       dockerfile: Dockerfile
     image: wine-assistant-api
-    container_name: wine-assistant-api-1
+    container_name: wine-assistant-api
+    # Явно прокидываем PG* и прочие переменные окружения, как договорились ранее
+    environment:
+      # База
+      PGHOST: db
+      PGPORT: "5432"
+      PGDATABASE: wine_db
+      PGUSER: postgres
+      PGPASSWORD: dev_local_pw
+
+      # API
+      APP_VERSION: "0.4.0"
+      API_KEY: ""                 # при необходимости задайте реальный ключ
+      CORS_ORIGINS: "*"           # в проде ограничьте доменами
+
+      # Rate limiting
+      RATE_LIMIT_ENABLED: "1"
+      RATE_LIMIT_PUBLIC: "3/minute"
+      RATE_LIMIT_PROTECTED: "60/minute"
+      RATE_LIMIT_STORAGE_URL: "memory://"
+
+      # Gunicorn (можно не трогать)
+      GUNICORN_WORKERS: "1"
+      GUNICORN_THREADS: "4"
+      GUNICORN_TIMEOUT: "60"
     depends_on:
       db:
         condition: service_healthy
-    environment:
-      # Flask
-      FLASK_HOST: 0.0.0.0
-      FLASK_PORT: "8000"
-      FLASK_DEBUG: "0"
-      APP_VERSION: "0.3.0"
-      TZ: Europe/Moscow
-      # DB (в контейнере по имени сервиса)
-      PGHOST: db
-      PGPORT: "5432"
-      PGUSER: postgres
-      PGPASSWORD: dev_local_pw
-      PGDATABASE: wine_db
-      # CORS & Rate limits
-      CORS_ORIGINS: "*"
-      RATE_LIMIT_ENABLED: "1"
-      RATE_LIMIT_PUBLIC: "200/hour"
-      RATE_LIMIT_PROTECTED: "1000/hour"
-      RATE_LIMIT_STORAGE_URL: "memory://"
-      # Опционально для защищённых эндпоинтов
-      # API_KEY: "put-strong-api-key-here"
-    command: ["python", "-m", "api.app"]
     ports:
       - "18000:8000"
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/ready >/dev/null || exit 1"]
-      interval: 5s
+      # Ставим curl внутри образа (см. Dockerfile), проверяем liveness endpoint
+      test: ["CMD-SHELL", "curl -fsSL http://127.0.0.1:8000/live >/dev/null"]
+      interval: 10s
       timeout: 3s
-      retries: 20
+      retries: 12
     restart: unless-stopped
 
   adminer:
     image: adminer:4
-    container_name: wine-assistant-adminer-1
-    environment:
-      TZ: Europe/Moscow
-      # Можно выбрать тему оформления:
-      # ADMINER_DESIGN: pepa-linha
+    container_name: wine-assistant-adminer
     ports:
       - "18080:8080"
     depends_on:
-      db:
-        condition: service_healthy
+      - db
     restart: unless-stopped
 
 volumes:
