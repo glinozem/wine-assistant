@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from flasgger import Swagger
 from flask import Flask, g, jsonify, request
 from flask_cors import CORS
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 # ────────────────────────────────────────────────────────────────────────────────
 # DB setup (psycopg3 → psycopg2 fallback)
@@ -242,6 +243,19 @@ def require_api_key(fn):
 # ────────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ────────────────────────────────────────────────────────────────────────────────
+def _serialize_validation_error(e: ValidationError) -> dict:
+    """Превращает pydantic v2 ValidationError в JSON-безопасный словарь."""
+    # Берём только безопасные поля без ctx (там могут быть несериализуемые объекты)
+    details = [
+        {
+            "loc": err.get("loc"),
+            "msg": err.get("msg"),
+            "type": err.get("type"),
+        }
+        for err in e.errors(include_url=False)
+    ]
+    return {"error": "validation_error", "details": details}
+
 def _parse_int(name: str, default: int) -> int:
     try:
         v = int(request.args.get(name, default))
@@ -266,6 +280,65 @@ def _parse_date(name: str) -> Optional[date]:
             pass
     return None
 
+
+class SimpleSearchParams(BaseModel):
+    q: str | None = Field(default=None, max_length=200)
+    max_price: float | None = Field(default=None, ge=0)
+    color: str | None = Field(default=None, max_length=50)
+    region: str | None = Field(default=None, max_length=100)
+    limit: int = Field(default=10, ge=1, le=100)
+
+    @field_validator("q")
+    @classmethod
+    def q_min_len(cls, v: str | None):
+        if v is None:
+            return v
+        v2 = v.strip()
+        if v2 and len(v2) < 2:
+            raise ValueError("q must be at least 2 characters")
+        return v2 or None
+
+
+class CatalogSearchParams(BaseModel):
+    q: str | None = Field(default=None, max_length=200)
+    in_stock: bool = False
+    limit: int = Field(default=10, ge=1, le=100)
+
+    @field_validator("q")
+    @classmethod
+    def q_min_len(cls, v: str | None):
+        if v is None:
+            return v
+        v2 = v.strip()
+        if v2 and len(v2) < 2:
+            raise ValueError("q must be at least 2 characters")
+        return v2 or None
+
+
+# -------- Price / Inventory history params --------
+class PriceHistoryParams(BaseModel):
+    dt_from: Optional[date] = Field(None, alias="from")
+    dt_to: Optional[date] = Field(None, alias="to")
+    limit: int = Field(50, ge=1, le=1000)
+    offset: int = Field(0, ge=0, le=100_000)
+
+    @model_validator(mode="after")
+    def _check_range(self):
+        if self.dt_from and self.dt_to and self.dt_from > self.dt_to:
+            raise ValueError("'from' must be <= 'to'")
+        return self
+
+class InventoryHistoryParams(BaseModel):
+    dt_from: Optional[date] = Field(None, alias="from")
+    dt_to: Optional[date] = Field(None, alias="to")
+    limit: int = Field(50, ge=1, le=1000)
+    offset: int = Field(0, ge=0, le=100_000)
+
+    @model_validator(mode="after")
+    def _check_range(self):
+        if self.dt_from and self.dt_to and self.dt_from > self.dt_to:
+            raise ValueError("'from' must be <= 'to'")
+        return self
 # ────────────────────────────────────────────────────────────────────────────────
 # Health endpoints
 # ────────────────────────────────────────────────────────────────────────────────
@@ -426,6 +499,7 @@ def simple_search():
     Simple search in catalog
     ---
     tags: [Search]
+    summary: Simple search by query string
     parameters:
       - in: query
         name: q
@@ -443,70 +517,75 @@ def simple_search():
         name: limit
         type: integer
         default: 10
+    responses:
+      200:
+        description: Search results
+      400:
+        description: Validation error
     """
-    q = (request.args.get("q") or "").strip()
-    max_price = request.args.get("max_price")
-    color = request.args.get("color")
-    region = request.args.get("region")
-    limit = _parse_int("limit", 10)
-    limit = min(limit, 100)
+    try:
+        params = SimpleSearchParams.model_validate(request.args.to_dict(flat=True))
+    except ValidationError as e:
+        return jsonify(_serialize_validation_error(e)), 400
 
     conn, err = db_connect()
     if err or not conn:
-        app.logger.error("Search failed - DB unavailable", extra={"error": err})
-        return jsonify({"items": [], "total": 0, "query": q})
+        app.logger.error("Search failed - database unavailable", extra={"error": err})
+        return jsonify({"items": [], "total": 0, "query": params.q})
 
     try:
-        clauses: List[str] = []
-        params: List[Any] = []
+        clauses: list[str] = []
+        qparams: list = []
 
-        if q:
+        if params.q:
             clauses.append("(p.title_ru ILIKE %s OR p.producer ILIKE %s OR p.region ILIKE %s)")
-            like = f"%{q}%"
-            params.extend([like, like, like])
+            like = f"%{params.q}%"
+            qparams.extend([like, like, like])
 
-        if max_price:
-            try:
-                clauses.append("p.price_final_rub <= %s")
-                params.append(float(max_price))
-            except ValueError:
-                pass
+        if params.max_price is not None:
+            clauses.append("p.price_final_rub <= %s")
+            qparams.append(params.max_price)
 
-        if color:
+        if params.color:
             clauses.append("p.color ILIKE %s")
-            params.append(f"%{color}%")
+            qparams.append(f"%{params.color}%")
 
-        if region:
+        if params.region:
             clauses.append("p.region ILIKE %s")
-            params.append(f"%{region}%")
+            qparams.append(f"%{params.region}%")
 
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
         sql = f"""
-            SELECT p.code, p.title_ru AS name, p.producer, p.region, p.color,
+            SELECT p.code, p.title_ru as name, p.producer, p.region, p.color,
                    p.price_list_rub, p.price_final_rub
             FROM public.products p
             {where}
             ORDER BY p.title_ru
             LIMIT %s
         """
-        params.append(limit)
-
-        rows = db_query(conn, sql, tuple(params))
-        return jsonify({"items": rows, "total": len(rows), "query": q})
+        qparams.append(params.limit)
+        rows = db_query(conn, sql, tuple(qparams))
+        return jsonify({"items": rows, "total": len(rows), "query": params.q})
     except Exception as e:
         app.logger.error(
             "Search query failed",
-            extra={"error": str(e), "query": q, "limit": limit},
+            extra={"error": str(e), "query": params.q, "limit": params.limit},
             exc_info=True,
         )
-        return jsonify(
-            {"error": "search_failed", "message": "Failed to execute search", "items": [], "total": 0, "query": q}
-        ), 500
+        return jsonify({
+            "error": "search_failed",
+            "message": "Failed to execute search",
+            "items": [],
+            "total": 0,
+            "query": params.q
+        }), 500
     finally:
         try:
             conn.close()
         except Exception:
             pass
+
 
 @app.route("/catalog/search", methods=["GET"])
 @limiter.limit(PUBLIC_LIMIT)
@@ -515,6 +594,7 @@ def catalog_search():
     Extended catalog search with pagination and stock info
     ---
     tags: [Search]
+    summary: Extended search with pagination
     parameters:
       - in: query
         name: q
@@ -522,37 +602,42 @@ def catalog_search():
       - in: query
         name: in_stock
         type: boolean
-        required: false
       - in: query
         name: limit
         type: integer
         default: 10
+    responses:
+      200:
+        description: Search results
+      400:
+        description: Validation error
     """
-    q = (request.args.get("q") or "").strip()
-    limit = _parse_int("limit", 10)
-    in_stock = _parse_bool("in_stock", False)
-    limit = min(limit, 100)
+    try:
+        params = CatalogSearchParams.model_validate(request.args.to_dict(flat=True))
+    except ValidationError as e:
+        return jsonify(_serialize_validation_error(e)), 400
 
     conn, err = db_connect()
     if err or not conn:
-        app.logger.error("Catalog search failed - DB unavailable", extra={"error": err})
-        return jsonify({"items": [], "total": 0, "offset": 0, "limit": limit, "query": q})
+        app.logger.error("Catalog search failed - database unavailable", extra={"error": err})
+        return jsonify({"items": [], "total": 0, "offset": 0, "limit": params.limit, "query": params.q})
 
     try:
-        clauses: List[str] = []
-        params: List[Any] = []
+        clauses: list[str] = []
+        qparams: list = []
 
-        if q:
+        if params.q:
             clauses.append("(p.title_ru ILIKE %s OR p.producer ILIKE %s OR p.region ILIKE %s)")
-            like = f"%{q}%"
-            params.extend([like, like, like])
+            like = f"%{params.q}%"
+            qparams.extend([like, like, like])
 
-        if in_stock:
+        if params.in_stock:
             clauses.append("i.stock_free > 0")
 
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
         sql = f"""
-            SELECT p.code, p.title_ru AS name, p.producer, p.region, p.color, p.style,
+            SELECT p.code, p.title_ru as name, p.producer, p.region, p.color, p.style,
                    p.price_list_rub, p.price_final_rub,
                    i.stock_total, i.stock_free
             FROM public.products p
@@ -561,32 +646,37 @@ def catalog_search():
             ORDER BY COALESCE(i.stock_free, 0) DESC, p.title_ru
             LIMIT %s
         """
-        params.append(limit)
+        qparams.append(params.limit)
 
-        rows = db_query(conn, sql, tuple(params))
-        return jsonify({"items": rows, "total": len(rows), "offset": 0, "limit": limit, "query": q})
+        rows = db_query(conn, sql, tuple(qparams))
+        return jsonify({
+            "items": rows,
+            "total": len(rows),
+            "offset": 0,
+            "limit": params.limit,
+            "query": params.q
+        })
     except Exception as e:
         app.logger.error(
             "Catalog search failed",
-            extra={"error": str(e), "query": q, "limit": limit, "in_stock": in_stock},
+            extra={"error": str(e), "query": params.q, "limit": params.limit, "in_stock": params.in_stock},
             exc_info=True,
         )
-        return jsonify(
-            {
-                "error": "search_failed",
-                "message": "Failed to execute catalog search",
-                "items": [],
-                "total": 0,
-                "offset": 0,
-                "limit": limit,
-                "query": q,
-            }
-        ), 500
+        return jsonify({
+            "error": "search_failed",
+            "message": "Failed to execute catalog search",
+            "items": [],
+            "total": 0,
+            "offset": 0,
+            "limit": params.limit,
+            "query": params.q
+        }), 500
     finally:
         try:
             conn.close()
         except Exception:
             pass
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # SKU endpoints (protected if API_KEY set)
@@ -671,27 +761,29 @@ def price_history(code: str):
         type: integer
         default: 0
     """
-    dt_from = _parse_date("from")
-    dt_to = _parse_date("to")
-    limit = min(_parse_int("limit", 50), 1000)
-    offset = max(0, min(_parse_int("offset", 0), 100000))
+    try:
+        params = PriceHistoryParams.model_validate(
+            request.args.to_dict(flat=True))
+    except ValidationError as e:
+        return jsonify(_serialize_validation_error(e)), 400
 
     conn, err = db_connect()
     if err or not conn:
-        app.logger.error("Price history failed - DB unavailable", extra={"error": err, "code": code})
+        app.logger.error(
+            f"Price history failed - database unavailable: {code}",
+            extra={"error": err})
         return jsonify({"items": [], "total": 0, "code": code})
 
     try:
         clauses = ["code = %s"]
-        params: List[Any] = [code]
+        sql_params: list = [code]
 
-        # effective_from/effective_to per schema
-        if dt_from:
+        if params.dt_from:
             clauses.append("effective_from::date >= %s")
-            params.append(dt_from)
-        if dt_to:
+            sql_params.append(params.dt_from)
+        if params.dt_to:
             clauses.append("effective_from::date <= %s")
-            params.append(dt_to)
+            sql_params.append(params.dt_to)
 
         where = " AND ".join(clauses)
         sql = f"""
@@ -701,19 +793,28 @@ def price_history(code: str):
             ORDER BY effective_from DESC
             LIMIT %s OFFSET %s
         """
-        params.extend([limit, offset])
+        sql_params.extend([params.limit, params.offset])
 
-        rows = db_query(conn, sql, tuple(params))
-        return jsonify({"items": rows, "total": len(rows), "code": code, "limit": limit, "offset": offset})
+        rows = db_query(conn, sql, tuple(sql_params))
+        return jsonify({
+            "items": rows,
+            "total": len(rows),
+            "code": code,
+            "limit": params.limit,
+            "offset": params.offset
+        })
     except Exception as e:
         app.logger.error(
-            "Price history lookup failed",
-            extra={"error": str(e), "code": code, "from": dt_from, "to": dt_to},
+            f"Price history lookup failed: {code}",
+            extra={"error": str(e), "from": params.dt_from,
+                   "to": params.dt_to},
             exc_info=True,
         )
-        return jsonify(
-            {"error": "query_failed", "items": [], "total": 0, "code": code, "limit": limit, "offset": offset}
-        ), 500
+        return jsonify({
+            "error": "query_failed",
+            "items": [], "total": 0, "code": code,
+            "limit": params.limit, "offset": params.offset
+        }), 500
     finally:
         try:
             conn.close()
@@ -752,26 +853,29 @@ def inventory_history(code: str):
         type: integer
         default: 0
     """
-    dt_from = _parse_date("from")
-    dt_to = _parse_date("to")
-    limit = min(_parse_int("limit", 50), 1000)
-    offset = max(0, min(_parse_int("offset", 0), 100000))
+    try:
+        params = InventoryHistoryParams.model_validate(
+            request.args.to_dict(flat=True))
+    except ValidationError as e:
+        return jsonify(_serialize_validation_error(e)), 400
 
     conn, err = db_connect()
     if err or not conn:
-        app.logger.error("Inventory history failed - DB unavailable", extra={"error": err, "code": code})
+        app.logger.error(
+            f"Inventory history failed - database unavailable: {code}",
+            extra={"error": err})
         return jsonify({"items": [], "total": 0, "code": code})
 
     try:
         clauses = ["code = %s"]
-        params: List[Any] = [code]
+        sql_params: list = [code]
 
-        if dt_from:
+        if params.dt_from:
             clauses.append("as_of::date >= %s")
-            params.append(dt_from)
-        if dt_to:
+            sql_params.append(params.dt_from)
+        if params.dt_to:
             clauses.append("as_of::date <= %s")
-            params.append(dt_to)
+            sql_params.append(params.dt_to)
 
         where = " AND ".join(clauses)
         sql = f"""
@@ -781,19 +885,28 @@ def inventory_history(code: str):
             ORDER BY as_of DESC
             LIMIT %s OFFSET %s
         """
-        params.extend([limit, offset])
+        sql_params.extend([params.limit, params.offset])
 
-        rows = db_query(conn, sql, tuple(params))
-        return jsonify({"items": rows, "total": len(rows), "code": code, "limit": limit, "offset": offset})
+        rows = db_query(conn, sql, tuple(sql_params))
+        return jsonify({
+            "items": rows,
+            "total": len(rows),
+            "code": code,
+            "limit": params.limit,
+            "offset": params.offset
+        })
     except Exception as e:
         app.logger.error(
-            "Inventory history lookup failed",
-            extra={"error": str(e), "code": code, "from": dt_from, "to": dt_to},
+            f"Inventory history lookup failed: {code}",
+            extra={"error": str(e), "from": params.dt_from,
+                   "to": params.dt_to},
             exc_info=True,
         )
-        return jsonify(
-            {"error": "query_failed", "items": [], "total": 0, "code": code, "limit": limit, "offset": offset}
-        ), 500
+        return jsonify({
+            "error": "query_failed",
+            "items": [], "total": 0, "code": code,
+            "limit": params.limit, "offset": params.offset
+        }), 500
     finally:
         try:
             conn.close()
