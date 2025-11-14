@@ -4,20 +4,33 @@ on:
   push:
     branches: [ master ]
   pull_request:
+    branches: [ master ]
 
-env:
-  PYTHONUTF8: '1'
-  PYTHONIOENCODING: 'utf-8'
-  TZ: Europe/Moscow
-  DB_HOST: 127.0.0.1
-  DB_PORT: 15432
-  DB_USER: postgres
-  DB_PASSWORD: dev_local_pw
-  DB_NAME: wine_db
+permissions:
+  contents: read
 
 jobs:
   tests:
     runs-on: ubuntu-latest
+
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
+      TZ: Europe/Moscow
+
+      # настройки БД такие же, как ты используешь локально
+      DB_HOST: 127.0.0.1
+      DB_PORT: "15432"
+      DB_USER: postgres
+      DB_PASSWORD: dev_local_pw
+      DB_NAME: wine_db
+
+      # сразу пробрасываем в psql-переменные
+      PGHOST: 127.0.0.1
+      PGPORT: "15432"
+      PGUSER: postgres
+      PGPASSWORD: dev_local_pw
+      PGDATABASE: wine_db
 
     steps:
       - name: Checkout
@@ -26,13 +39,16 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install -r requirements-dev.txt
+          # requirements-dev.txt в репо нет — делаем установку опциональной
+          if [ -f requirements-dev.txt ]; then
+            pip install -r requirements-dev.txt
+          fi
 
       - name: Start Postgres (Docker Compose)
         run: docker compose up -d db
@@ -40,8 +56,9 @@ jobs:
       - name: Wait for DB readiness
         run: |
           for i in {1..90}; do
-            if pg_isready -h "${DB_HOST}" -p "${DB_PORT}" >/dev/null 2>&1; then
-              echo "DB is ready"; exit 0
+            if pg_isready -h "$DB_HOST" -p "$DB_PORT" >/dev/null 2>&1; then
+              echo "DB is ready"
+              exit 0
             fi
             sleep 1
           done
@@ -54,3 +71,11 @@ jobs:
 
       - name: Run tests
         run: pytest -q
+
+      - name: Dump DB logs on failure
+        if: failure()
+        run: docker compose logs db
+
+      - name: Stop containers
+        if: always()
+        run: docker compose down -v
