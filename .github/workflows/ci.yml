@@ -2,12 +2,11 @@ name: CI
 
 on:
   pull_request:
-    branches: [ main, master ]
   push:
-    branches: [ main, master ]
+    branches: [ master ]
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -16,7 +15,18 @@ permissions:
 jobs:
   tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
+
+    env:
+      # ВАЖНО: соответствуют docker-compose.yml (порт публикуется на 15432)
+      DB_HOST: 127.0.0.1
+      DB_PORT: 15432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: wine_db
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
 
     steps:
       - name: Checkout
@@ -27,53 +37,49 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
+          cache: "pip"
 
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pip-audit
+          # если нужны dev-зависимости: pip install -r requirements-dev.txt
 
       - name: Start Postgres (Docker Compose)
         run: |
-          docker compose up -d db
+          docker compose -f docker-compose.yml up -d db
           docker compose ps
 
-      - name: Wait for DB readiness
+      - name: Wait for DB readiness (host port)
         run: |
           for i in {1..90}; do
-            if docker compose exec -T db bash -lc "pg_isready -U postgres" >/dev/null 2>&1; then
+            if pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" >/dev/null 2>&1; then
               echo "DB is ready"
               break
             fi
-            sleep 1
+            echo "waiting for DB at $DB_HOST:$DB_PORT..."
+            sleep 2
           done
 
       - name: Apply SQL migrations
-        env:
-          DB_HOST: 127.0.0.1
-          DB_PORT: 5432
-          DB_USER: postgres
-          DB_PASSWORD: postgres
-          DB_NAME: wine_db
-        run: bash db/migrate.sh
+        run: |
+          bash db/migrate.sh
 
       - name: Run tests
         env:
-          DB_HOST: 127.0.0.1
-          DB_PORT: 5432
-          DB_USER: postgres
-          DB_PASSWORD: postgres
-          DB_NAME: wine_db
-        run: pytest -q
+          DB_HOST: ${{ env.DB_HOST }}
+          DB_PORT: ${{ env.DB_PORT }}
+          DB_USER: ${{ env.DB_USER }}
+          DB_PASSWORD: ${{ env.DB_PASSWORD }}
+          DB_NAME: ${{ env.DB_NAME }}
+        run: |
+          pytest -q
 
       - name: pip-audit
-        run: pip-audit -r requirements.txt --strict
-
-      - name: Dump DB logs on failure
-        if: failure()
-        run: docker compose logs db | tail -1000
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt --strict
 
       - name: Upload coverage.xml
         if: always()
@@ -82,7 +88,17 @@ jobs:
           name: coverage-xml
           path: coverage.xml
           if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Dump DB logs on failure
+        if: failure()
+        run: |
+          echo "=== docker compose ps ==="
+          docker compose ps
+          echo "=== docker logs db (tail) ==="
+          docker logs --tail 500 wine-assistant-db || true
 
       - name: Stop containers
         if: always()
-        run: docker compose down -v
+        run: |
+          docker compose -f docker-compose.yml down -v
