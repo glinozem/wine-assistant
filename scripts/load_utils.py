@@ -5,6 +5,7 @@ import math
 import os
 import re
 from datetime import date, datetime
+from functools import lru_cache
 from typing import Any, Dict, Iterable, Optional, Tuple
 
 import openpyxl
@@ -33,14 +34,26 @@ __all__ = [
 # =========================
 # DB
 # =========================
+def _first_env(*keys, default=None):
+    for k in keys:
+        v = os.environ.get(k)
+        if v not in (None, ""):
+            return v
+    return default
+
+@lru_cache()
+def _db_cfg():
+    return {
+        "host": _first_env("DB_HOST", "PGHOST", "POSTGRES_HOST", default="db"),
+        "port": int(_first_env("DB_PORT", "PGPORT", "POSTGRES_PORT", default="5432")),
+        "user": _first_env("DB_USER", "PGUSER", "POSTGRES_USER", default="postgres"),
+        "password": _first_env("DB_PASSWORD", "PGPASSWORD", "POSTGRES_PASSWORD", default="postgres"),
+        "dbname": _first_env("DB_NAME", "PGDATABASE", "POSTGRES_DB", default="wine_db"),
+    }
+
 def get_conn():
-    return psycopg2.connect(
-        host=os.getenv("PGHOST", "127.0.0.1"),
-        port=int(os.getenv("PGPORT", "5432")),
-        user=os.getenv("PGUSER", "postgres"),
-        password=os.getenv("PGPASSWORD", "postgres"),
-        dbname=os.getenv("PGDATABASE", "wine_db"),
-    )
+    cfg = _db_cfg()
+    return psycopg2.connect(connect_timeout=5, **cfg)
 
 
 # =========================

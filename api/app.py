@@ -197,6 +197,11 @@ def after_request(resp):
     # Trace headers
     if hasattr(g, "_request_id"):
         resp.headers["X-Request-ID"] = g._request_id
+
+    # ❗️Ключевая правка: гарантируем Content-Type с charset для JSON
+    if resp.mimetype == "application/json" and "charset=" not in resp.content_type:
+        resp.headers["Content-Type"] = "application/json; charset=utf-8"
+
     return resp
 
 @app.errorhandler(RateLimitExceeded)
@@ -487,6 +492,50 @@ def readiness():
 @app.route("/version", methods=["GET"])
 @limiter.limit(PUBLIC_LIMIT)
 def version():
+    """
+    Get API version & build metadata
+    ---
+    tags:
+      - Meta
+    summary: Get API version and build metadata
+    description: Returns application version and build metadata such as version, commit SHA and build timestamp.
+    produces:
+      - application/json
+    responses:
+      200:
+        description: Version info
+        schema:
+          type: object
+          properties:
+            version:
+              type: string
+              example: "0.4.0"
+            build_date:
+              type: string
+              format: date-time
+              example: "2025-11-11T12:57:36Z"
+            commit_sha:
+              type: string
+              example: "a1b2c3d"
+            python_version:
+              type: string
+              example: "3.11.9"
+            app_name:
+              type: string
+              example: "wine-assistant"
+      429:
+        description: Too many requests — rate limit exceeded
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: rate_limited
+            message:
+              type: string
+              example: Too many requests. Please retry later.
+    """
+
     return jsonify({"version": APP_VERSION})
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -918,11 +967,15 @@ def inventory_history(code: str):
 # ────────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8000"))
-    debug = os.getenv("DEBUG", "0") == "1"
+    debug = os.getenv("FLASK_DEBUG", "0") == "1"
+    host = os.getenv("FLASK_HOST", "127.0.0.1")  # безопасный дефолт
+    # Явно разрешить внешний биндинг можно FLASK_HOST=0.0.0.0 (например, в докере)
+    if host == "0.0.0.0":
+        print("⚠️  Dev server is exposed on 0.0.0.0 — ensure this is intentional.")
 
     if debug:
         app.logger.warning(
             "Running in DEBUG mode with Flask development server. DO NOT use this in production!"
         )
 
-    app.run(host="0.0.0.0", port=port, debug=debug)
+    app.run(host="127.0.0.1", port=port, debug=debug)

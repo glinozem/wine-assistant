@@ -1,76 +1,85 @@
-# Убрали устаревший ключ `version`
 name: wine-assistant
 
 services:
   db:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     container_name: wine-assistant-db
     environment:
-      POSTGRES_DB: wine_db
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: dev_local_pw
       TZ: Europe/Moscow
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-dev_local_pw}
+      POSTGRES_DB: ${DB_NAME:-wine_db}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:${DB_PORT_OUT:-15432}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d wine_db -h 127.0.0.1"]
-      interval: 5s
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB} -h 127.0.0.1 || exit 1"]
+      interval: 3s
       timeout: 3s
-      retries: 20
+      retries: 30
+      start_period: 3s
     volumes:
-      - db_data:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  migrator:
+    image: postgres:16
+    container_name: wine-assistant-migrator
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      TZ: Europe/Moscow
+      DB_HOST: ${DB_HOST:-db}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-dev_local_pw}
+      DB_NAME: ${DB_NAME:-wine_db}
+    entrypoint: [ "bash", "/migrations/migrate.sh" ]
+    volumes:
+      - ./db:/migrations:ro
+    restart: "no"
 
   api:
     build:
       context: .
       dockerfile: Dockerfile
-    image: wine-assistant-api
+    image: wine-assistant-api:latest
     container_name: wine-assistant-api
-    # Явно прокидываем PG* и прочие переменные окружения, как договорились ранее
-    environment:
-      # База
-      PGHOST: db
-      PGPORT: "5432"
-      PGDATABASE: wine_db
-      PGUSER: postgres
-      PGPASSWORD: dev_local_pw
-
-      # API
-      APP_VERSION: "0.4.0"
-      API_KEY: ""                 # при необходимости задайте реальный ключ
-      CORS_ORIGINS: "*"           # в проде ограничьте доменами
-
-      # Rate limiting
-      RATE_LIMIT_ENABLED: "1"
-      RATE_LIMIT_PUBLIC: "3/minute"
-      RATE_LIMIT_PROTECTED: "60/minute"
-      RATE_LIMIT_STORAGE_URL: "memory://"
-
-      # Gunicorn (можно не трогать)
-      GUNICORN_WORKERS: "1"
-      GUNICORN_THREADS: "4"
-      GUNICORN_TIMEOUT: "60"
     depends_on:
       db:
         condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    environment:
+      TZ: Europe/Moscow
+      DB_HOST: ${DB_HOST:-db}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-dev_local_pw}
+      DB_NAME: ${DB_NAME:-wine_db}
     ports:
-      - "18000:8000"
+      - "127.0.0.1:${API_PORT_OUT:-18000}:8000"
+    # Healthcheck по /ready (можно поменять на /live)
     healthcheck:
-      # Ставим curl внутри образа (см. Dockerfile), проверяем liveness endpoint
-      test: ["CMD-SHELL", "curl -fsSL http://127.0.0.1:8000/live >/dev/null"]
-      interval: 10s
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/ready || exit 1"]
+      interval: 5s
       timeout: 3s
-      retries: 12
+      retries: 30
+      start_period: 10s
     restart: unless-stopped
 
   adminer:
     image: adminer:4
     container_name: wine-assistant-adminer
-    ports:
-      - "18080:8080"
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+    environment:
+      TZ: Europe/Moscow
+      ADMINER_DEFAULT_SERVER: db
+    ports:
+      - "127.0.0.1:${ADMINER_PORT_OUT:-18080}:8080"
     restart: unless-stopped
 
 volumes:
-  db_data:
+  pgdata:

@@ -1,0 +1,34 @@
+name: Semgrep (CE)
+
+on:
+  pull_request: {}
+  push:
+    branches: ["main", "master"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  semgrep:
+    name: semgrep-oss/scan
+    runs-on: ubuntu-latest
+    if: (github.actor != 'dependabot[bot]')
+    container:
+      image: semgrep/semgrep:latest
+    env:
+      SEMGREP_SEND_METRICS: "off"
+    steps:
+      - uses: actions/checkout@v4
+
+      # PR: сканим только изменения и валим джобу при находках
+      - name: Semgrep scan (PR — block on findings)
+        if: github.event_name == 'pull_request'
+        run: >
+          semgrep scan --config p/ci --error
+          --baseline-commit "${{ github.event.pull_request.base.sha }}"
+
+      # Push: полный скан, не блокирует (код возврата 0 без --error)
+      - name: Semgrep scan (push — report only)
+        if: github.event_name != 'pull_request'
+        run: semgrep scan --config p/ci
