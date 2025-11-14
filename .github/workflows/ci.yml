@@ -7,7 +7,7 @@ on:
     branches: [ main, master ]
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -18,58 +18,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
-    services:
-      postgres:
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_DB: wine_db
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd="pg_isready -U postgres -d wine_db -h 127.0.0.1 -p 5432"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=30
-
-    env:
-      # Совместимость и с кодом (PG*), и со скриптами (DB*)
-      PGHOST: 127.0.0.1
-      PGPORT: ${{ job.services.postgres.ports[5432] }}
-      PGUSER: postgres
-      PGPASSWORD: postgres
-      PGDATABASE: wine_db
-
-      DB_HOST: 127.0.0.1
-      DB_PORT: ${{ job.services.postgres.ports[5432] }}
-      DB_USER: postgres
-      DB_PASSWORD: postgres
-      DB_NAME: wine_db
-
-      RUN_DB_TESTS: 1
-      PYTHONUTF8: "1"
-      PYTHONIOENCODING: "utf-8"
-
     steps:
-      - name: Checkout (full history)
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Mark repo as safe (git)
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-          cache: "pip"
-
-      - name: Install system deps (psql client)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libpq-dev postgresql-client
+          python-version: '3.11'
 
       - name: Install Python deps
         run: |
@@ -77,42 +35,54 @@ jobs:
           pip install -r requirements.txt
           pip install pip-audit
 
-      - name: Wait for Postgres
+      - name: Start Postgres (Docker Compose)
         run: |
-          for i in {1..60}; do
-            pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" && exit 0
-            echo "Waiting for Postgres ($i/60)..."
-            sleep 2
-          done
-          echo "Postgres is not ready in time" >&2
-          exit 1
+          docker compose up -d db
+          docker compose ps
 
-      - name: Apply migrations (db/migrate.sh)
-        if: ${{ hashFiles('db/migrate.sh') != '' }}
+      - name: Wait for DB readiness
+        run: |
+          for i in {1..90}; do
+            if docker compose exec -T db bash -lc "pg_isready -U postgres" >/dev/null 2>&1; then
+              echo "DB is ready"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Apply SQL migrations
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_USER: postgres
+          DB_PASSWORD: postgres
+          DB_NAME: wine_db
         run: bash db/migrate.sh
 
-      - name: Apply SQL migrations (fallback)
-        if: ${{ hashFiles('db/migrate.sh') == '' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          CONN_STR="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}"
-          if [ -f db/schema.sql ]; then
-            echo "[ci] Applying db/schema.sql"
-            psql "$CONN_STR" -v ON_ERROR_STOP=1 -f db/schema.sql
-          fi
-          if [ -d db/migrations ]; then
-            shopt -s nullglob
-            for f in db/migrations/*.sql; do
-              echo "[ci] Applying migration: $f"
-              psql "$CONN_STR" -v ON_ERROR_STOP=1 -f "$f"
-            done
-          fi
-
       - name: Run tests
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_USER: postgres
+          DB_PASSWORD: postgres
+          DB_NAME: wine_db
         run: pytest -q
 
       - name: pip-audit
         run: pip-audit -r requirements.txt --strict
 
-      # Semgrep оставляем в отдельном workflow .github/workflows/semgrep.yml
+      - name: Dump DB logs on failure
+        if: failure()
+        run: docker compose logs db | tail -1000
+
+      - name: Upload coverage.xml
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: ignore
+
+      - name: Stop containers
+        if: always()
+        run: docker compose down -v
