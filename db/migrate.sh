@@ -1,17 +1,43 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "[migrator] wait for DB..."
+# --- 1) Загружаем ENV при отсутствии переменных ---
+ENV_FILE="${ENV_FILE:-.env}"
+if [[ -z "${DB_HOST:-}" && -f "$ENV_FILE" ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  . "$ENV_FILE"
+  set +a
+fi
 
-: "${DB_HOST:?missing DB_HOST}"
-: "${DB_PORT:?missing DB_PORT}"
-: "${DB_USER:?missing DB_USER}"
-: "${DB_PASSWORD:?missing DB_PASSWORD}"
-: "${DB_NAME:?missing DB_NAME}"
+# --- 2) Дефолты (можно переопределить окружением/секретами CI) ---
+DB_HOST="${DB_HOST:-127.0.0.1}"
+DB_PORT="${DB_PORT:-5432}"
+DB_USER="${DB_USER:-postgres}"
+DB_PASSWORD="${DB_PASSWORD:-postgres}"
+DB_NAME="${DB_NAME:-wine_db}"
 
 export PGPASSWORD="${DB_PASSWORD}"
 
-# Ждём доступности инстанса
+# --- 3) Определяем, где лежат миграции ---
+MIGRATIONS_ROOT="${MIGRATIONS_ROOT:-/migrations}"
+if [[ ! -d "$MIGRATIONS_ROOT" ]]; then
+  if [[ -d "./db" ]]; then
+    MIGRATIONS_ROOT="./db"
+  elif [[ -d "./migrations" ]]; then
+    MIGRATIONS_ROOT="./migrations"
+  fi
+fi
+
+INIT_SQL="${MIGRATIONS_ROOT}/init.sql"
+MIGR_DIR="${MIGRATIONS_ROOT}/migrations"
+
+# --- 4) Проверяем инструменты ---
+command -v psql >/dev/null 2>&1 || { echo "[migrator] psql not found"; exit 127; }
+command -v pg_isready >/dev/null 2>&1 || { echo "[migrator] pg_isready not found"; exit 127; }
+
+# --- 5) Ждём БД ---
+echo "[migrator] wait for DB at ${DB_HOST}:${DB_PORT} (user=${DB_USER}, db=${DB_NAME})..."
 until pg_isready -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" >/dev/null 2>&1; do
   sleep 1
 done
@@ -26,7 +52,6 @@ apply_sql() {
 }
 
 record_migration_table_safe() {
-  # На случай, если 0000 не создаст таблицу по какой-то причине — создадим «страховочную».
   "${PSQL[@]}" -c '
     CREATE TABLE IF NOT EXISTS public.schema_migrations (
       id          bigserial PRIMARY KEY,
@@ -41,7 +66,12 @@ record_migration() {
   local file="$1"
   local filename sha
   filename="$(basename "${file}")"
-  sha="$(sha256sum "${file}" | awk "{print \$1}")"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha="$(sha256sum "${file}" | awk "{print \$1}")"
+  else
+    # fallback (macOS, редкий случай)
+    sha="$(shasum -a 256 "${file}" | awk '{print $1}')"
+  fi
   "${PSQL[@]}" -c "
     INSERT INTO public.schema_migrations (filename, sha256, applied_at)
     VALUES ('${filename}', '${sha}', now())
@@ -50,23 +80,30 @@ record_migration() {
   echo "[migrator]    recorded ${filename} (${sha})"
 }
 
-echo "[migrator] apply init.sql"
-apply_sql "/migrations/init.sql"
+# --- 6) Применяем init + миграции ---
+if [[ -f "${INIT_SQL}" ]]; then
+  echo "[migrator] apply init.sql"
+  apply_sql "${INIT_SQL}"
+else
+  echo "[migrator] WARNING: ${INIT_SQL} not found, skipping init.sql"
+fi
 
 echo "[migrator] apply migrations..."
 record_migration_table_safe
 
-# Проходим по файлам; если каталог пуст — ничего страшного
 found=0
-for f in /migrations/migrations/*.sql; do
-  [ -e "$f" ] || continue
-  found=1
-  apply_sql "$f"
-  record_migration "$f"
-done
+if [[ -d "${MIGR_DIR}" ]]; then
+  shopt -s nullglob
+  for f in "${MIGR_DIR}"/*.sql; do
+    found=1
+    apply_sql "$f"
+    record_migration "$f"
+  done
+  shopt -u nullglob
+fi
 
-if [ "$found" -eq 0 ]; then
-  echo "[migrator] no migration files found in /migrations/migrations"
+if [[ "$found" -eq 0 ]]; then
+  echo "[migrator] no migration files found in ${MIGR_DIR}"
 fi
 
 echo "[migrator] done."

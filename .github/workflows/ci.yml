@@ -6,6 +6,10 @@ on:
   push:
     branches: [ main, master ]
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -30,8 +34,7 @@ jobs:
           --health-retries=30
 
     env:
-      # Делаем окружение совместимым и с кодом, и со скриптами
-      # (в коде местами используются PG*, а в compose/скриптах встречались DB*).
+      # Совместимость и с кодом (PG*), и со скриптами (DB*)
       PGHOST: 127.0.0.1
       PGPORT: ${{ job.services.postgres.ports[5432] }}
       PGUSER: postgres
@@ -54,40 +57,62 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Mark repo as safe (git)
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install system deps
-        run: sudo apt-get update && sudo apt-get install -y libpq-dev
+      - name: Install system deps (psql client)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpq-dev postgresql-client
 
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install pip-audit
 
       - name: Wait for Postgres
         run: |
           for i in {1..60}; do
             pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" && exit 0
+            echo "Waiting for Postgres ($i/60)..."
             sleep 2
           done
           echo "Postgres is not ready in time" >&2
           exit 1
 
+      - name: Apply migrations (db/migrate.sh)
+        if: ${{ hashFiles('db/migrate.sh') != '' }}
+        run: bash db/migrate.sh
+
+      - name: Apply SQL migrations (fallback)
+        if: ${{ hashFiles('db/migrate.sh') == '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONN_STR="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}"
+          if [ -f db/schema.sql ]; then
+            echo "[ci] Applying db/schema.sql"
+            psql "$CONN_STR" -v ON_ERROR_STOP=1 -f db/schema.sql
+          fi
+          if [ -d db/migrations ]; then
+            shopt -s nullglob
+            for f in db/migrations/*.sql; do
+              echo "[ci] Applying migration: $f"
+              psql "$CONN_STR" -v ON_ERROR_STOP=1 -f "$f"
+            done
+          fi
+
       - name: Run tests
         run: pytest -q
 
-      # Если хочется оставить "легкий" Semgrep и тут — включайте этот шаг.
-      # По умолчанию выключен, чтобы не дублировать с semgrep.yml.
-      - name: Semgrep (light, optional)
-        if: ${{ false }}
-        uses: returntocorp/semgrep-action@v1
-        with:
-          config: p/ci
-          generateSarif: false
-
       - name: pip-audit
         run: pip-audit -r requirements.txt --strict
+
+      # Semgrep оставляем в отдельном workflow .github/workflows/semgrep.yml
