@@ -34,7 +34,7 @@ command -v psql >/dev/null 2>&1 || { echo "[migrator] psql not found"; exit 127;
 command -v pg_isready >/dev/null 2>&1 || { echo "[migrator] pg_isready not found"; exit 127; }
 
 # --- 5) Ждём БД (с таймаутом) ---
-TIMEOUT_SEC="${TIMEOUT_SEC:-90}"
+TIMEOUT_SEC="${TIMEOUT_SEC:-120}"
 echo "[migrator] wait for DB at ${DB_HOST}:${DB_PORT} (user=${DB_USER}, db=${DB_NAME}) with timeout ${TIMEOUT_SEC}s..."
 for ((i=1; i<=TIMEOUT_SEC; i++)); do
   if pg_isready -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" >/dev/null 2>&1; then

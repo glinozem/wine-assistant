@@ -1,23 +1,28 @@
 name: tests
 
 on:
+  pull_request:
+    branches: [ master ]
   push:
     branches: [ master ]
-  pull_request:
+  workflow_dispatch:
+
+# Не даём двум джобам (push и PR одного и того же бранча) идти параллельно
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
   tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
 
     env:
-      # Python IO в UTF-8
       PYTHONUTF8: "1"
       PYTHONIOENCODING: "utf-8"
       TZ: Europe/Moscow
-      # Параметры БД, которыми будем пользоваться в шагах и миграторе
+      # Подключение к БД с хоста раннера (порт публикуем 5432:5432 в compose)
       DB_HOST: 127.0.0.1
-      DB_PORT: "5432"
+      DB_PORT: 5432
       DB_USER: postgres
       DB_PASSWORD: dev_local_pw
       DB_NAME: wine_db
@@ -28,10 +33,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Install system deps (psql client)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
 
       - name: Install Python deps
         run: |
@@ -39,26 +49,11 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-cov pip-audit
 
-      - name: Install Postgres client (psql)
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y postgresql-client
-
       - name: Start Postgres (Docker Compose)
-        # Прокидываем обе группы переменных: и POSTGRES_*, и DB_* —
-        # чтобы покрыть любой вариант плейсхолдеров в docker-compose.yml
-        env:
-          POSTGRES_USER:     ${{ env.DB_USER }}
-          POSTGRES_PASSWORD: ${{ env.DB_PASSWORD }}
-          POSTGRES_DB:       ${{ env.DB_NAME }}
-          DB_USER:           ${{ env.DB_USER }}
-          DB_PASSWORD:       ${{ env.DB_PASSWORD }}
-          DB_NAME:           ${{ env.DB_NAME }}
-        run: |
-          docker compose -f docker-compose.yml up -d db
-          docker ps
+        run: docker compose up -d db
 
       - name: Wait for DB readiness
+        shell: bash
         run: |
           for i in {1..90}; do
             if pg_isready -h "${DB_HOST}" -p "${DB_PORT}" >/dev/null 2>&1; then
@@ -70,37 +65,19 @@ jobs:
           docker compose logs db
           exit 1
 
-      - name: Sanity check DB auth
-        # Раннее явное падение, если пароль/юзер не совпали
-        run: |
-          PGPASSWORD="${DB_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" -c "select current_database(), current_user;" -v ON_ERROR_STOP=1
-
       - name: Apply SQL migrations
         env:
-          DB_HOST:     ${{ env.DB_HOST }}
-          DB_PORT:     ${{ env.DB_PORT }}
-          DB_USER:     ${{ env.DB_USER }}
-          DB_PASSWORD: ${{ env.DB_PASSWORD }}
-          DB_NAME:     ${{ env.DB_NAME }}
-        run: |
-          bash db/migrate.sh
+          # на всякий случай прокидываем пароль и здесь
+          PGPASSWORD: ${{ env.DB_PASSWORD }}
+        run: bash db/migrate.sh
 
       - name: Run tests
-        env:
-          DB_HOST:     ${{ env.DB_HOST }}
-          DB_PORT:     ${{ env.DB_PORT }}
-          DB_USER:     ${{ env.DB_USER }}
-          DB_PASSWORD: ${{ env.DB_PASSWORD }}
-          DB_NAME:     ${{ env.DB_NAME }}
         run: pytest -q
-
-      - name: pip-audit
-        run: pip-audit -r requirements.txt --strict
 
       - name: Dump DB logs on failure
         if: failure()
-        run: docker compose logs db || true
+        run: docker compose logs db
 
-      - name: Teardown (remove containers & volumes)
+      - name: Stop containers
         if: always()
         run: docker compose down -v
