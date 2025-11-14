@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
-# --- 1) Загружаем ENV при отсутствии переменных ---
+# --- 1) Загружаем .env при отсутствии переменных ---
 ENV_FILE="${ENV_FILE:-.env}"
 if [[ -z "${DB_HOST:-}" && -f "$ENV_FILE" ]]; then
   set -a
@@ -10,25 +10,22 @@ if [[ -z "${DB_HOST:-}" && -f "$ENV_FILE" ]]; then
   set +a
 fi
 
-# --- 2) Дефолты (можно переопределить окружением/секретами CI) ---
-DB_HOST="${DB_HOST:-127.0.0.1}"
-DB_PORT="${DB_PORT:-5432}"
-DB_USER="${DB_USER:-postgres}"
-DB_PASSWORD="${DB_PASSWORD:-postgres}"
-DB_NAME="${DB_NAME:-wine_db}"
+# --- 2) Нормализуем вход: DB_* > PG_* > defaults ---
+DB_HOST="${DB_HOST:-${PGHOST:-127.0.0.1}}"
+DB_PORT="${DB_PORT:-${PGPORT:-5432}}"
+DB_USER="${DB_USER:-${PGUSER:-postgres}}"
+DB_PASSWORD="${DB_PASSWORD:-${PGPASSWORD:-postgres}}"
+DB_NAME="${DB_NAME:-${PGDATABASE:-wine_db}}"
 
 export PGPASSWORD="${DB_PASSWORD}"
 
-# --- 3) Определяем, где лежат миграции ---
+# --- 3) Где лежат миграции ---
 MIGRATIONS_ROOT="${MIGRATIONS_ROOT:-/migrations}"
 if [[ ! -d "$MIGRATIONS_ROOT" ]]; then
-  if [[ -d "./db" ]]; then
-    MIGRATIONS_ROOT="./db"
-  elif [[ -d "./migrations" ]]; then
-    MIGRATIONS_ROOT="./migrations"
-  fi
+  for d in "./db" "./migrations"; do
+    if [[ -d "$d" ]]; then MIGRATIONS_ROOT="$d"; break; fi
+  done
 fi
-
 INIT_SQL="${MIGRATIONS_ROOT}/init.sql"
 MIGR_DIR="${MIGRATIONS_ROOT}/migrations"
 
@@ -36,12 +33,21 @@ MIGR_DIR="${MIGRATIONS_ROOT}/migrations"
 command -v psql >/dev/null 2>&1 || { echo "[migrator] psql not found"; exit 127; }
 command -v pg_isready >/dev/null 2>&1 || { echo "[migrator] pg_isready not found"; exit 127; }
 
-# --- 5) Ждём БД ---
-echo "[migrator] wait for DB at ${DB_HOST}:${DB_PORT} (user=${DB_USER}, db=${DB_NAME})..."
-until pg_isready -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" >/dev/null 2>&1; do
+# --- 5) Ждём БД (с таймаутом) ---
+TIMEOUT_SEC="${TIMEOUT_SEC:-90}"
+echo "[migrator] wait for DB at ${DB_HOST}:${DB_PORT} (user=${DB_USER}, db=${DB_NAME}) with timeout ${TIMEOUT_SEC}s..."
+for ((i=1; i<=TIMEOUT_SEC; i++)); do
+  if pg_isready -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" >/dev/null 2>&1; then
+    echo " ok"
+    break
+  fi
   sleep 1
+  if (( i % 10 == 0 )); then echo "[migrator] still waiting... (${i}s)"; fi
+  if (( i == TIMEOUT_SEC )); then
+    echo "[migrator] ERROR: DB not ready after ${TIMEOUT_SEC}s"
+    exit 124
+  fi
 done
-echo " ok"
 
 PSQL=(psql -v ON_ERROR_STOP=1 -q -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}")
 
@@ -67,9 +73,8 @@ record_migration() {
   local filename sha
   filename="$(basename "${file}")"
   if command -v sha256sum >/dev/null 2>&1; then
-    sha="$(sha256sum "${file}" | awk "{print \$1}")"
+    sha="$(sha256sum "${file}" | awk '{print $1}')"
   else
-    # fallback (macOS, редкий случай)
     sha="$(shasum -a 256 "${file}" | awk '{print $1}')"
   fi
   "${PSQL[@]}" -c "
