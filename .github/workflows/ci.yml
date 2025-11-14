@@ -22,7 +22,7 @@ jobs:
       TZ: Europe/Moscow
       # Подключение к БД с хоста раннера (порт публикуем 5432:5432 в compose)
       DB_HOST: 127.0.0.1
-      DB_PORT: 5432
+      DB_PORT: 15432
       DB_USER: postgres
       DB_PASSWORD: dev_local_pw
       DB_NAME: wine_db
