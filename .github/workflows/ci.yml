@@ -1,120 +1,93 @@
 name: CI
 
 on:
-  push:
   pull_request:
+    branches: [ main, master ]
+  push:
+    branches: [ main, master ]
 
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+permissions:
+  contents: read
 
 jobs:
   tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     services:
       postgres:
-        image: postgres:16-alpine
-        ports:
-          - 15432:5432         # host:container
+        image: pgvector/pgvector:pg16
         env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: dev_local_pw
           POSTGRES_DB: wine_db
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
         options: >-
-          --health-cmd="pg_isready -U postgres -d wine_db"
-          --health-interval=10s
+          --health-cmd="pg_isready -U postgres -d wine_db -h 127.0.0.1 -p 5432"
+          --health-interval=5s
           --health-timeout=5s
-          --health-retries=10
+          --health-retries=30
 
     env:
-      # 🔧 Включаем интеграционные тесты и настраиваем подключения к БД
-      RUN_DB_TESTS: "1"
-      PGHOST: localhost
-      PGPORT: "15432"
+      # Делаем окружение совместимым и с кодом, и со скриптами
+      # (в коде местами используются PG*, а в compose/скриптах встречались DB*).
+      PGHOST: 127.0.0.1
+      PGPORT: ${{ job.services.postgres.ports[5432] }}
       PGUSER: postgres
-      PGPASSWORD: dev_local_pw
+      PGPASSWORD: postgres
       PGDATABASE: wine_db
 
-      # Дополнительно можно включить переменные приложения (пример):
-      # RATE_LIMIT_ENABLED: "0"
-      # API_KEY: test-key
+      DB_HOST: 127.0.0.1
+      DB_PORT: ${{ job.services.postgres.ports[5432] }}
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: wine_db
+
+      RUN_DB_TESTS: 1
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
 
     steps:
-      - name: Checkout
+      - name: Checkout (full history)
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libpq-dev postgresql-client
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y libpq-dev
 
-      - name: Wait for Postgres
-        shell: bash
-        run: |
-          for i in {1..30}; do
-            if pg_isready -h "$PGHOST" -p "$PGPORT" -d "$PGDATABASE" -U "$PGUSER"; then
-              echo "Postgres is ready"
-              break
-            fi
-            echo "Waiting for Postgres ($i/30)..."
-            sleep 2
-          done
-
-      - name: Install Python dependencies
+      - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
 
-      - name: Prepare schema (optional)
-        # Применяем схему/миграции, если они есть в репозитории
-        shell: bash
+      - name: Wait for Postgres
         run: |
-          set -e
-          CONN_STR="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}"
-          if [ -f db/schema.sql ]; then
-            echo "Applying db/schema.sql"
-            psql "$CONN_STR" -f db/schema.sql
-          fi
-          if [ -d db/migrations ]; then
-            shopt -s nullglob
-            for f in db/migrations/*.sql; do
-              echo "Applying migration: $f"
-              psql "$CONN_STR" -f "$f"
-            done
-          fi
+          for i in {1..60}; do
+            pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" && exit 0
+            sleep 2
+          done
+          echo "Postgres is not ready in time" >&2
+          exit 1
 
       - name: Run tests
-        run: |
-          pytest -q
+        run: pytest -q
 
-      - name: Install pip-audit
-        run: |
-          pip install pip-audit
-
-      - name: Security audit (pip-audit)
-        # Если найдутся уязвимости — шаг зафейлится (как и требуется)
-        run: |
-          pip-audit -r requirements.txt
-
-      - name: Semgrep (OWASP Top 10)
-        # Используем официальный action; исключаем ложноположительное правило про 0.0.0.0
+      # Если хочется оставить "легкий" Semgrep и тут — включайте этот шаг.
+      # По умолчанию выключен, чтобы не дублировать с semgrep.yml.
+      - name: Semgrep (light, optional)
+        if: ${{ false }}
         uses: returntocorp/semgrep-action@v1
         with:
-          config: p/owasp-top-ten
-          args: >-
-            --exclude-rule python.flask.security.audit.app-run-param-config.avoid_app_run_with_bad_host
-          generateSarif: true
+          config: p/ci
+          generateSarif: false
 
-      - name: Upload Semgrep SARIF
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: semgrep.sarif
+      - name: pip-audit
+        run: pip-audit -r requirements.txt --strict
