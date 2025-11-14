@@ -1,77 +1,85 @@
+name: wine-assistant
+
 services:
   db:
     image: pgvector/pgvector:pg16
-    container_name: wine-assistant-db-1
+    container_name: wine-assistant-db
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: dev_local_pw
-      POSTGRES_DB: wine_db
       TZ: Europe/Moscow
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-dev_local_pw}
+      POSTGRES_DB: ${DB_NAME:-wine_db}
     ports:
-      - "15432:5432"
+      - "127.0.0.1:${DB_PORT_OUT:-15432}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -h localhost"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB} -h 127.0.0.1 || exit 1"]
       interval: 3s
       timeout: 3s
-      retries: 20
+      retries: 30
+      start_period: 3s
     volumes:
-      - db_data:/var/lib/postgresql/data
-      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - pgdata:/var/lib/postgresql/data
     restart: unless-stopped
+
+  migrator:
+    image: postgres:16
+    container_name: wine-assistant-migrator
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      TZ: Europe/Moscow
+      DB_HOST: ${DB_HOST:-db}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-dev_local_pw}
+      DB_NAME: ${DB_NAME:-wine_db}
+    entrypoint: [ "bash", "/migrations/migrate.sh" ]
+    volumes:
+      - ./db:/migrations:ro
+    restart: "no"
 
   api:
     build:
       context: .
       dockerfile: Dockerfile
-    image: wine-assistant-api
-    container_name: wine-assistant-api-1
+    image: wine-assistant-api:latest
+    container_name: wine-assistant-api
     depends_on:
       db:
         condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
     environment:
-      # Flask
-      FLASK_HOST: 0.0.0.0
-      FLASK_PORT: "8000"
-      FLASK_DEBUG: "0"
-      APP_VERSION: "0.3.0"
       TZ: Europe/Moscow
-      # DB (в контейнере по имени сервиса)
-      PGHOST: db
-      PGPORT: "5432"
-      PGUSER: postgres
-      PGPASSWORD: dev_local_pw
-      PGDATABASE: wine_db
-      # CORS & Rate limits
-      CORS_ORIGINS: "*"
-      RATE_LIMIT_ENABLED: "1"
-      RATE_LIMIT_PUBLIC: "200/hour"
-      RATE_LIMIT_PROTECTED: "1000/hour"
-      RATE_LIMIT_STORAGE_URL: "memory://"
-      # Опционально для защищённых эндпоинтов
-      # API_KEY: "put-strong-api-key-here"
-    command: ["python", "-m", "api.app"]
+      DB_HOST: ${DB_HOST:-db}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-dev_local_pw}
+      DB_NAME: ${DB_NAME:-wine_db}
     ports:
-      - "18000:8000"
+      - "127.0.0.1:${API_PORT_OUT:-18000}:8000"
+    # Healthcheck по /ready (можно поменять на /live)
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/ready >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/ready || exit 1"]
       interval: 5s
       timeout: 3s
-      retries: 20
+      retries: 30
+      start_period: 10s
     restart: unless-stopped
 
   adminer:
     image: adminer:4
-    container_name: wine-assistant-adminer-1
-    environment:
-      TZ: Europe/Moscow
-      # Можно выбрать тему оформления:
-      # ADMINER_DESIGN: pepa-linha
-    ports:
-      - "18080:8080"
+    container_name: wine-assistant-adminer
     depends_on:
       db:
         condition: service_healthy
+    environment:
+      TZ: Europe/Moscow
+      ADMINER_DEFAULT_SERVER: db
+    ports:
+      - "127.0.0.1:${ADMINER_PORT_OUT:-18080}:8080"
     restart: unless-stopped
 
 volumes:
-  db_data:
+  pgdata:

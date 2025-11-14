@@ -1,151 +1,114 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
-# --- CONFIG (можно переопределить переменными среды) ---
-PGHOST="${PGHOST:-localhost}"
-PGPORT="${PGPORT:-15432}"
-PGUSER="${PGUSER:-postgres}"
-PGDATABASE="${PGDATABASE:-wine_db}"
-MIGRATIONS_DIR="${MIGRATIONS_DIR:-db/migrations}"
-TZ_VIEW="${TZ_VIEW:-Europe/Moscow}"   # для столбца applied_msk в вью
+# --- 1) Загружаем .env при отсутствии переменных ---
+ENV_FILE="${ENV_FILE:-.env}"
+if [[ -z "${DB_HOST:-}" && -f "$ENV_FILE" ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  . "$ENV_FILE"
+  set +a
+fi
 
-# --- Определяем docker compose команду (или отсутствие) ---
-detect_compose() {
-  if command -v docker >/dev/null 2>&1; then
-    if docker compose version >/dev/null 2>&1; then
-      echo "docker compose"
-      return
-    elif command -v docker-compose >/dev/null 2>&1; then
-      echo "docker-compose"
-      return
-    fi
-  fi
-  echo ""  # нет docker compose — будем использовать локальный psql
-}
+# --- 2) Нормализуем вход: DB_* > PG_* > defaults ---
+DB_HOST="${DB_HOST:-${PGHOST:-127.0.0.1}}"
+DB_PORT="${DB_PORT:-${PGPORT:-5432}}"
+DB_USER="${DB_USER:-${PGUSER:-postgres}}"
+DB_PASSWORD="${DB_PASSWORD:-${PGPASSWORD:-postgres}}"
+DB_NAME="${DB_NAME:-${PGDATABASE:-wine_db}}"
 
-COMPOSE_CMD="$(detect_compose)"
+export PGPASSWORD="${DB_PASSWORD}"
 
-# --- Хелперы для psql ---
-psql_exec() {
-  # Используем docker compose exec -T db psql, если доступно; иначе локальный psql
-  if [[ -n "$COMPOSE_CMD" ]]; then
-    $COMPOSE_CMD exec -T db psql -v ON_ERROR_STOP=1 -X -q -U "$PGUSER" -d "$PGDATABASE" "$@"
-  else
-    PGPASSWORD="${PGPASSWORD:-}" psql -v ON_ERROR_STOP=1 -X -q \
-      -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" "$@"
-  fi
-}
-
-pg_isready_wait() {
-  echo "Waiting for Postgres readiness..."
-  for i in {1..90}; do
-    if [[ -n "$COMPOSE_CMD" ]]; then
-      if $COMPOSE_CMD exec -T db pg_isready -U "$PGUSER" -d "$PGDATABASE" -h localhost -p 5432 >/dev/null 2>&1; then
-        return 0
-      fi
-    else
-      if pg_isready -U "$PGUSER" -d "$PGDATABASE" -h "$PGHOST" -p "$PGPORT" >/dev/null 2>&1; then
-        return 0
-      fi
-    fi
-    sleep 1
+# --- 3) Где лежат миграции ---
+MIGRATIONS_ROOT="${MIGRATIONS_ROOT:-/migrations}"
+if [[ ! -d "$MIGRATIONS_ROOT" ]]; then
+  for d in "./db" "./migrations"; do
+    if [[ -d "$d" ]]; then MIGRATIONS_ROOT="$d"; break; fi
   done
-  echo "ERROR: Postgres is not ready in time." >&2
-  return 1
+fi
+INIT_SQL="${MIGRATIONS_ROOT}/init.sql"
+MIGR_DIR="${MIGRATIONS_ROOT}/migrations"
+
+# --- 4) Проверяем инструменты ---
+command -v psql >/dev/null 2>&1 || { echo "[migrator] psql not found"; exit 127; }
+command -v pg_isready >/dev/null 2>&1 || { echo "[migrator] pg_isready not found"; exit 127; }
+
+# --- 5) Ждём БД (с таймаутом) ---
+TIMEOUT_SEC="${TIMEOUT_SEC:-120}"
+echo "[migrator] wait for DB at ${DB_HOST}:${DB_PORT} (user=${DB_USER}, db=${DB_NAME}) with timeout ${TIMEOUT_SEC}s..."
+for ((i=1; i<=TIMEOUT_SEC; i++)); do
+  if pg_isready -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" >/dev/null 2>&1; then
+    echo " ok"
+    break
+  fi
+  sleep 1
+  if (( i % 10 == 0 )); then echo "[migrator] still waiting... (${i}s)"; fi
+  if (( i == TIMEOUT_SEC )); then
+    echo "[migrator] ERROR: DB not ready after ${TIMEOUT_SEC}s"
+    exit 124
+  fi
+done
+
+PSQL=(psql -v ON_ERROR_STOP=1 -q -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}")
+
+apply_sql() {
+  local file="$1"
+  echo "[migrator] -> ${file}"
+  "${PSQL[@]}" -f "${file}"
 }
 
-sha256_file() {
-  # Кросс-платформенный sha256: Linux (sha256sum) / macOS (shasum -a 256)
+record_migration_table_safe() {
+  "${PSQL[@]}" -c '
+    CREATE TABLE IF NOT EXISTS public.schema_migrations (
+      id          bigserial PRIMARY KEY,
+      filename    text UNIQUE NOT NULL,
+      sha256      text NOT NULL,
+      applied_at  timestamptz NOT NULL DEFAULT now()
+    );
+  '
+}
+
+record_migration() {
+  local file="$1"
+  local filename sha
+  filename="$(basename "${file}")"
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
+    sha="$(sha256sum "${file}" | awk '{print $1}')"
   else
-    shasum -a 256 "$1" | awk '{print $1}'
+    sha="$(shasum -a 256 "${file}" | awk '{print $1}')"
   fi
+  "${PSQL[@]}" -c "
+    INSERT INTO public.schema_migrations (filename, sha256, applied_at)
+    VALUES ('${filename}', '${sha}', now())
+    ON CONFLICT (filename) DO NOTHING;
+  "
+  echo "[migrator]    recorded ${filename} (${sha})"
 }
 
-# --- Поднимаем БД (если docker compose доступен) ---
-if [[ -n "$COMPOSE_CMD" ]]; then
-  $COMPOSE_CMD up -d db
-fi
-
-# --- Ждём готовности БД ---
-pg_isready_wait
-
-# --- Базовые расширения + реестр миграций ---
-psql_exec <<'SQL'
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
-CREATE EXTENSION IF NOT EXISTS vector;
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-
-CREATE TABLE IF NOT EXISTS public.schema_migrations(
-  filename   text PRIMARY KEY,
-  sha256     char(64),
-  applied_at timestamptz NOT NULL DEFAULT now()
-);
-SQL
-
-# --- Применяем миграции по порядку ---
-if [[ ! -d "$MIGRATIONS_DIR" ]]; then
-  echo "WARN: Migrations dir not found: $MIGRATIONS_DIR — пропускаю."
-  exit 0
-fi
-
-shopt -s nullglob
-mapfile -t FILES < <(ls -1 "$MIGRATIONS_DIR"/*.sql | sort)
-if [[ ${#FILES[@]} -eq 0 ]]; then
-  echo "WARN: No *.sql files found in $MIGRATIONS_DIR — нечего применять."
+# --- 6) Применяем init + миграции ---
+if [[ -f "${INIT_SQL}" ]]; then
+  echo "[migrator] apply init.sql"
+  apply_sql "${INIT_SQL}"
 else
-  for f in "${FILES[@]}"; do
-    name="$(basename "$f")"
-    hash="$(sha256_file "$f")"
-
-    # Узнаем, зарегистрирована ли миграция и какой checksum
-    current_sha="$(psql_exec -Atc "SELECT sha256 FROM public.schema_migrations WHERE filename='${name}'" || true)"
-
-    if [[ -n "$current_sha" ]]; then
-      if [[ "$current_sha" == "$hash" ]]; then
-        echo ">> SKIP $name (already applied)"
-        continue
-      else
-        echo "ERROR: Migration $name already recorded with another checksum!"
-        echo "       recorded: $current_sha"
-        echo "       current : $hash"
-        exit 1
-      fi
-    fi
-
-    echo ">> Applying $name"
-    # Важно: не \i; внутри контейнера нет доступа к host-файлу — читаем через stdin
-    psql_exec < "$f"
-
-    # Регистрируем факт применения
-    psql_exec -c "INSERT INTO public.schema_migrations(filename, sha256)
-                  VALUES ('${name}', '${hash}')
-                  ON CONFLICT (filename) DO UPDATE
-                  SET sha256 = EXCLUDED.sha256,
-                      applied_at = now();"
-  done
+  echo "[migrator] WARNING: ${INIT_SQL} not found, skipping init.sql"
 fi
 
-# --- Обновляем VIEW со списком миграций (и столбцом checksum) ---
-psql_exec <<SQL
-CREATE OR REPLACE VIEW public.schema_migrations_recent AS
-SELECT split_part(filename, '_', 1) AS version,
-       filename,
-       sha256 AS checksum,
-       applied_at,
-       applied_at AT TIME ZONE '${TZ_VIEW}' AS applied_msk
-FROM public.schema_migrations
-ORDER BY applied_at DESC;
-SQL
+echo "[migrator] apply migrations..."
+record_migration_table_safe
 
-# --- Показать последние применённые миграции ---
-echo
-echo "=== Recent migrations ==="
-psql_exec -c "SELECT version, filename, checksum, applied_at, applied_msk
-              FROM public.schema_migrations_recent
-              ORDER BY applied_at DESC
-              LIMIT 8;"
+found=0
+if [[ -d "${MIGR_DIR}" ]]; then
+  shopt -s nullglob
+  for f in "${MIGR_DIR}"/*.sql; do
+    found=1
+    apply_sql "$f"
+    record_migration "$f"
+  done
+  shopt -u nullglob
+fi
 
-echo
-echo "All migrations applied."
+if [[ "$found" -eq 0 ]]; then
+  echo "[migrator] no migration files found in ${MIGR_DIR}"
+fi
+
+echo "[migrator] done."

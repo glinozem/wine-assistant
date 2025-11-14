@@ -1,866 +1,981 @@
-# api/app.py
+#!/usr/bin/env python3
+# api/app.py — hardened v0.4.0
+
+import json
 import os
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from functools import wraps
+from typing import Any, Dict, List, Optional, Tuple
 
-import psycopg2
-import psycopg2.extras
-from dotenv import load_dotenv
 from flasgger import Swagger
-from flask import Flask, jsonify, request
+from flask import Flask, g, jsonify, request
 from flask_cors import CORS
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
-# Импорты для structured logging
-from api.logging_config import setup_logging
-from api.request_middleware import setup_request_logging
+# ────────────────────────────────────────────────────────────────────────────────
+# DB setup (psycopg3 → psycopg2 fallback)
+# ────────────────────────────────────────────────────────────────────────────────
+try:
+    import psycopg  # psycopg3
+    HAVE_PSYCOPG3 = True
+except Exception:  # pragma: no cover
+    HAVE_PSYCOPG3 = False
+    try:
+        import psycopg2  # type: ignore
+    except Exception:  # pragma: no cover
+        psycopg2 = None  # type: ignore
 
-load_dotenv()
+def db_connect() -> Tuple[Optional[Any], Optional[str]]:
+    """
+    Open a DB connection using standard PostgreSQL env vars (PG*).
+    Returns (conn, error_or_none)
+    """
+    dsn = {
+        "host": os.getenv("PGHOST", "db"),
+        "port": int(os.getenv("PGPORT", "5432")),
+        "dbname": os.getenv("PGDATABASE", "wine_db"),
+        "user": os.getenv("PGUSER", "postgres"),
+        "password": os.getenv("PGPASSWORD", "postgres"),
+    }
+    try:
+        if HAVE_PSYCOPG3:
+            conn = psycopg.connect(
+                host=dsn["host"],
+                port=dsn["port"],
+                dbname=dsn["dbname"],
+                user=dsn["user"],
+                password=dsn["password"],
+                connect_timeout=3,
+            )
+            return conn, None
+        else:
+            if psycopg2 is None:
+                return None, "No psycopg available"
+            conn = psycopg2.connect(
+                host=dsn["host"],
+                port=dsn["port"],
+                dbname=dsn["dbname"],
+                user=dsn["user"],
+                password=dsn["password"],
+                connect_timeout=3,
+            )
+            return conn, None
+    except Exception as e:
+        return None, str(e)
 
+def db_query(conn: Any, sql: str, params: Optional[tuple] = None) -> List[Dict[str, Any]]:
+    """Execute SELECT and return rows as list of dicts (works for psycopg2/3)."""
+    params = params or tuple()
+    rows: List[Dict[str, Any]] = []
+    if HAVE_PSYCOPG3:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            cols = [d.name for d in cur.description]
+            for r in cur.fetchall():
+                rows.append({c: v for c, v in zip(cols, r)})
+    else:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            cols = [d[0] for d in cur.description]
+            for r in cur.fetchall():
+                rows.append({c: v for c, v in zip(cols, r)})
+    return rows
+
+# ────────────────────────────────────────────────────────────────────────────────
+# App / CORS / Logging / Rate limiting
+# ────────────────────────────────────────────────────────────────────────────────
 app = Flask(__name__)
-app.start_time = time.time()
 
-# Настройка structured logging
-setup_logging(app)
-setup_request_logging(app)
+APP_VERSION = os.getenv("APP_VERSION", "0.4.0")
+STARTED_AT = datetime.now(timezone.utc)
+API_KEY = os.getenv("API_KEY")  # if set → protect certain endpoints
 
-# CORS configuration
+# CORS
 cors_origins = os.getenv("CORS_ORIGINS", "*")
+expose_headers_default = "X-RateLimit-Limit,X-RateLimit-Remaining,X-RateLimit-Reset,X-Request-ID"
+expose_headers = os.getenv("CORS_EXPOSE_HEADERS", expose_headers_default)
+
 if cors_origins == "*":
-    CORS(app)  # Разрешить все источники (для разработки)
+    CORS(app, expose_headers=[h.strip() for h in expose_headers.split(",")])
 else:
-    origins_list = [origin.strip() for origin in cors_origins.split(",")]
-    CORS(app, origins=origins_list)
+    origins_list = [o.strip() for o in cors_origins.split(",")]
+    CORS(app, origins=origins_list, expose_headers=[h.strip() for h in expose_headers.split(",")])
 
-# Swagger configuration
-swagger_config = {
-    "headers": [],
-    "specs": [
-        {
-            "endpoint": "apispec_1",
-            "route": "/apispec_1.json",
-            "rule_filter": lambda rule: True,
-            "model_filter": lambda tag: True,
-        }
-    ],
-    "static_url_path": "/flasgger_static",
-    "swagger_ui": True,
-    "specs_route": "/docs",
-}
+# Structured JSON logging
+from api.logging_config import setup_logging  # noqa: E402
 
+setup_logging(app)
+
+# Flask-Limiter
+from flask_limiter import Limiter  # noqa: E402
+from flask_limiter.errors import RateLimitExceeded  # noqa: E402
+from flask_limiter.util import get_remote_address  # noqa: E402
+
+# Make sure headers are emitted
+app.config.update(
+    RATELIMIT_HEADERS_ENABLED=True,
+    RATELIMIT_HEADER_LIMIT="X-RateLimit-Limit",
+    RATELIMIT_HEADER_REMAINING="X-RateLimit-Remaining",
+    RATELIMIT_HEADER_RESET="X-RateLimit-Reset",
+)
+
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=[],  # we set limits per-endpoint
+    storage_uri=os.getenv("RATE_LIMIT_STORAGE_URL", "memory://"),
+    enabled=os.getenv("RATE_LIMIT_ENABLED", "1") == "1",
+    headers_enabled=True,
+)
+
+PUBLIC_LIMIT = os.getenv("RATE_LIMIT_PUBLIC", "100/hour")
+PROTECTED_LIMIT = os.getenv("RATE_LIMIT_PROTECTED", "1000/hour")
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Swagger
+# ────────────────────────────────────────────────────────────────────────────────
 swagger_template = {
+    "swagger": "2.0",
     "info": {
         "title": "Wine Assistant API",
-        "description": "API для поиска вин, управления прайсами и остатками",
-        "version": os.getenv("APP_VERSION", "0.3.0"),
+        "version": APP_VERSION,
+        "description": "API для поиска цен, ассортимента и витрин (Swagger UI на /docs)",
         "contact": {
             "name": "Wine Assistant Team",
             "url": "https://github.com/glinozem/wine-assistant",
         },
     },
     "securityDefinitions": {
-        "ApiKeyAuth": {
-            "type": "apiKey",
-            "name": "X-API-Key",
-            "in": "header",
-            "description": "API ключ для доступа к защищённым эндпоинтам",
-        }
+        "ApiKeyAuth": {"type": "apiKey", "name": "X-API-Key", "in": "header"},
     },
     "security": [],
 }
+swagger_config = {
+    "headers": [],
+    "openapi": "2.0",
+    "specs": [{"endpoint": "apispec_1", "route": "/apispec_1.json"}],
+    "static_url_path": "/flasgger_static",
+    "swagger_ui": True,
+    "specs_route": "/docs",
+}
+Swagger(app, template=swagger_template, config=swagger_config)
 
-swagger = Swagger(app, config=swagger_config, template=swagger_template)
-
-# Rate Limiting configuration
-limiter = Limiter(
-    app=app,
-    key_func=get_remote_address,
-    default_limits=[os.getenv("RATE_LIMIT_PUBLIC", "100/hour")],
-    storage_uri=os.getenv("RATE_LIMIT_STORAGE_URL", "memory://"),
-    enabled=os.getenv("RATE_LIMIT_ENABLED", "1") == "1",
-    headers_enabled=True,
-    swallow_errors=True,  # Не падать, если Redis недоступен
-)
-
-@app.errorhandler(429)
-def ratelimit_handler(e):
-    """Custom handler for rate limit exceeded errors."""
-    return jsonify(
-        {
-            "error": "rate_limit_exceeded",
-            "message": "Too many requests. Please try again later.",
-            "retry_after": e.description,
-        }
-    ), 429
-
-# JSON всегда в UTF-8 без \uXXXX
-app.json.ensure_ascii = False  # Flask ≥ 2.2
-app.config["JSON_AS_ASCII"] = False  # совместимость
-
-@app.after_request
-def force_utf8(resp):
-    # Явно укажем кодировку для JSON, чтобы клиенты не путались
-    if resp.mimetype == "application/json":
-        resp.headers["Content-Type"] = "application/json; charset=utf-8"
-    return resp
-
-API_KEY = os.getenv("API_KEY")
-
-def require_api_key(f):
-    @wraps(f)
-    def wrapped(*a, **kw):
-        if API_KEY and (request.headers.get("X-API-Key") != API_KEY):
-            return jsonify({"error": "forbidden"}), 403
-        return f(*a, **kw)
-    return wrapped
-
-def get_db():
-    """Получить подключение к БД."""
-    return psycopg2.connect(
-        host=os.getenv("PGHOST", "127.0.0.1"),
-        port=int(os.getenv("PGPORT", "5432")),
-        user=os.getenv("PGUSER", "postgres"),
-        password=os.getenv("PGPASSWORD", "postgres"),
-        dbname=os.getenv("PGDATABASE", "wine_db"),
+# ────────────────────────────────────────────────────────────────────────────────
+# Request/Response logging and error handling
+# ────────────────────────────────────────────────────────────────────────────────
+@app.before_request
+def before_request():
+    g._started = time.perf_counter()
+    g._request_id = f"req_{int(time.time()*1000)%0xFFFFFF:06x}"
+    app.logger.info(
+        "Incoming request",
+        extra={
+            "request_id": g._request_id,
+            "method": request.method,
+            "path": request.path,
+            "query_string": request.query_string.decode("utf-8", errors="ignore"),
+            "client_ip": request.headers.get("X-Forwarded-For", request.remote_addr),
+            "user_agent": request.headers.get("User-Agent"),
+        },
     )
 
+@app.after_request
+def after_request(resp):
+    dur_ms = round((time.perf_counter() - getattr(g, "_started", time.perf_counter())) * 1000, 2)
+    app.logger.info(
+        "Request completed",
+        extra={
+            "request_id": getattr(g, "_request_id", "unknown"),
+            "method": request.method,
+            "path": request.path,
+            "status_code": resp.status_code,
+            "duration_ms": dur_ms,
+            "response_size_bytes": resp.calculate_content_length() or 0,
+        },
+    )
+    # Trace headers
+    if hasattr(g, "_request_id"):
+        resp.headers["X-Request-ID"] = g._request_id
+
+    # ❗️Ключевая правка: гарантируем Content-Type с charset для JSON
+    if resp.mimetype == "application/json" and "charset=" not in resp.content_type:
+        resp.headers["Content-Type"] = "application/json; charset=utf-8"
+
+    return resp
+
+@app.errorhandler(RateLimitExceeded)
+def handle_ratelimit(e):
+    return jsonify({
+        "error": "rate_limited",
+        "message": "Too many requests. Please retry later."
+    }), 429
+
+@app.errorhandler(Exception)
+def log_exception(exc):
+    app.logger.error(
+        "Unhandled exception",
+        extra={
+            "request_id": getattr(g, "_request_id", "unknown"),
+            "path": request.path,
+            "exception": repr(exc),
+        },
+        exc_info=True,
+    )
+    return jsonify({"error": "internal_error", "request_id": getattr(g, "_request_id", None)}), 500
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Security
+# ────────────────────────────────────────────────────────────────────────────────
+def require_api_key(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if API_KEY:
+            provided = request.headers.get("X-API-Key")
+            if provided != API_KEY:
+                app.logger.warning(
+                    "Invalid API key attempt",
+                    extra={
+                        "request_id": getattr(g, "_request_id", "unknown"),
+                        "path": request.path,
+                        "provided_key_prefix": (provided[:8] + "...") if provided else None,
+                    },
+                )
+                return jsonify({"error": "forbidden"}), 403
+        return fn(*args, **kwargs)
+    return wrapper
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ────────────────────────────────────────────────────────────────────────────────
+def _serialize_validation_error(e: ValidationError) -> dict:
+    """Превращает pydantic v2 ValidationError в JSON-безопасный словарь."""
+    # Берём только безопасные поля без ctx (там могут быть несериализуемые объекты)
+    details = [
+        {
+            "loc": err.get("loc"),
+            "msg": err.get("msg"),
+            "type": err.get("type"),
+        }
+        for err in e.errors(include_url=False)
+    ]
+    return {"error": "validation_error", "details": details}
+
+def _parse_int(name: str, default: int) -> int:
+    try:
+        v = int(request.args.get(name, default))
+        return v
+    except Exception:
+        return default
+
+def _parse_bool(name: str, default: bool = False) -> bool:
+    raw = request.args.get(name)
+    if raw is None:
+        return default
+    return str(raw).lower() in ("1", "true", "yes", "on")
+
+def _parse_date(name: str) -> Optional[date]:
+    raw = request.args.get(name)
+    if not raw:
+        return None
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except Exception:
+            pass
+    return None
+
+
+class SimpleSearchParams(BaseModel):
+    q: str | None = Field(default=None, max_length=200)
+    max_price: float | None = Field(default=None, ge=0)
+    color: str | None = Field(default=None, max_length=50)
+    region: str | None = Field(default=None, max_length=100)
+    limit: int = Field(default=10, ge=1, le=100)
+
+    @field_validator("q")
+    @classmethod
+    def q_min_len(cls, v: str | None):
+        if v is None:
+            return v
+        v2 = v.strip()
+        if v2 and len(v2) < 2:
+            raise ValueError("q must be at least 2 characters")
+        return v2 or None
+
+
+class CatalogSearchParams(BaseModel):
+    q: str | None = Field(default=None, max_length=200)
+    in_stock: bool = False
+    limit: int = Field(default=10, ge=1, le=100)
+
+    @field_validator("q")
+    @classmethod
+    def q_min_len(cls, v: str | None):
+        if v is None:
+            return v
+        v2 = v.strip()
+        if v2 and len(v2) < 2:
+            raise ValueError("q must be at least 2 characters")
+        return v2 or None
+
+
+# -------- Price / Inventory history params --------
+class PriceHistoryParams(BaseModel):
+    dt_from: Optional[date] = Field(None, alias="from")
+    dt_to: Optional[date] = Field(None, alias="to")
+    limit: int = Field(50, ge=1, le=1000)
+    offset: int = Field(0, ge=0, le=100_000)
+
+    @model_validator(mode="after")
+    def _check_range(self):
+        if self.dt_from and self.dt_to and self.dt_from > self.dt_to:
+            raise ValueError("'from' must be <= 'to'")
+        return self
+
+class InventoryHistoryParams(BaseModel):
+    dt_from: Optional[date] = Field(None, alias="from")
+    dt_to: Optional[date] = Field(None, alias="to")
+    limit: int = Field(50, ge=1, le=1000)
+    offset: int = Field(0, ge=0, le=100_000)
+
+    @model_validator(mode="after")
+    def _check_range(self):
+        if self.dt_from and self.dt_to and self.dt_from > self.dt_to:
+            raise ValueError("'from' must be <= 'to'")
+        return self
+# ────────────────────────────────────────────────────────────────────────────────
+# Health endpoints
+# ────────────────────────────────────────────────────────────────────────────────
 @app.route("/health", methods=["GET"])
+@limiter.limit(PUBLIC_LIMIT)
 def health():
     """
     Basic health check
     ---
-    tags:
-      - Health
-    summary: Simple health check endpoint
-    description: Returns OK if the API is running. Does not check database.
+    tags: [Health]
     responses:
       200:
-        description: API is running
-        schema:
-          type: object
-          properties:
-            ok:
-              type: boolean
-              example: true
-        examples:
-          application/json: {"ok": true}
+        description: OK
     """
     return jsonify({"ok": True})
 
 @app.route("/live", methods=["GET"])
+@limiter.limit(PUBLIC_LIMIT)
 def liveness():
     """
     Liveness probe
     ---
-    tags:
-      - Health
-    summary: Liveness probe for Kubernetes
-    description: |
-      Quick health check without database connection.
-      Returns API status, version, and uptime.
-      Used by Kubernetes/Docker for liveness monitoring.
+    tags: [Health]
     responses:
-      200:
-        description: API is alive
-        schema:
-          type: object
-          properties:
-            status:
-              type: string
-              example: "alive"
-            version:
-              type: string
-              example: "0.3.0"
-            uptime_seconds:
-              type: number
-              example: 3661.5
-            timestamp:
-              type: string
-              format: date-time
-              example: "2025-10-21T12:34:56.789123Z"
-        examples:
-          application/json: {
-            "status": "alive",
-            "version": "0.3.0",
-            "uptime_seconds": 3661.5,
-            "timestamp": "2025-10-21T12:34:56.789123Z"
-          }
+      200: {description: Alive}
     """
-    uptime = time.time() - app.start_time
+    now = datetime.now(timezone.utc)
     return jsonify(
         {
             "status": "alive",
-            "version": os.getenv("APP_VERSION", "unknown"),
-            "uptime_seconds": uptime,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "started_at": STARTED_AT.isoformat(),
+            "timestamp": now.isoformat(),
+            "uptime_seconds": (now - STARTED_AT).total_seconds(),
+            "version": APP_VERSION,
         }
     )
 
 @app.route("/ready", methods=["GET"])
+@limiter.limit(PUBLIC_LIMIT)
 def readiness():
     """
-    Readiness probe
+    Readiness probe — checks DB availability and basic objects.
     ---
-    tags:
-      - Health
-    summary: Readiness probe for Kubernetes
-    description: |
-      Deep health check with database validation.
-      Checks database connection, tables, indexes, and constraints.
-      Returns HTTP 503 if not ready.
+    tags: [Health]
     responses:
-      200:
-        description: API is ready
-        schema:
-          type: object
-          properties:
-            status:
-              type: string
-              example: "ready"
-            version:
-              type: string
-              example: "0.3.0"
-            response_time_ms:
-              type: number
-              example: 14.68
-            timestamp:
-              type: string
-              format: date-time
-            checks:
-              type: object
-              properties:
-                database:
-                  type: object
-                  properties:
-                    ok:
-                      type: boolean
-                    latency_ms:
-                      type: number
-                    tables:
-                      type: object
-                    indexes:
-                      type: object
-                    constraints:
-                      type: object
-      503:
-        description: API is not ready
-        schema:
-          type: object
-          properties:
-            status:
-              type: string
-              example: "not ready"
-            error:
-              type: string
+      200: {description: Ready}
+      503: {description: Not Ready}
     """
-    start_time = time.time()
+    now = datetime.now(timezone.utc)
+    start_time = time.perf_counter()
+
+    conn, err = db_connect()
+    if err or not conn:
+        app.logger.error("Readiness check failed - DB unavailable", extra={"error": err})
+        return (
+            jsonify(
+                {
+                    "status": "not_ready",
+                    "timestamp": now.isoformat(),
+                    "version": APP_VERSION,
+                    "checks": {"database": {"status": "down", "error": err}},
+                }
+            ),
+            503,
+        )
+
+    checks = {}
     try:
-        with get_db() as conn, conn.cursor() as cur:
-            # Проверка таблиц
-            cur.execute(
-                """
-                SELECT table_name
-                FROM information_schema.tables
-                WHERE table_schema = 'public'
-                  AND table_name IN
-                      ('products', 'product_prices', 'inventory',
-                       'inventory_history')
-                """
-            )
-            existing_tables = {row[0] for row in cur.fetchall()}
+        version_rows = db_query(conn, "SELECT version()")
+        pg_version = version_rows[0]["version"] if version_rows else "unknown"
 
-            # Проверка индексов
-            cur.execute(
-                """
-                SELECT indexname
-                FROM pg_indexes
-                WHERE schemaname = 'public'
-                  AND indexname IN
-                      ('products_code_idx', 'products_search_idx',
-                       'product_prices_sku_effective_from_idx')
-                """
-            )
-            existing_indexes = {row[0] for row in cur.fetchall()}
+        required_tables = ["products", "product_prices", "inventory", "inventory_history"]
+        existing_tables = db_query(
+            conn,
+            """
+            SELECT tablename FROM pg_tables
+            WHERE schemaname = 'public' AND tablename = ANY(%s)
+            """,
+            (required_tables,),
+        )
+        found_tables = [row["tablename"] for row in existing_tables]
 
-            # Проверка ограничений
-            cur.execute(
-                """
-                SELECT constraint_name
-                FROM information_schema.table_constraints
-                WHERE table_schema = 'public'
-                  AND constraint_name = 'products_pkey'
-                """
-            )
-            existing_constraints = {row[0] for row in cur.fetchall()}
+        required_indexes = [
+            "idx_inventory_code_free",
+            "idx_inventory_history_code_time",
+            "ux_product_prices_code_from",
+        ]
+        existing_indexes = db_query(
+            conn,
+            """
+            SELECT indexname FROM pg_indexes
+            WHERE schemaname = 'public' AND indexname = ANY(%s)
+            """,
+            (required_indexes,),
+        )
+        found_indexes = [row["indexname"] for row in existing_indexes]
 
-        db_latency = (time.time() - start_time) * 1000
+        required_constraints = ["chk_product_prices_nonneg"]
+        existing_constraints = db_query(
+            conn,
+            "SELECT conname FROM pg_constraint WHERE conname = ANY(%s)",
+            (required_constraints,),
+        )
+        found_constraints = [row["conname"] for row in existing_constraints]
 
-        checks = {
-            "database": {
-                "ok": True,
-                "latency_ms": round(db_latency, 2),
-                "tables": {
-                    "products": "products" in existing_tables,
-                    "product_prices": "product_prices" in existing_tables,
-                    "inventory": "inventory" in existing_tables,
-                    "inventory_history": "inventory_history" in existing_tables,
-                },
-                "indexes": {
-                    "products_code_idx": "products_code_idx" in existing_indexes,
-                    "products_search_idx": "products_search_idx" in existing_indexes,
-                    "product_prices_sku_effective_from_idx": "product_prices_sku_effective_from_idx"
-                    in existing_indexes,
-                },
-                "constraints": {"products_pkey": "products_pkey" in existing_constraints},
-            }
+        latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
+
+        checks["database"] = {
+            "status": "up",
+            "latency_ms": latency_ms,
+            "version": pg_version,
+            "tables": found_tables,
+            "indexes": found_indexes,
+            "constraints": found_constraints,
         }
 
-        response_time = (time.time() - start_time) * 1000
+        response_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
         return jsonify(
             {
                 "status": "ready",
-                "version": os.getenv("APP_VERSION", "unknown"),
-                "response_time_ms": round(response_time, 2),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": now.isoformat(),
+                "version": APP_VERSION,
                 "checks": checks,
+                "response_time_ms": response_time_ms,
             }
-        ), 200
-
+        )
     except Exception as e:
-        return jsonify(
-            {
-                "status": "not ready",
-                "version": os.getenv("APP_VERSION", "unknown"),
-                "error": str(e),
-                "checks": {"database": {"ok": False, "error": str(e)}},
-            }
-        ), 503
+        app.logger.error("Readiness check failed", extra={"error": str(e)}, exc_info=True)
+        return (
+            jsonify(
+                {
+                    "status": "not_ready",
+                    "timestamp": now.isoformat(),
+                    "version": APP_VERSION,
+                    "checks": {"database": {"status": "error", "error": str(e)}},
+                }
+            ),
+            503,
+        )
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 @app.route("/version", methods=["GET"])
+@limiter.limit(PUBLIC_LIMIT)
 def version():
     """
-    Get API version
+    Get API version & build metadata
     ---
     tags:
-      - Health
-    summary: Get API version information
-    description: Returns current API version from environment variable APP_VERSION
+      - Meta
+    summary: Get API version and build metadata
+    description: Returns application version and build metadata such as version, commit SHA and build timestamp.
+    produces:
+      - application/json
     responses:
       200:
-        description: Version information
+        description: Version info
         schema:
           type: object
           properties:
             version:
               type: string
-              example: "0.3.0"
-        examples:
-          application/json: {"version": "0.3.0"}
+              example: "0.4.0"
+            build_date:
+              type: string
+              format: date-time
+              example: "2025-11-11T12:57:36Z"
+            commit_sha:
+              type: string
+              example: "a1b2c3d"
+            python_version:
+              type: string
+              example: "3.11.9"
+            app_name:
+              type: string
+              example: "wine-assistant"
+      429:
+        description: Too many requests — rate limit exceeded
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: rate_limited
+            message:
+              type: string
+              example: Too many requests. Please retry later.
     """
-    return jsonify({"version": os.getenv("APP_VERSION", "0.3.0")})
 
+    return jsonify({"version": APP_VERSION})
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Search endpoints
+# ────────────────────────────────────────────────────────────────────────────────
 @app.route("/search", methods=["GET"])
-def search():
+@limiter.limit(PUBLIC_LIMIT)
+def simple_search():
     """
-    Search wines in catalog
+    Simple search in catalog
     ---
-    tags:
-      - Search
-    summary: Search wines by text query and filters
-    description: |
-      Public endpoint for wine search.
-      Фильтрация по **итоговой цене** (`price_final_rub`, уже с учётом скидки).
-      Текстовый поиск использует pg_trgm similarity по `search_text` и `title_en`.
+    tags: [Search]
+    summary: Simple search by query string
     parameters:
-      - name: q
-        in: query
+      - in: query
+        name: q
         type: string
-        required: false
-        description: Search query (wine name, producer, region)
-        example: "венето"
-      - name: max_price
-        in: query
+      - in: query
+        name: max_price
         type: number
-        required: false
-        description: Maximum final price in RUB
-        example: 3000
-      - name: color
-        in: query
+      - in: query
+        name: color
         type: string
-        required: false
-        description: Wine color filter
-        example: "красное"
-      - name: region
-        in: query
+      - in: query
+        name: region
         type: string
-        required: false
-        description: Region filter
-        example: "тоскана"
-      - name: style
-        in: query
-        type: string
-        required: false
-        description: Wine style filter
-        example: "сухое"
-      - name: limit
-        in: query
+      - in: query
+        name: limit
         type: integer
-        required: false
         default: 10
-        description: Maximum number of results
-        example: 10
     responses:
       200:
         description: Search results
-        schema:
-          type: object
-          properties:
-            items:
-              type: array
-              items:
-                type: object
-                properties:
-                  code: {type: string}
-                  producer: {type: string}
-                  title_ru: {type: string}
-                  title_en: {type: string}
-                  country: {type: string}
-                  region: {type: string}
-                  color: {type: string}
-                  style: {type: string}
-                  grapes: {type: string}
-                  abv: {type: number}
-                  pack: {type: string}
-                  volume: {type: string}
-                  price_list_rub: {type: number, description: "List price (before discount)"}
-                  price_final_rub: {type: number, description: "Final price (with discount applied)"}
-            query:
-              type: string
-              description: Search query that was used
+      400:
+        description: Validation error
     """
-    q = (request.args.get("q") or "").strip()
-    max_price = request.args.get("max_price", type=float)
-    color = request.args.get("color")
-    region = request.args.get("region")
-    style = request.args.get("style")
-    limit = request.args.get("limit", default=10, type=int)
+    try:
+        params = SimpleSearchParams.model_validate(request.args.to_dict(flat=True))
+    except ValidationError as e:
+        return jsonify(_serialize_validation_error(e)), 400
 
-    where = []
-    params = []
+    conn, err = db_connect()
+    if err or not conn:
+        app.logger.error("Search failed - database unavailable", extra={"error": err})
+        return jsonify({"items": [], "total": 0, "query": params.q})
 
-    if max_price is not None:
-        where.append("p.price_final_rub <= %s")
-        params.append(max_price)
-    if color:
-        where.append("p.color ILIKE %s")
-        params.append(f"%{color}%")
-    if region:
-        where.append("p.region ILIKE %s")
-        params.append(f"%{region}%")
-    if style:
-        where.append("p.style ILIKE %s")
-        params.append(f"%{style}%")
+    try:
+        clauses: list[str] = []
+        qparams: list = []
 
-    order_sql = "ORDER BY p.price_final_rub ASC, p.code ASC"
-    order_params = []
-    if q:
-        where.append("(p.search_text ILIKE %s OR COALESCE(p.title_en,'') ILIKE %s)")
-        params.extend([f"%{q}%", f"%{q}%"])
-        order_sql = "ORDER BY similarity(p.search_text, %s) DESC NULLS LAST, p.price_final_rub ASC"
-        order_params = [q]
+        if params.q:
+            clauses.append("(p.title_ru ILIKE %s OR p.producer ILIKE %s OR p.region ILIKE %s)")
+            like = f"%{params.q}%"
+            qparams.extend([like, like, like])
 
-    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
-    sql = f"""
-        SELECT
-          p.code, p.producer, p.title_ru, p.title_en,
-          p.country, p.region, p.color, p.style,
-          p.grapes, p.abv, p.pack, p.volume,
-          p.price_list_rub, p.price_final_rub
-        FROM products p
-        {where_sql}
-        {order_sql}
-        LIMIT %s
-    """
+        if params.max_price is not None:
+            clauses.append("p.price_final_rub <= %s")
+            qparams.append(params.max_price)
 
-    with get_db() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute("SET pg_trgm.similarity_threshold = 0.1;")
-        cur.execute(sql, (*params, *order_params, limit))
-        rows = cur.fetchall()
+        if params.color:
+            clauses.append("p.color ILIKE %s")
+            qparams.append(f"%{params.color}%")
 
-    return jsonify({"items": rows, "query": q})
+        if params.region:
+            clauses.append("p.region ILIKE %s")
+            qparams.append(f"%{params.region}%")
+
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+        sql = f"""
+            SELECT p.code, p.title_ru as name, p.producer, p.region, p.color,
+                   p.price_list_rub, p.price_final_rub
+            FROM public.products p
+            {where}
+            ORDER BY p.title_ru
+            LIMIT %s
+        """
+        qparams.append(params.limit)
+        rows = db_query(conn, sql, tuple(qparams))
+        return jsonify({"items": rows, "total": len(rows), "query": params.q})
+    except Exception as e:
+        app.logger.error(
+            "Search query failed",
+            extra={"error": str(e), "query": params.q, "limit": params.limit},
+            exc_info=True,
+        )
+        return jsonify({
+            "error": "search_failed",
+            "message": "Failed to execute search",
+            "items": [],
+            "total": 0,
+            "query": params.q
+        }), 500
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
 
 @app.route("/catalog/search", methods=["GET"])
+@limiter.limit(PUBLIC_LIMIT)
 def catalog_search():
     """
-    Advanced catalog search with pagination and inventory
+    Extended catalog search with pagination and stock info
     ---
-    tags:
-      - Search
-    summary: Extended search with pagination, inventory, and stock info
-    description: |
-      Расширенный поиск с пагинацией и остатками.
-      Фильтрация по **итоговой цене** (`price_final_rub`).
-      Возвращает вычисляемые поля: `stock_total`, `reserved`, `stock_free`, `in_stock`.
+    tags: [Search]
+    summary: Extended search with pagination
     parameters:
-      - name: q
-        in: query
+      - in: query
+        name: q
         type: string
-        required: false
-        description: Search query
-        example: "бароло"
-      - name: max_price
-        in: query
-        type: number
-        required: false
-        description: Maximum final price in RUB
-        example: 5000
-      - name: color
-        in: query
-        type: string
-        required: false
-        description: Wine color filter
-        example: "белое"
-      - name: region
-        in: query
-        type: string
-        required: false
-        description: Region filter
-        example: "пьемонт"
-      - name: style
-        in: query
-        type: string
-        required: false
-        description: Wine style filter
-        example: "сухое"
-      - name: grape
-        in: query
-        type: string
-        required: false
-        description: Grape variety filter
-        example: "неббиоло"
-      - name: in_stock
-        in: query
-        type: string
-        required: false
-        enum: ["true", "false"]
-        description: Filter by stock availability
-        example: "true"
-      - name: limit
-        in: query
+      - in: query
+        name: in_stock
+        type: boolean
+      - in: query
+        name: limit
         type: integer
-        required: false
-        default: 20
-        description: Maximum number of results per page
-      - name: offset
-        in: query
-        type: integer
-        required: false
-        default: 0
-        description: Number of results to skip (for pagination)
+        default: 10
     responses:
       200:
-        description: Search results with pagination
-        schema:
-          type: object
-          properties:
-            items: {type: array}
-            total: {type: integer}
-            limit: {type: integer}
-            offset: {type: integer}
-            query: {type: string}
+        description: Search results
+      400:
+        description: Validation error
     """
-    q = (request.args.get("q") or "").strip()
-    max_price = request.args.get("max_price", type=float)
-    color = request.args.get("color")
-    region = request.args.get("region")
-    style = request.args.get("style")
-    grape = request.args.get("grape")
-    in_stock = request.args.get("in_stock", type=str)  # "true"/"false"/None
-    limit = request.args.get("limit", default=20, type=int)
-    offset = request.args.get("offset", default=0, type=int)
+    try:
+        params = CatalogSearchParams.model_validate(request.args.to_dict(flat=True))
+    except ValidationError as e:
+        return jsonify(_serialize_validation_error(e)), 400
 
-    where, params = [], []
-    if max_price is not None:
-        where.append("p.price_final_rub <= %s")
-        params.append(max_price)
-    if color:
-        where.append("p.color ILIKE %s")
-        params.append(f"%{color}%")
-    if region:
-        where.append("p.region ILIKE %s")
-        params.append(f"%{region}%")
-    if style:
-        where.append("p.style ILIKE %s")
-        params.append(f"%{style}%")
-    if grape:
-        where.append("p.grapes ILIKE %s")
-        params.append(f"%{grape}%")
+    conn, err = db_connect()
+    if err or not conn:
+        app.logger.error("Catalog search failed - database unavailable", extra={"error": err})
+        return jsonify({"items": [], "total": 0, "offset": 0, "limit": params.limit, "query": params.q})
 
-    # Наличие
-    if in_stock == "true":
-        where.append("COALESCE(i.stock_free, i.stock_total, 0) > 0")
-    elif in_stock == "false":
-        where.append("COALESCE(i.stock_free, i.stock_total, 0) <= 0")
+    try:
+        clauses: list[str] = []
+        qparams: list = []
 
-    # Поиск/сортировка
-    order_sql = "ORDER BY p.price_final_rub ASC, p.code ASC"
-    order_params = []
-    if q:
-        where.append("(p.search_text ILIKE %s OR COALESCE(p.title_en,'') ILIKE %s)")
-        params.extend([f"%{q}%", f"%{q}%"])
-        order_sql = "ORDER BY similarity(p.search_text, %s) DESC NULLS LAST, p.price_final_rub ASC"
-        order_params = [q]
+        if params.q:
+            clauses.append("(p.title_ru ILIKE %s OR p.producer ILIKE %s OR p.region ILIKE %s)")
+            like = f"%{params.q}%"
+            qparams.extend([like, like, like])
 
-    where_sql = ("WHERE " + " AND ".join(where)) if where else "WHERE TRUE"
+        if params.in_stock:
+            clauses.append("i.stock_free > 0")
 
-    sql = f"""
-      SELECT
-        p.code, p.producer, p.title_ru, p.title_en,
-        p.country, p.region, p.color, p.style,
-        p.grapes, p.abv, p.pack, p.volume,
-        p.price_list_rub, p.price_final_rub,
-        COALESCE(i.stock_total, 0) AS stock_total,
-        COALESCE(i.reserved, 0)    AS reserved,
-        COALESCE(i.stock_free, COALESCE(i.stock_total,0) - COALESCE(i.reserved,0)) AS stock_free,
-        (COALESCE(i.stock_free, i.stock_total, 0) > 0) AS in_stock,
-        COUNT(*) OVER() AS total_count
-      FROM products p
-      LEFT JOIN inventory i ON i.code = p.code
-      {where_sql}
-      {order_sql}
-      LIMIT %s OFFSET %s
-    """
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
 
-    with get_db() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute("SET pg_trgm.similarity_threshold = 0.1;")
-        cur.execute(sql, (*params, *order_params, limit, offset))
-        rows = cur.fetchall()
+        sql = f"""
+            SELECT p.code, p.title_ru as name, p.producer, p.region, p.color, p.style,
+                   p.price_list_rub, p.price_final_rub,
+                   i.stock_total, i.stock_free
+            FROM public.products p
+            LEFT JOIN public.inventory i ON i.code = p.code
+            {where}
+            ORDER BY COALESCE(i.stock_free, 0) DESC, p.title_ru
+            LIMIT %s
+        """
+        qparams.append(params.limit)
 
-    total = rows[0]["total_count"] if rows else 0
-    for r in rows:
-        r.pop("total_count", None)
+        rows = db_query(conn, sql, tuple(qparams))
+        return jsonify({
+            "items": rows,
+            "total": len(rows),
+            "offset": 0,
+            "limit": params.limit,
+            "query": params.q
+        })
+    except Exception as e:
+        app.logger.error(
+            "Catalog search failed",
+            extra={"error": str(e), "query": params.q, "limit": params.limit, "in_stock": params.in_stock},
+            exc_info=True,
+        )
+        return jsonify({
+            "error": "search_failed",
+            "message": "Failed to execute catalog search",
+            "items": [],
+            "total": 0,
+            "offset": 0,
+            "limit": params.limit,
+            "query": params.q
+        }), 500
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
-    return jsonify({"items": rows, "total": total, "limit": limit, "offset": offset, "query": q})
 
+# ────────────────────────────────────────────────────────────────────────────────
+# SKU endpoints (protected if API_KEY set)
+# ────────────────────────────────────────────────────────────────────────────────
 @app.route("/sku/<code>", methods=["GET"])
-@limiter.limit(os.getenv("RATE_LIMIT_PROTECTED", "1000/hour"))
+@app.route("/api/v1/sku/<code>", methods=["GET"])
 @require_api_key
+@limiter.limit(PROTECTED_LIMIT)
 def get_sku(code: str):
     """
     Get product card by SKU code
     ---
-    tags:
-      - Products
-    summary: Get detailed product information
-    description: |
-      Возвращает карточку товара, включая обе цены и актуальную цену из истории.
-      **Требуется API-ключ** в заголовке `X-API-Key`.
-    security:
-      - ApiKeyAuth: []
+    tags: [Products]
+    security: [ { ApiKeyAuth: [] } ]
     parameters:
-      - name: code
-        in: path
-        type: string
+      - in: path
+        name: code
         required: true
-        description: Product SKU code
-        example: "D011283"
-    responses:
-      200:
-        description: Product details
-      403:
-        description: Forbidden - invalid or missing API key
-      404:
-        description: Product not found
+        type: string
     """
-    sql = """
-        SELECT
-          p.*,
-          pp.price_rub AS current_price
-        FROM products p
-        LEFT JOIN LATERAL (
-          SELECT price_rub
-          FROM product_prices
-          WHERE code = p.code AND effective_to IS NULL
-          ORDER BY effective_from DESC
-          LIMIT 1
-        ) pp ON TRUE
-        WHERE p.code = %s
-    """
-    with get_db() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(sql, (code,))
-        row = cur.fetchone()
-        if not row:
+    conn, err = db_connect()
+    if err or not conn:
+        app.logger.error("SKU lookup failed - DB unavailable", extra={"error": err, "code": code})
+        return jsonify({"error": "not_found"}), 404
+
+    try:
+        rows = db_query(
+            conn,
+            """
+            SELECT p.code, p.title_ru AS name, p.producer, p.region, p.color, p.style,
+                   p.price_list_rub, p.price_final_rub,
+                   COALESCE(i.stock_total, 0) AS stock_total,
+                   COALESCE(i.stock_free, 0)  AS stock_free
+            FROM public.products p
+            LEFT JOIN public.inventory i ON i.code = p.code
+            WHERE p.code = %s
+            """,
+            (code,),
+        )
+        if not rows:
+            app.logger.info("SKU not found", extra={"code": code})
             return jsonify({"error": "not_found"}), 404
-        return jsonify(row)
+        return jsonify(rows[0])
+    except Exception as e:
+        app.logger.error("SKU lookup failed", extra={"error": str(e), "code": code}, exc_info=True)
+        return jsonify({"error": "internal_error"}), 500
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 @app.route("/sku/<code>/price-history", methods=["GET"])
-@limiter.limit(os.getenv("RATE_LIMIT_PROTECTED", "1000/hour"))
+@app.route("/api/v1/sku/<code>/price-history", methods=["GET"])
 @require_api_key
+@limiter.limit(PROTECTED_LIMIT)
 def price_history(code: str):
     """
     Get price history for SKU
     ---
-    tags:
-      - Products
-    summary: Get historical price changes
-    description: |
-      Возвращает историю цен из `product_prices`.
-      **Требуется API-ключ**.
-    security:
-      - ApiKeyAuth: []
+    tags: [Products]
+    security: [ { ApiKeyAuth: [] } ]
     parameters:
-      - name: code
-        in: path
-        type: string
+      - in: path
+        name: code
         required: true
-        description: Product SKU code
-        example: "D011283"
-      - name: from
-        in: query
+        type: string
+      - in: query
+        name: from
         type: string
         format: date
-        required: false
-        description: Start date (YYYY-MM-DD)
-        example: "2025-01-01"
-      - name: to
-        in: query
+      - in: query
+        name: to
         type: string
         format: date
-        required: false
-        description: End date (YYYY-MM-DD)
-        example: "2025-01-31"
-      - name: limit
-        in: query
+      - in: query
+        name: limit
         type: integer
-        required: false
         default: 50
-        description: Maximum number of records
-      - name: offset
-        in: query
+      - in: query
+        name: offset
         type: integer
-        required: false
         default: 0
-        description: Number of records to skip
-    responses:
-      200:
-        description: Price history records
-      403:
-        description: Forbidden - invalid or missing API key
     """
-    limit = request.args.get("limit", default=50, type=int)
-    offset = request.args.get("offset", default=0, type=int)
-    frm = request.args.get("from")
-    to = request.args.get("to")
+    try:
+        params = PriceHistoryParams.model_validate(
+            request.args.to_dict(flat=True))
+    except ValidationError as e:
+        return jsonify(_serialize_validation_error(e)), 400
 
-    where, params = ["code = %s"], [code]
-    if frm:
-        where.append("effective_from >= %s")
-        params.append(frm)
-    if to:
-        where.append("effective_from < %s::timestamp + interval '1 day'")
-        params.append(to)
+    conn, err = db_connect()
+    if err or not conn:
+        app.logger.error(
+            f"Price history failed - database unavailable: {code}",
+            extra={"error": err})
+        return jsonify({"items": [], "total": 0, "code": code})
 
-    where_sql = "WHERE " + " AND ".join(where)
+    try:
+        clauses = ["code = %s"]
+        sql_params: list = [code]
 
-    # nosemgrep: python.flask.security.injection.tainted-sql-string.tainted-sql-string
-    sql = """
-          SELECT price_rub, effective_from, effective_to
-          FROM product_prices
-          {}
-          ORDER BY effective_from DESC
-          LIMIT %s OFFSET %s
-        """.format(where_sql)
+        if params.dt_from:
+            clauses.append("effective_from::date >= %s")
+            sql_params.append(params.dt_from)
+        if params.dt_to:
+            clauses.append("effective_from::date <= %s")
+            sql_params.append(params.dt_to)
 
-    with get_db() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(sql, (*params, limit, offset))
-        rows = cur.fetchall()
-    return jsonify({"code": code, "items": rows, "limit": limit, "offset": offset})
+        where = " AND ".join(clauses)
+        sql = f"""
+            SELECT code, price_rub, effective_from, effective_to
+            FROM public.product_prices
+            WHERE {where}
+            ORDER BY effective_from DESC
+            LIMIT %s OFFSET %s
+        """
+        sql_params.extend([params.limit, params.offset])
+
+        rows = db_query(conn, sql, tuple(sql_params))
+        return jsonify({
+            "items": rows,
+            "total": len(rows),
+            "code": code,
+            "limit": params.limit,
+            "offset": params.offset
+        })
+    except Exception as e:
+        app.logger.error(
+            f"Price history lookup failed: {code}",
+            extra={"error": str(e), "from": params.dt_from,
+                   "to": params.dt_to},
+            exc_info=True,
+        )
+        return jsonify({
+            "error": "query_failed",
+            "items": [], "total": 0, "code": code,
+            "limit": params.limit, "offset": params.offset
+        }), 500
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 @app.route("/sku/<code>/inventory-history", methods=["GET"])
-@limiter.limit(os.getenv("RATE_LIMIT_PROTECTED", "1000/hour"))
+@app.route("/api/v1/sku/<code>/inventory-history", methods=["GET"])
 @require_api_key
+@limiter.limit(PROTECTED_LIMIT)
 def inventory_history(code: str):
     """
     Get inventory history for SKU
     ---
-    tags:
-      - Products
-    summary: Get historical inventory changes
-    description: |
-      Возвращает историю остатков из `inventory_history`.
-      **Требуется API-ключ**.
-    security:
-      - ApiKeyAuth: []
+    tags: [Products]
+    security: [ { ApiKeyAuth: [] } ]
     parameters:
-      - name: code
-        in: path
-        type: string
+      - in: path
+        name: code
         required: true
-        description: Product SKU code
-        example: "D011283"
-      - name: from
-        in: query
+        type: string
+      - in: query
+        name: from
         type: string
         format: date
-        required: false
-        description: Start date (YYYY-MM-DD)
-      - name: to
-        in: query
+      - in: query
+        name: to
         type: string
         format: date
-        required: false
-        description: End date (YYYY-MM-DD)
-      - name: limit
-        in: query
+      - in: query
+        name: limit
         type: integer
-        required: false
         default: 50
-        description: Maximum number of records
-      - name: offset
-        in: query
+      - in: query
+        name: offset
         type: integer
-        required: false
         default: 0
-        description: Number of records to skip
-    responses:
-      200:
-        description: Inventory history records
-      403:
-        description: Forbidden - invalid or missing API key
     """
-    limit = request.args.get("limit", default=50, type=int)
-    offset = request.args.get("offset", default=0, type=int)
-    frm = request.args.get("from")
-    to = request.args.get("to")
+    try:
+        params = InventoryHistoryParams.model_validate(
+            request.args.to_dict(flat=True))
+    except ValidationError as e:
+        return jsonify(_serialize_validation_error(e)), 400
 
-    where, params = ["code = %s"], [code]
-    if frm:
-        where.append("as_of >= %s")
-        params.append(frm)
-    if to:
-        where.append("as_of < %s::timestamp + interval '1 day'")
-        params.append(to)
+    conn, err = db_connect()
+    if err or not conn:
+        app.logger.error(
+            f"Inventory history failed - database unavailable: {code}",
+            extra={"error": err})
+        return jsonify({"items": [], "total": 0, "code": code})
 
-    where_sql = "WHERE " + " AND ".join(where)
+    try:
+        clauses = ["code = %s"]
+        sql_params: list = [code]
 
-    # nosemgrep: python.flask.security.injection.tainted-sql-string.tainted-sql-string
-    sql = """
-          SELECT stock_total, reserved, stock_free, as_of
-          FROM inventory_history
-          {}
-          ORDER BY as_of DESC
-          LIMIT %s OFFSET %s
-        """.format(where_sql)
+        if params.dt_from:
+            clauses.append("as_of::date >= %s")
+            sql_params.append(params.dt_from)
+        if params.dt_to:
+            clauses.append("as_of::date <= %s")
+            sql_params.append(params.dt_to)
 
-    with get_db() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(sql, (*params, limit, offset))
-        rows = cur.fetchall()
-    return jsonify({"code": code, "items": rows, "limit": limit, "offset": offset})
+        where = " AND ".join(clauses)
+        sql = f"""
+            SELECT code, stock_total, reserved, stock_free, as_of
+            FROM public.inventory_history
+            WHERE {where}
+            ORDER BY as_of DESC
+            LIMIT %s OFFSET %s
+        """
+        sql_params.extend([params.limit, params.offset])
 
+        rows = db_query(conn, sql, tuple(sql_params))
+        return jsonify({
+            "items": rows,
+            "total": len(rows),
+            "code": code,
+            "limit": params.limit,
+            "offset": params.offset
+        })
+    except Exception as e:
+        app.logger.error(
+            f"Inventory history lookup failed: {code}",
+            extra={"error": str(e), "from": params.dt_from,
+                   "to": params.dt_to},
+            exc_info=True,
+        )
+        return jsonify({
+            "error": "query_failed",
+            "items": [], "total": 0, "code": code,
+            "limit": params.limit, "offset": params.offset
+        }), 500
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Entrypoint (dev only; production uses Gunicorn with api.wsgi:app)
+# ────────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    port = int(os.getenv("PORT", "8000"))
     debug = os.getenv("FLASK_DEBUG", "0") == "1"
-    host = os.getenv("FLASK_HOST", "127.0.0.1")
-    port = int(os.getenv("FLASK_PORT", "8000"))
-    app.run(host=host, port=port, debug=debug)
+    host = os.getenv("FLASK_HOST", "127.0.0.1")  # безопасный дефолт
+    # Явно разрешить внешний биндинг можно FLASK_HOST=0.0.0.0 (например, в докере)
+    if host == "0.0.0.0":
+        print("⚠️  Dev server is exposed on 0.0.0.0 — ensure this is intentional.")
+
+    if debug:
+        app.logger.warning(
+            "Running in DEBUG mode with Flask development server. DO NOT use this in production!"
+        )
+
+    app.run(host="127.0.0.1", port=port, debug=debug)
