@@ -978,4 +978,4 @@ if __name__ == "__main__":
             "Running in DEBUG mode with Flask development server. DO NOT use this in production!"
         )
 
-    app.run(host="127.0.0.1", port=port, debug=debug)
+    app.run(host=host, port=port, debug=debug)
