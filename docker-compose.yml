@@ -7,7 +7,7 @@ services:
     environment:
       TZ: Europe/Moscow
       POSTGRES_USER: ${DB_USER:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-dev_local_pw}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
       POSTGRES_DB: ${DB_NAME:-wine_db}
     ports:
       - "127.0.0.1:${DB_PORT_OUT:-15432}:5432"
@@ -32,7 +32,7 @@ services:
       DB_HOST: ${DB_HOST:-db}
       DB_PORT: ${DB_PORT:-5432}
       DB_USER: ${DB_USER:-postgres}
-      DB_PASSWORD: ${DB_PASSWORD:-dev_local_pw}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
       DB_NAME: ${DB_NAME:-wine_db}
     entrypoint: [ "bash", "/migrations/migrate.sh" ]
     volumes:
@@ -55,8 +55,9 @@ services:
       DB_HOST: ${DB_HOST:-db}
       DB_PORT: ${DB_PORT:-5432}
       DB_USER: ${DB_USER:-postgres}
-      DB_PASSWORD: ${DB_PASSWORD:-dev_local_pw}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
       DB_NAME: ${DB_NAME:-wine_db}
+      API_KEY: ${API_KEY}
     ports:
       - "127.0.0.1:${API_PORT_OUT:-18000}:8000"
     # Healthcheck по /ready (можно поменять на /live)
