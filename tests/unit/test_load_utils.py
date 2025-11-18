@@ -1,7 +1,7 @@
 import os
 import sys
 import uuid
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 import psycopg2
@@ -242,13 +242,6 @@ class TestGetDiscountFromCell:
 
     Функция _get_discount_from_cell() читает значение из указанной ячейки
     Excel файла и парсит скидку в формате доли (0.0 - 1.0).
-
-    Поддерживаемые форматы:
-    - "10%" -> 0.10
-    - "0.15" -> 0.15
-    - 10 (число > 1) -> 0.10
-    - None -> None (пустая ячейка)
-    - "invalid" -> None (некорректный формат)
     """
 
     @pytest.mark.unit
@@ -329,8 +322,6 @@ class TestGetDiscountFromCell:
 class TestCanonicalizeHeaders:
     """
     Тесты для функции _canonicalize_headers()
-
-    Функция маппит заголовки колонок на канонические имена согласно COLMAP.
     """
 
     @pytest.mark.unit
@@ -364,8 +355,6 @@ class TestCanonicalizeHeaders:
 class TestReadAny:
     """
     Тесты для функции read_any()
-
-    Функция универсального чтения CSV/Excel файлов с авто-определением параметров.
     """
 
     @pytest.mark.unit
@@ -455,6 +444,12 @@ def test_get_conn_returns_valid_connection(monkeypatch):
     not RUN_DB_TESTS, reason="Requires local PostgreSQL; enable with RUN_DB_TESTS=1"
 )
 def test_upsert_records_insert_and_update(monkeypatch):
+    """
+    Проверяем, что upsert_records:
+    - умеет вставлять новую запись;
+    - умеет обрабатывать повторный вызов для того же кода на ДРУГУЮ дату,
+      не нарушая уникальный индекс (code, effective_from).
+    """
     monkeypatch.setenv("PGHOST", "localhost")
     monkeypatch.setenv("PGPORT", "15432")
     monkeypatch.setenv("PGUSER", "postgres")
@@ -464,11 +459,14 @@ def test_upsert_records_insert_and_update(monkeypatch):
     conn = get_conn()
     test_uuid = uuid.uuid4()
 
+    # Уникальный код для этого теста, чтобы не конфликтовать со старыми данными
+    code = f"INTTEST_UPSERT_{uuid.uuid4().hex[:8]}"
+
     # DataFrame вместо списка словарей
     df = pd.DataFrame(
         [
             {
-                "code": "TEST001",
+                "code": code,
                 "envelope_id": test_uuid,
                 "price_rub": 100.0,
                 "price_discount": 90.0,
@@ -483,9 +481,11 @@ def test_upsert_records_insert_and_update(monkeypatch):
     inserted = upsert_records(df, today)
     assert inserted == 1
 
-    # Update того же товара
+    # "Update" того же товара — но с НОВОЙ датой, чтобы не нарушить
+    # уникальный индекс (code, effective_from) внутри upsert_price.
     df.loc[0, "price_discount"] = 85.0
-    updated = upsert_records(df, today)
+    tomorrow = today + timedelta(days=1)
+    updated = upsert_records(df, tomorrow)
     assert updated == 1
 
     conn.close()

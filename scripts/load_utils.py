@@ -482,10 +482,23 @@ def upsert_records(df: pd.DataFrame, asof: date | datetime):
                 try:
                     eff_num = float(eff)
                     if math.isfinite(eff_num):
-                        cur.execute("SELECT upsert_price(%s, %s, %s);", (code, eff_num, asof_dt))
+                        cur.execute(
+                            "SELECT upsert_price(%s, %s, %s);",
+                            (code, eff_num, asof_dt),
+                        )
                         price_hist += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger = logging.getLogger(__name__)
+                    logger.exception(
+                        "upsert_price failed for code=%s eff=%r asof=%s",
+                        code,
+                        eff,
+                        asof_dt,
+                    )
+                    # Пробрасываем ошибку дальше — транзакция откатится,
+                    # а load_csv.main() зафиксирует failed-импорт
+                    raise
+
 
             if any(r.get(k) is not None for k in ("stock_total", "reserved", "stock_free")):
                 cur.execute(
