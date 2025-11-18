@@ -29,14 +29,15 @@ services:
         condition: service_healthy
     environment:
       TZ: Europe/Moscow
-      DB_HOST: ${DB_HOST:-db}
-      DB_PORT: ${DB_PORT:-5432}
+      # ВАЖНО: всегда ходим по внутреннему адресу db:5432, а не localhost:15432
+      DB_HOST: db
+      DB_PORT: 5432
       DB_USER: ${DB_USER:-postgres}
       DB_PASSWORD: ${DB_PASSWORD:-postgres}
       DB_NAME: ${DB_NAME:-wine_db}
-    entrypoint: [ "bash", "/migrations/migrate.sh" ]
     volumes:
       - ./db:/migrations:ro
+    entrypoint: ["bash", "/migrations/migrate.sh"]
     restart: "no"
 
   api:
@@ -52,15 +53,15 @@ services:
         condition: service_completed_successfully
     environment:
       TZ: Europe/Moscow
-      DB_HOST: ${DB_HOST:-db}
-      DB_PORT: ${DB_PORT:-5432}
+      # Тоже жёстко db:5432, чтобы не зависеть от внешних DB_HOST/DB_PORT
+      DB_HOST: db
+      DB_PORT: 5432
       DB_USER: ${DB_USER:-postgres}
       DB_PASSWORD: ${DB_PASSWORD:-postgres}
       DB_NAME: ${DB_NAME:-wine_db}
       API_KEY: ${API_KEY}
     ports:
       - "127.0.0.1:${API_PORT_OUT:-18000}:8000"
-    # Healthcheck по /ready (можно поменять на /live)
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/ready || exit 1"]
       interval: 5s
