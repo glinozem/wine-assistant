@@ -1,8 +1,8 @@
 # Wine Assistant — API & ETL для прайс-листа вина
 
 [![CI](https://github.com/glinozem/wine-assistant/actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml)
-[![Semgrep](https://github.com/glinozem/wine-assistant/actions/workflows/semgrep.yml/badge.svg)](../../actions/workflows/semgrep.yml)
-[![Secrets](https://github.com/glinozem/wine-assistant/actions/workflows/secrets.yml/badge.svg)](../../actions/workflows/secrets.yml)
+[![Semgrep](https://github.com/glinozem/wine-assistant/actions/w...ows/semgrep.yml/badge.svg)](../../actions/workflows/semgrep.yml)
+[![Secrets](https://github.com/glinozem/wine-assistant/actions/w...ows/secrets.yml/badge.svg)](../../actions/workflows/secrets.yml)
 
 Небольшой учебный проект: REST-API для работы с прайс-листом вина + ETL-скрипт для загрузки данных из Excel/CSV в PostgreSQL.
 Проект используется как «песочница» для практики по:
@@ -13,222 +13,314 @@
 * CI/CD (GitHub Actions, Semgrep, pip-audit, secret-scan)
 * постепенному «оживлению» продукта через Roadmap и спринты.
 
-**Текущий статус:** учебный pet-project, активно дорабатывается. См. подробный Roadmap: [`docs/ROADMAP_v3_RU.md`](docs/ROADMAP_v3_RU.md).
+**Текущий статус:** учебный pet-project, активно дорабатывается.
+Подробный Roadmap: [`docs/ROADMAP_v3_RU.md`](docs/ROADMAP_v3_RU.md).
 
 ---
 
-## TL;DR — как быстро запустить
+## Архитектура и компоненты
 
-### Вариант A. Всё через Docker Compose (рекомендовано)
+Проект состоит из нескольких частей:
 
-Требуется: Docker + Docker Compose.
+1. **REST API (Flask)** — выдаёт информацию о винах и ценах:
+   * поиск по названию / фильтрам,
+   * получение карточки SKU,
+   * история цен по SKU.
+2. **ETL-скрипт `load_csv`** — парсит Excel/CSV прайс-лист поставщика и грузит данные в PostgreSQL:
+   * нормализует названия колонок,
+   * приводит типы,
+   * пишет историю цен в отдельную таблицу,
+   * обеспечивает идемпотентность загрузки (по SHA‑256 файла).
+3. **PostgreSQL** — основная БД проекта.
+4. **Docker Compose** — поднимает API и БД в локальном окружении.
+5. **Набор тестов** — unit + integration, проверяют как бизнес-логику, так и end‑to‑end сценарии.
 
-```bash
-git clone https://github.com/glinozem/wine-assistant.git
-cd wine-assistant
+Из важных сущностей в БД:
 
-# 1. Создаём .env на основе примера
-cp .env.example .env
-# при необходимости поправьте пароли/порты
-
-# 2. Поднимаем всё окружение
-docker compose up -d --build
-
-# 3. Проверяем API
-curl http://localhost:8080/api/v1/health/live
-curl http://localhost:8080/api/v1/health/ready
-```
-
-* API слушает на `http://localhost:8080`
-* Swagger-UI (Flasgger) доступен по адресу: `http://localhost:8080/apidocs/`
-* PostgreSQL разворачивается в контейнере `wine-assistant-db`
-* Миграции применяются скриптом `db/migrate.sh` во время CI и локально.
+* `products` — каталог товаров (SKU, производитель, название, страна, объём, алкоголь, текущие цены и т.д.).
+* `product_prices` — история цен по каждому SKU с полями `effective_from` / `effective_to`.
+* `ingest_envelope` — «конверт» загрузки одного файла (SHA‑256, статус, ошибки и т.п.).
+* `price_list` — заголовок прайс-листа (дата действия, глобальная скидка, связь с `ingest_envelope`).
 
 ---
 
-### Вариант B. Локальный запуск API (без Docker)
+## Быстрый старт (через Docker Compose)
+
+Требуется: Docker / Docker Desktop и docker compose.
+
+1. Клонируйте репозиторий и перейдите в каталог проекта:
+
+   ```bash
+   git clone https://github.com/glinozem/wine-assistant.git
+   cd wine-assistant
+   ```
+
+2. Создайте `.env` на основе примера:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   В `.env` задаются, в том числе:
+
+   ```env
+   # Параметры БД для API и скриптов
+   DB_HOST=db
+   DB_PORT=5432
+   DB_NAME=wine_db
+   DB_USER=postgres
+   DB_PASSWORD=postgres
+
+   # API key для защищённых эндпоинтов
+   API_KEY=your-secret-api-key-minimum-32-chars
+   ```
+
+3. Поднимите контейнеры:
+
+   ```bash
+   docker compose up -d
+   ```
+
+   После этого:
+
+   * API будет доступно по адресу: `http://localhost:18000`
+   * health‑эндпоинты:
+     ```bash
+     curl http://localhost:18000/health
+     curl http://localhost:18000/ready
+     ```
+   * PostgreSQL будет доступна на хосте `localhost`, порт `15432` (проброшен из контейнера `db`).
+
+4. Настройте переменные окружения для доступа к БД **с хоста** (пример для PowerShell):
+
+   ```powershell
+   $env:PGHOST      = "localhost"
+   $env:PGPORT      = "15432"
+   $env:PGDATABASE  = "wine_db"
+   $env:PGUSER      = "postgres"
+   $env:PGPASSWORD  = "postgres"
+   ```
+
+   В Linux/macOS это те же переменные через `export`:
+
+   ```bash
+   export PGHOST=localhost
+   export PGPORT=15432
+   export PGDATABASE=wine_db
+   export PGUSER=postgres
+   export PGPASSWORD=postgres
+   ```
+
+5. Проверка подключения к БД:
+
+   ```bash
+   psql -c "SELECT 1;"
+   ```
+
+6. Проверка основных таблиц (пример):
+
+   ```bash
+   psql -c "\dt"
+   ```
+
+---
+
+## Локальный запуск без Docker
 
 Требуется: Python 3.11+ и локальная PostgreSQL.
 
-```bash
-git clone https://github.com/glinozem/wine-assistant.git
-cd wine-assistant
+1. Клонируйте проект:
 
-python -m venv .venv
-source .venv/bin/activate           # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+   ```bash
+   git clone https://github.com/glinozem/wine-assistant.git
+   cd wine-assistant
+   ```
 
-# Настраиваем окружение для подключения к БД
-cp .env.example .env
-# правим .env под вашу локальную PostgreSQL
+2. Создайте и активируйте виртуальное окружение:
 
-# Запуск дев-сервера Flask
-FLASK_ENV=development flask --app app.py run
-# API: http://127.0.0.1:5000
-# Swagger: http://127.0.0.1:5000/apidocs/
-```
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate      # Linux/macOS
+   # или
+   .venv\Scripts\Activate.ps1   # Windows PowerShell
+   ```
 
-Для production-режима в контейнере используется `gunicorn` c WSGI-обёрткой `wsgi.py`.
+3. Установите зависимости:
 
----
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-## Архитектура и основные компоненты
+4. Настройте локальную PostgreSQL (создайте базу `wine_db`) и выставьте переменные окружения:
 
-Проект условно состоит из трёх частей:
+   ```bash
+   export PGHOST=localhost
+   export PGPORT=5432
+   export PGDATABASE=wine_db
+   export PGUSER=postgres
+   export PGPASSWORD=postgres
+   ```
 
-1. **REST-API (`app.py`, `wsgi.py`)**
-   * Flask + Flasgger
-   * Версионирование: `/api/v1/...`
-   * Health-эндпоинты:
-     * `GET /api/v1/health/live`
-     * `GET /api/v1/health/ready`
-   * Работа с товарами:
-     * `GET /api/v1/products` — список товаров с пагинацией и сортировкой
-     * `GET /api/v1/products/{code}` — карточка товара по коду
-     * `GET /api/v1/products/search` — поиск по коду/названию/стране и т.п.
+   или через `.env` / системные средства конфигурации.
 
-2. **ETL-скрипты для прайс-листа (`scripts/`)**
-   * `scripts/load_csv.py` — основная утилита для загрузки CSV/Excel в БД
-   * `scripts/load_utils.py` — вспомогательные функции:
-     * чтение CSV/Excel
-     * нормализация колонок и цен
-     * upsert в таблицы PostgreSQL
-     * работа с «конвертами» загрузки (audit трейл)
-   * `scripts/date_extraction.py` — извлечение даты прайс-листа из имени/содержимого файла
+5. Примените миграции (если они есть в каталоге `db/`):
 
-3. **Инфраструктура**
-   * `docker-compose.yml` — API + PostgreSQL + Adminer
-   * `db/` — SQL-скрипты и миграции
-     * `db/migrate.sh` — универсальный скрипт для применения миграций
-   * `.github/workflows/` — CI-workflow’ы
+   ```bash
+   bash db/migrate.sh
+   ```
+
+6. Запустите API локально:
+
+   ```bash
+   flask --app app run --port 18000
+   ```
+
+   После этого API будет доступно на `http://localhost:18000`.
 
 ---
 
-## Конфигурация базы данных
+## Структура каталогов
 
-Подключение к PostgreSQL настраивается через переменные окружения:
+Кратко по основным каталогам:
 
-**Для API и ETL:**
-
-```bash
-DB_HOST=127.0.0.1
-DB_PORT=5432
-DB_NAME=wine_db
-DB_USER=postgres
-DB_PASSWORD=postgres
+```text
+.
+├── app/                  # Flask-приложение и API
+│   ├── routes/           # маршруты и обработчики
+│   ├── models/           # модели БД
+│   └── ...
+├── scripts/              # ETL-скрипты (load_csv, утилиты и т.д.)
+├── db/                   # SQL-миграции, вспомогательные скрипты
+├── tests/                # unit- и integration-тесты
+│   ├── unit/
+│   └── integration/
+├── docs/                 # Roadmap, заметки, вспомогательная документация
+└── ...
 ```
 
-**Для утилит psql / скриптов миграций (PG-переменные):**
+Основные файлы:
 
-```bash
-PGHOST=localhost
-PGPORT=5432
-PGUSER=postgres
-PGPASSWORD=postgres
-PGDATABASE=wine_db
-```
-
-В Docker Compose значения берутся из `.env`.
-В коде всё читается через `scripts.load_utils.get_conn()`, который:
-
-* собирает конфиг подключения из `DB_*` и/или `PG*`
-* выставляет `connect_timeout`
-* даёт понятные сообщения об ошибках при недоступности БД.
+* `scripts/load_csv.py` — точка входа для загрузки прайс‑листа.
+* `scripts/load_utils.py` — общие вспомогательные функции ETL (подключение к БД, upsert и т.п.).
+* `app/routes/products.py` — основные эндпоинты по товарам и ценам.
 
 ---
-
-### Как работает migrator и подключение к БД (localhost vs `db`)
-
-В проекте есть отдельный сервис **`migrator`**, который отвечает за применение SQL-миграций к PostgreSQL.
-Он запускается автоматически при `docker compose up` и выполняет скрипты из каталога `db/`.
-
-**Внутри Docker-сети (контейнеры `api`, `migrator`, `adminer`)**
-
-- Сервис PostgreSQL в `docker-compose.yml` называется `db`.
-- Поэтому внутри сети БД доступна по адресу `db:5432`.
-- В `.env` для контейнеров используются значения по умолчанию:
-  - `DB_HOST=db`, `DB_PORT=5432`
-  - `PGHOST=db`, `PGPORT=5432`
-- Контейнер `migrator`:
-  - ждёт готовности БД через `pg_isready`,
-  - применяет `db/init.sql`,
-  - затем последовательно выполняет все файлы из `db/migrations/*.sql`,
-  - записывает применённые миграции в служебную таблицу (`schema_migrations`).
-
-**С хоста (pytest, psql, локальные скрипты)**
-
-- Порт PostgreSQL проброшен наружу как `127.0.0.1:15432` (см. `DB_PORT_OUT` в `docker-compose.yml`).
-- При запуске тестов или ETL-скриптов с хоста нужно подключаться к БД через `localhost:15432`, например:
-
-  ```bash
-  export DB_HOST=localhost
-  export DB_PORT=15432
-
-  export PGHOST=localhost
-  export PGPORT=15432
-  export PGUSER=postgres
-  export PGPASSWORD=postgres
-  export PGDATABASE=wine_db
-  ```
-
-- Именно с такими настройками в примерах в разделах про тестирование и локальный запуск ETL контейнерная БД становится доступна из вашей локальной среды.
-
-**Что важно помнить**
-
-- `.env.example` по умолчанию ориентирован на запуск **внутри Docker** (хост БД — `db`).
-- Когда запускаешь что-то **с хоста** (pytest, `python -m scripts.load_csv`, psql):
-  - переопредели `DB_HOST/DB_PORT` и/или `PGHOST/PGPORT` в текущей shell-сессии,
-  - эти значения будут иметь приоритет над тем, что прописано в `.env`,
-  - в итоге и контейнеры, и локальные тесты работают с одной и той же БД в контейнере `db`.
 
 ## Загрузка прайс-листа в БД
 
-Основной сценарий: загрузить CSV/Excel с колонками вида `Код`, `Цена`, `Скидка %` и т.п. в PostgreSQL.
+Основной сценарий: есть Excel/CSV-файл от поставщика, нужно загрузить его в БД, сохранив историю цен.
 
-### Пример запуска из контейнера
+### Поддерживаемые форматы и колоноки
+
+Скрипт `load_csv` умеет читать:
+
+* `.xlsx` (Excel)
+* `.csv` (разделитель — `;` или `,`, кодировка auto-detect)
+
+Входной файл должен содержать как минимум **одну колонку с кодом товара**.
+Поддерживаются различные варианты названий, например:
+
+* `Код`
+* `Артикул`
+* `Code`
+* `SKU`
+
+Их все нормализует `_canonicalize_headers()`.
+
+Для цен поддерживаются варианты:
+
+* `Цена`
+* `Цена прайс`
+* `Цена, руб.`
+* `Price`
+* и т.д.
+
+Колонка с ценой со скидкой может называться, например, `Цена со скидкой`, `Цена со скидкой 10%` и т.п.
+
+### Пример запуска ETL
 
 ```bash
-# контейнер api уже запущен через docker compose up
-docker compose exec -T api \
-  python -m scripts.load_csv \
-  --csv ./data/example_price_list.csv
+# через модульный вызов
+python -m scripts.load_csv --csv path/to/price.xlsx
+
+# или напрямую
+python scripts/load_csv.py --csv path/to/price.xlsx
 ```
 
-### Пример запуска локально
+Скрипт:
 
-```bash
-# в активированном .venv
-export DB_HOST=127.0.0.1
-export DB_PORT=15432
-export DB_NAME=wine_db
-export DB_USER=postgres
-export DB_PASSWORD=postgres
+1. Определяет формат файла и читает данные в DataFrame.
+2. Нормализует заголовки (на русском и английском).
+3. Приводит типы (цены -> float, объём/градусы -> float, остатки -> int).
+4. Создаёт «конверт» (`ingest_envelope`) для файла.
+5. Заполняет `price_list` на основе даты и скидки.
+6. Обновляет `products` и `product_prices` (создавая новый шаг истории цен).
 
-python -m scripts.load_csv --csv path/to/your_price_list.csv
+После успешного импорта в stdout печатается краткий отчёт:
+
+```text
+[OK] Import completed successfully
+   Envelope ID: <uuid>
+   Rows processed: <N>
+   Effective date: YYYY-MM-DD
 ```
 
-Что делает скрипт:
+### История цен и `product_prices`
 
-1. Читает файл, пытается определить:
-   * разделитель (`;`, `,`, табуляция)
-   * колонку кода товара
-   * колонку цены в рублях
-   * колонку скидки (если есть)
-2. Создаёт «конверт» загрузки (`price_list_envelopes`) с метаданными:
-   * имя файла
-   * дата прайс-листа (пытается вытащить автоматически)
-   * хеш файла (SHA-256) для защиты от повторной загрузки одного и того же файла
-3. Делает upsert в таблицы:
-   * товары (`products`)
-   * цены (`product_prices`)
-   * история (`inventory_history` при необходимости)
-4. Обновляет статус конверта (`imported` / `failed`) и пишет количество вставленных строк.
+Таблица `product_prices` хранит историю изменения цен:
+
+* `code` — SKU
+* `price_rub` — цена на момент действия
+* `effective_from` — дата/время, с которой действует цена
+* `effective_to` — дата/время, до которой действует цена (или `NULL`, если это текущая цена)
+
+Скрипт использует хранимую процедуру `upsert_price(code, price_rub, effective_from)`, которая:
+
+* закрывает предыдущий открытый период (`effective_to`),
+* создаёт новый шаг с `effective_from = <дата прайса>` и `effective_to = NULL`,
+* учитывает уникальный индекс `(code, effective_from)`.
+
+### Идемпотентность загрузки прайс-листов
+
+Скрипт `load_csv` считает SHA‑256 от содержимого файла и записывает его
+в `ingest_envelope.file_sha256`. Если точно такой же файл уже грузился
+раньше (такая же SHA‑256), повторная загрузка пропускается.
+
+Проверка реализована в коде и покрыта интеграционными тестами.
+
+Если файл изменился хотя бы на один байт, SHA‑256 будет другой и новый
+прайс‑лист будет обработан как новый «конверт».
 
 ### Поведение при ошибках
 
 * Отсутствует колонка кода товара — выбрасывается `ValueError`, конверт помечается как `failed`.
-* Файл с таким же SHA-256 уже загружен — операция пропускается, логика проверяется тестами.
+* Файл с таким же SHA‑256 уже загружен — операция пропускается, логика проверяется тестами.
 * Любые ошибки БД аккуратно логируются.
+
+---
+
+## Аутентификация и API_KEY
+
+Часть эндпоинтов API (например, `/api/v1/sku/<code>` и `/api/v1/sku/<code>/price-history`) защищены простым API‑ключом.
+
+1. Сгенерируйте ключ и пропишите его в `.env`:
+
+   ```bash
+   python -c "import secrets; print(secrets.token_urlsafe(32))"
+   ```
+
+   ```env
+   API_KEY=your-secret-api-key-minimum-32-chars
+   ```
+
+2. Передавайте ключ в заголовке `X-API-Key`:
+
+   ```bash
+   curl      -H "X-API-Key: $API_KEY"      "http://localhost:18000/api/v1/sku/D000081/price-history"
+   ```
+
+В интеграционных тестах используется тот же ключ из переменной окружения `API_KEY`.
+Убедитесь, что значение в `.env` и в окружении shell совпадает.
 
 ---
 
@@ -236,29 +328,81 @@ python -m scripts.load_csv --csv path/to/your_price_list.csv
 
 Вся логика покрыта pytest’ом: как API, так и ETL-часть.
 
-### Локальный запуск тестов
+### Локальный запуск без интеграционных тестов
 
 ```bash
-# без интеграционных тестов с реальной БД
+# все тесты, кроме тех, что требуют реальную БД / API
 pytest -q
 
 # только быстрые юнит-тесты
 pytest tests/unit -q
 ```
 
-Интеграционные тесты работы с PostgreSQL помечены `@pytest.mark.integration` и по умолчанию **пропускаются**.
-Чтобы их включить, поднимите локальную БД (например, через `docker compose up db`) и выставьте:
+Интеграционные тесты, которые работают с PostgreSQL (и иногда с живым HTTP‑API),
+помечены `@pytest.mark.integration` и по умолчанию **пропускаются**.
 
-```bash
-export RUN_DB_TESTS=1
-export PGHOST=localhost
-export PGPORT=15432    # см. docker-compose.yml
-export PGUSER=postgres
-export PGPASSWORD=postgres
-export PGDATABASE=wine_db
+### Интеграционные тесты с PostgreSQL и API
 
-pytest -m "integration" -q
-```
+1. Поднимите окружение через Docker Compose (БД и API):
+
+   ```bash
+   docker compose up -d db api
+   ```
+
+2. Выставьте переменные окружения в текущей shell‑сессии:
+
+   ```bash
+   # 1. Включаем интеграционные тесты
+   export RUN_DB_TESTS=1
+
+   # 2. Хост и порт БД для приложений/скриптов (проброшенный порт Docker)
+   export DB_HOST=localhost
+   export DB_PORT=15432    # см. docker-compose.yml
+
+   # 3. Те же настройки для psql и pg_* утилит
+   export PGHOST=localhost
+   export PGPORT=15432
+   export PGUSER=postgres
+   export PGPASSWORD=postgres      # или ваш пароль из .env
+   export PGDATABASE=wine_db
+
+   # 4. Базовый URL API и ключ авторизации
+   export API_URL=http://localhost:18000
+   export API_BASE_URL=http://localhost:18000
+   export API_KEY=your-secret-api-key-minimum-32-chars
+   ```
+
+   > Важно: `API_KEY` здесь должен совпадать со значением `API_KEY` в `.env`,
+   > которое использует контейнер `api`.
+
+3. Запустите интеграционные тесты:
+
+   ```bash
+   # все интеграционные тесты
+   pytest -m "integration" -vv
+
+   # только ETL- и price-history сценарии
+   pytest tests/integration/test_price_import_etl.py -m "integration" -vv
+
+   # все интеграционные, но без особо долгих (помечены @pytest.mark.slow)
+   pytest -m "integration and not slow" -vv
+   ```
+
+Интеграционные сценарии включают в себя, например:
+
+* end‑to‑end импорт прайс‑листа:
+  * генерация временного CSV;
+  * запуск `load_csv_main()` с реальными параметрами;
+  * проверка, что данные попали в `products`, `product_prices`, `ingest_envelope`;
+* проверку идемпотентности:
+  * повторный импорт того же файла не создаёт дублей и не ломает историю цен;
+* историю цен:
+  * подготовка нескольких прайсов с разными датами и ценами,
+  * проверка, что таблица `product_prices` содержит корректную историю,
+  * сравнение истории из БД с ответом эндпоинта
+    `GET /api/v1/sku/<code>/price-history`;
+* мониторинговые тесты на реальных SKU (`D000081`, `D009704` и т.п.):
+  * сравнение текущей цены и истории по данным БД и API.
 
 ---
 
@@ -287,17 +431,14 @@ pytest -m "integration" -q
 
 3. **secrets**
    * Обёртка вокруг GitHub Secret Scanning / trufflehog (см. `secrets.yml`)
-   * Проверяет коммиты на наличие случайно закоммиченных токенов/паролей.
+   * Проверяет коммиты на наличие случайно закоммиченных секретов.
 
-### 2. `semgrep.yml` — статический анализ кода
-
-Файл: `.github/workflows/semgrep.yml`.
-
-* Запускает Semgrep в режиме **strict** на Python-коде и yaml-конфигурациях.
-* Использует публичный набор правил `p/ci`.
-* Для PR:
-  * умеет работать с baseline-коммитом (чтобы репортить только новые проблемы),
-  * падает, если в новом коде появляются блокирующие находки.
+4. **semgrep**
+   * Запускает Semgrep в режиме **strict** на Python-коде и yaml-конфигурациях.
+   * Использует публичный набор правил `p/ci`.
+   * Для PR:
+     * умеет работать с baseline-коммитом (чтобы репортить только новые проблемы),
+     * падает, если в новом коде появляются блокирующие находки.
 
 ---
 
@@ -309,36 +450,20 @@ pytest -m "integration" -q
 
 Кратко по ближайшим шагам (из Roadmap):
 
-1. **Укрепление API и инфраструктуры**
-   * Доведение health-чеков до production-варианта
-   * Ограничения по rate-limit’ам (Flask-Limiter)
-   * Ещё тесты на негативные сценарии и валидацию входных данных
-
-2. **Расширение ETL**
-   * Поддержка нескольких форматов прайс-листа
-   * Улучшенный audit-лог и отчётность по загрузкам
-
-3. **Подготовка к демо / курсовому проекту**
-   * Красивый Swagger
-   * Скрипты для демонстрационных данных
-   * Документация по развёртыванию «в один клик» (Docker / Makefile).
-
----
-
-## Как контрибьютить (для будущего «я»)
-
-1. Создаёшь ветку от `master`
-   `git switch -c feature/my-task`
-2. Делаешь небольшие, логичные коммиты с понятными сообщениями.
-3. Перед пушем обязательно:
-   ```bash
-   pytest -q
-   pip-audit -r requirements.txt --strict
-   ```
-4. Открываешь PR, в описании:
-   * кратко формулируешь задачу (ссылка на Issue / пункт Roadmap),
-   * описываешь, что поменял,
-   * при необходимости добавляешь скриншоты / примеры запросов.
+1. **Улучшение DX (developer experience)**:
+   * доработать ошибки валидации,
+   * сделать более «говорящие» ответы API,
+   * улучшить документацию по запуску и настройке.
+2. **Расширение бизнес-логики**:
+   * добавить больше фильтров и сортировок в поиске,
+   * доработать модель данных (страны, регионы, сорта винограда).
+3. **Нагрузочное тестирование и оптимизации**:
+   * померить производительность на больших прайс-листах,
+   * оптимизировать сложные запросы и индексы.
+4. **Дополнительные фичи** (по мере необходимости):
+   * webhook’и / события при изменении цен,
+   * выгрузка отчётов,
+   * интеграция с внешними системами.
 
 ---
 
@@ -346,4 +471,4 @@ pytest -m "integration" -q
 
 Учебный проект, лицензия: **MIT** (см. файл `LICENSE`).
 
-Проект можно использовать как основу для собственных pet-проектов, экспериментов с CI/CD и отработки навыков backend-разработки.
+Проект можно использовать как основу для собственных pet‑проектов, экспериментов с CI/CD и отработки навыков backend‑разработки.
