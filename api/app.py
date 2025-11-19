@@ -637,6 +637,7 @@ def simple_search():
 
 
 @app.route("/catalog/search", methods=["GET"])
+@app.route("/api/v1/products/search", methods=["GET"])
 @limiter.limit(PUBLIC_LIMIT)
 def catalog_search():
     """
@@ -644,6 +645,11 @@ def catalog_search():
     ---
     tags: [Search]
     summary: Extended search with pagination
+
+    description: |
+      Версионированный эндпоинт `/api/v1/products/search` и его алиас
+      `/catalog/search`. Используется для поиска товаров в каталоге.
+
     parameters:
       - in: query
         name: q
@@ -662,21 +668,26 @@ def catalog_search():
         description: Validation error
     """
     try:
-        params = CatalogSearchParams.model_validate(request.args.to_dict(flat=True))
+        params = CatalogSearchParams.model_validate(
+            request.args.to_dict(flat=True))
     except ValidationError as e:
         return jsonify(_serialize_validation_error(e)), 400
 
     conn, err = db_connect()
     if err or not conn:
-        app.logger.error("Catalog search failed - database unavailable", extra={"error": err})
-        return jsonify({"items": [], "total": 0, "offset": 0, "limit": params.limit, "query": params.q})
+        app.logger.error("Catalog search failed - database unavailable",
+                         extra={"error": err})
+        return jsonify(
+            {"items": [], "total": 0, "offset": 0, "limit": params.limit,
+             "query": params.q})
 
     try:
         clauses: list[str] = []
         qparams: list = []
 
         if params.q:
-            clauses.append("(p.title_ru ILIKE %s OR p.producer ILIKE %s OR p.region ILIKE %s)")
+            clauses.append(
+                "(p.title_ru ILIKE %s OR p.producer ILIKE %s OR p.region ILIKE %s)")
             like = f"%{params.q}%"
             qparams.extend([like, like, like])
 
@@ -686,15 +697,15 @@ def catalog_search():
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
 
         sql = f"""
-            SELECT p.code, p.title_ru as name, p.producer, p.region, p.color, p.style,
-                   p.price_list_rub, p.price_final_rub,
-                   i.stock_total, i.stock_free
-            FROM public.products p
-            LEFT JOIN public.inventory i ON i.code = p.code
-            {where}
-            ORDER BY COALESCE(i.stock_free, 0) DESC, p.title_ru
-            LIMIT %s
-        """
+                SELECT p.code, p.title_ru as name, p.producer, p.region, p.color, p.style,
+                       p.price_list_rub, p.price_final_rub,
+                       i.stock_total, i.stock_free
+                FROM public.products p
+                LEFT JOIN public.inventory i ON i.code = p.code
+                {where}
+                ORDER BY COALESCE(i.stock_free, 0) DESC, p.title_ru
+                LIMIT %s
+            """
         qparams.append(params.limit)
 
         rows = db_query(conn, sql, tuple(qparams))
@@ -708,7 +719,8 @@ def catalog_search():
     except Exception as e:
         app.logger.error(
             "Catalog search failed",
-            extra={"error": str(e), "query": params.q, "limit": params.limit, "in_stock": params.in_stock},
+            extra={"error": str(e), "query": params.q, "limit": params.limit,
+                   "in_stock": params.in_stock},
             exc_info=True,
         )
         return jsonify({
@@ -725,7 +737,6 @@ def catalog_search():
             conn.close()
         except Exception:
             pass
-
 
 # ────────────────────────────────────────────────────────────────────────────────
 # SKU endpoints (protected if API_KEY set)
