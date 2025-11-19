@@ -158,3 +158,78 @@ def test_inventory_history_ok(client_with_key, app_with_key_and_mocks):
     assert _norm_params(app_with_key_and_mocks._test_calls["last_params"]) == (
         "ABC", "2025-01-01", "2025-01-31", 2, 0
     )
+
+
+    def test_products_search_country_filter(client):
+        """
+        Поиск по country должен возвращать только товары из указанной страны
+        (или подстроку в названии страны).
+        """
+        resp = client.get(
+            "/api/v1/products/search",
+            query_string={"country": "Южная Африка", "limit": "50"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "items" in data
+        items = data["items"]
+
+        # Должен быть хотя бы один результат, иначе тест не имеет смысла
+        assert len(items) > 0
+
+        for item in items:
+            # В ответе должен быть country, и он должен содержать искомую строку
+            assert "country" in item
+            assert isinstance(item["country"], str)
+            assert "Южная Африка" in item["country"]
+
+    def test_products_search_price_range_filter(client):
+        """
+        min_price / max_price должны ограничивать диапазон цен в выдаче.
+        Проверяем, что все price_final_rub попадают в заданный интервал.
+        """
+        min_price = 2000
+        max_price = 5000
+
+        resp = client.get(
+            "/api/v1/products/search",
+            query_string={
+                "min_price": str(min_price),
+                "max_price": str(max_price),
+                "limit": "50",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        items = data["items"]
+
+        assert len(items) > 0
+
+        for item in items:
+            # price_final_rub может приходить строкой — приводим к float
+            price_str = item.get("price_final_rub")
+            assert price_str is not None
+            price = float(price_str)
+            assert min_price <= price <= max_price
+
+    def test_products_search_in_stock_true_returns_only_items_with_stock(
+            client):
+        """
+        in_stock=true должен фильтровать товары без остатка:
+        ожидаем, что stock_free > 0 для всех элементов.
+        """
+        resp = client.get(
+            "/api/v1/products/search",
+            query_string={"in_stock": "true", "limit": "50"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        items = data["items"]
+
+        # Может оказаться пустым, если данных нет, но если что-то есть —
+        # у всех должен быть положительный stock_free.
+        for item in items:
+            stock_free = item.get("stock_free")
+            # При нашем SQL (WHERE i.stock_free > 0) NULL быть не должно, но проверим на всякий.
+            assert stock_free is not None
+            assert stock_free > 0
