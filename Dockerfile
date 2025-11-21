@@ -1,36 +1,43 @@
-# Dockerfile
-FROM python:3.11-slim
+# Лёгкая база
+FROM python:3.11-slim AS base
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 
-# Install curl for healthcheck
+# Минимальные утилиты и зависимости, чтобы:
+# - был curl (healthcheck)
+# - собирались нативные пакеты (если в req есть psycopg2 без -binary)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl && \
+    apt-get install -y --no-install-recommends curl build-essential libpq-dev && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better caching
+# Ставим зависимости заранее для лучшего кэширования
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install --upgrade pip && \
+    pip install -r requirements.txt
 
-# Copy application code
+# Копируем исходники
 COPY api/ ./api/
 COPY scripts/ ./scripts/
 COPY db/ ./db/
-COPY .env.example .env
+# Если у вас есть .env.example и он нужен внутри контейнера как дефолт:
+# COPY .env.example .env
 
-# Create non-root user
-RUN useradd -m -u 1000 appuser && \
-    chown -R appuser:appuser /app
-
-# Switch to non-root user
+# Непривилегированный пользователь
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
 
-# Expose port
 EXPOSE 8000
 
-# Healthcheck
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:8000/ready || exit 1
-
-# Run the application
-CMD ["python", "api/app.py"]
+# ВАЖНО: не используем -k gevent (его нет в зависимостях).
+# Берём worker-class gthread, который не требует внешних библиотек.
+# Кол-во воркеров/потоков можно управлять через env в compose.
+CMD ["sh", "-lc", "gunicorn --bind 0.0.0.0:8000 \
+  --workers ${GUNICORN_WORKERS:-2} \
+  --threads ${GUNICORN_THREADS:-4} \
+  --timeout ${GUNICORN_TIMEOUT:-60} \
+  --worker-class gthread \
+  api.wsgi:app"]

@@ -4,6 +4,7 @@
 
 Issue: #82
 """
+
 import sys
 from pathlib import Path
 
@@ -14,11 +15,13 @@ sys.path.insert(0, str(project_root))
 # Остальные импорты
 import logging
 from datetime import datetime
+
 from scripts.load_csv import main as load_csv_main
 
 # ============================================================================
 # Настройка логирования
 # ============================================================================
+
 
 def setup_logging():
     """
@@ -41,15 +44,11 @@ def setup_logging():
 
     # Formatter (одинаковый для файла и консоли)
     formatter = logging.Formatter(
-        '%(asctime)s [%(levelname)s] %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
+        "%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
     )
 
     # Handler 1: Файл (все уровни)
-    file_handler = logging.FileHandler(
-        log_dir / 'import.log',
-        encoding='utf-8'
-    )
+    file_handler = logging.FileHandler(log_dir / "import.log", encoding="utf-8")
     file_handler.setFormatter(formatter)
     file_handler.setLevel(logging.DEBUG)  # Все уровни в файл
     logger.addHandler(file_handler)
@@ -62,9 +61,11 @@ def setup_logging():
 
     return logger
 
+
 # ============================================================================
 # Обработка файлов
 # ============================================================================
+
 
 def process_file(file_path: Path, logger: logging.Logger) -> bool:
     """
@@ -84,10 +85,10 @@ def process_file(file_path: Path, logger: logging.Logger) -> bool:
         original_argv = sys.argv.copy()
 
         # Подменить аргументы для load_csv
-        if file_path.suffix.lower() in ['.xlsx', '.xls', '.xlsm']:
-            sys.argv = ['load_csv.py', '--excel', str(file_path)]
+        if file_path.suffix.lower() in [".xlsx", ".xls", ".xlsm"]:
+            sys.argv = ["load_csv.py", "--excel", str(file_path)]
         else:  # .csv
-            sys.argv = ['load_csv.py', '--csv', str(file_path)]
+            sys.argv = ["load_csv.py", "--csv", str(file_path)]
 
         # Вызвать импорт
         load_csv_main()
@@ -99,8 +100,7 @@ def process_file(file_path: Path, logger: logging.Logger) -> bool:
         return True
 
     except Exception as e:
-        logger.error(f"❌ Error processing {file_path.name}: {e}",
-                     exc_info=True)
+        logger.error(f"❌ Error processing {file_path.name}: {e}", exc_info=True)
         # Восстановить sys.argv даже при ошибке
         sys.argv = original_argv
         return False
@@ -141,9 +141,11 @@ def archive_file(file_path: Path, logger: logging.Logger) -> Path:
 
     return archived_path
 
+
 # ============================================================================
 # Главная функция
 # ============================================================================
+
 
 def run_daily_import(logger: logging.Logger):
     """
@@ -170,7 +172,7 @@ def run_daily_import(logger: logging.Logger):
     all_files = [f for f in all_items if f.is_file()]
 
     # Фильтр по расширению
-    valid_extensions = {'.xlsx', '.xls', '.xlsm', '.csv'}
+    valid_extensions = {".xlsx", ".xls", ".xlsm", ".csv"}
     files = [f for f in all_files if f.suffix.lower() in valid_extensions]
     files = sorted(files)  # Сортировка для предсказуемого порядка
 
@@ -198,8 +200,7 @@ def run_daily_import(logger: logging.Logger):
             error_count += 1
 
     # TODO 5: Залогировать итоговую статистику
-    logger.info(
-        f"Import completed: {success_count} success, {error_count} errors")
+    logger.info(f"Import completed: {success_count} success, {error_count} errors")
 
     # TODO 6: Если есть ошибки - залогировать критическое предупреждение
     if error_count > 0:
