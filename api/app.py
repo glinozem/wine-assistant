@@ -13,7 +13,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from flasgger import Swagger
 from flask import Flask, g, jsonify, request
 from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.errors import RateLimitExceeded
+from flask_limiter.util import get_remote_address
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+
+from api.logging_config import setup_logging
 
 # ────────────────────────────────────────────────────────────────────────────────
 # DB setup (psycopg3 → psycopg2 fallback)
@@ -104,14 +109,7 @@ else:
     origins_list = [o.strip() for o in cors_origins.split(",")]
     CORS(app, origins=origins_list, expose_headers=[h.strip() for h in expose_headers.split(",")])
 
-# Structured JSON logging
-from api.logging_config import setup_logging  # noqa: E402
-
 setup_logging(app)
-
-from flask_limiter import Limiter
-from flask_limiter.errors import RateLimitExceeded
-from flask_limiter.util import get_remote_address
 
 app.config.update(
     RATELIMIT_HEADERS_ENABLED=True,
