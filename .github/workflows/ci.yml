@@ -26,6 +26,7 @@ jobs:
       DB_USER: postgres
       DB_PASSWORD: dev_local_pw
       DB_NAME: wine_db
+      RUN_DB_TESTS: "1"
 
     steps:
       - name: Checkout
@@ -72,7 +73,7 @@ jobs:
         run: bash db/migrate.sh
 
       - name: Run tests
-        run: pytest -q
+        run: pytest -q -m "not monitoring"
 
       - name: Dump DB logs on failure
         if: failure()

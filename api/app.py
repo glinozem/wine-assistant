@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # api/app.py — hardened v0.4.0
 
-import json
 import os
 import time
 from datetime import date, datetime, timezone
@@ -15,7 +14,6 @@ from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.errors import RateLimitExceeded
 from flask_limiter.util import get_remote_address
-from pydantic import ValidationError
 
 from api.logging_config import setup_logging
 from api.schemas import (
@@ -25,6 +23,7 @@ from api.schemas import (
     PriceHistoryParams,
     SimpleSearchParams,
 )
+from api.validation import validate_query_params
 
 # ────────────────────────────────────────────────────────────────────────────────
 # DB setup (psycopg3 → psycopg2 fallback)
@@ -262,22 +261,10 @@ def require_api_key(fn):
         return fn(*args, **kwargs)
     return wrapper
 
+
 # ────────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ────────────────────────────────────────────────────────────────────────────────
-def _serialize_validation_error(e: ValidationError) -> dict:
-    """Превращает pydantic v2 ValidationError в JSON-безопасный словарь."""
-    # Берём только безопасные поля без ctx (там могут быть несериализуемые объекты)
-    details = [
-        {
-            "loc": err.get("loc"),
-            "msg": err.get("msg"),
-            "type": err.get("type"),
-        }
-        for err in e.errors(include_url=False)
-    ]
-    return {"error": "validation_error", "details": details}
-
 def _parse_int(name: str, default: int) -> int:
     try:
         v = int(request.args.get(name, default))
@@ -335,6 +322,22 @@ def _normalize_product_row(row: dict) -> dict:
         if key in row:
             row[key] = _convert_decimal_to_number(row[key])
     return row
+
+
+def _close_conn_safely(conn: Any | None) -> None:
+    """
+    Аккуратно закрывает DB-соединение, игнорируя любые ошибки при закрытии.
+
+    Безопасно вызывать даже с conn=None.
+    """
+    if not conn:
+        return
+    try:
+        conn.close()
+    except Exception:
+        # Ничего не логируем: мы и так в finally, и не хотим
+        # маскировать исходную ошибку более поздней.
+        pass
 
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -477,10 +480,7 @@ def readiness():
             503,
         )
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        _close_conn_safely(conn)
 
 @app.route("/version", methods=["GET"])
 @limiter.limit(PUBLIC_LIMIT)
@@ -565,10 +565,9 @@ def simple_search():
       400:
         description: Validation error
     """
-    try:
-        params = SimpleSearchParams.model_validate(request.args.to_dict(flat=True))
-    except ValidationError as e:
-        return jsonify(_serialize_validation_error(e)), 400
+    params, error = validate_query_params(SimpleSearchParams)
+    if error:
+        return error
 
     conn, err = db_connect()
     if err or not conn:
@@ -623,10 +622,7 @@ def simple_search():
             "query": params.q
         }), 500
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        _close_conn_safely(conn)
 
 
 @app.route("/catalog/search", methods=["GET"])
@@ -639,10 +635,9 @@ def catalog_search():
     Версионированный эндпоинт `/api/v1/products/search` и его алиас
     `/catalog/search`. Используется для поиска товаров в каталоге.
     """
-    try:
-        params = CatalogSearchParams.model_validate(request.args.to_dict(flat=True))
-    except ValidationError as e:
-        return jsonify(_serialize_validation_error(e)), 400
+    params, error = validate_query_params(CatalogSearchParams)
+    if error:
+        return error
 
     conn, err = db_connect()
     if err or not conn:
@@ -787,10 +782,7 @@ def catalog_search():
             500,
         )
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        _close_conn_safely(conn)
 
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -839,10 +831,7 @@ def get_sku(code: str):
         app.logger.error("SKU lookup failed", extra={"error": str(e), "code": code}, exc_info=True)
         return jsonify({"error": "internal_error"}), 500
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        _close_conn_safely(conn)
 
 @app.route("/sku/<code>/price-history", methods=["GET"])
 @app.route("/api/v1/sku/<code>/price-history", methods=["GET"])
@@ -876,11 +865,9 @@ def price_history(code: str):
         type: integer
         default: 0
     """
-    try:
-        params = PriceHistoryParams.model_validate(
-            request.args.to_dict(flat=True))
-    except ValidationError as e:
-        return jsonify(_serialize_validation_error(e)), 400
+    params, error = validate_query_params(PriceHistoryParams)
+    if error:
+        return error
 
     conn, err = db_connect()
     if err or not conn:
@@ -931,10 +918,7 @@ def price_history(code: str):
             "limit": params.limit, "offset": params.offset
         }), 500
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        _close_conn_safely(conn)
 
 @app.route("/sku/<code>/inventory-history", methods=["GET"])
 @app.route("/api/v1/sku/<code>/inventory-history", methods=["GET"])
@@ -968,11 +952,9 @@ def inventory_history(code: str):
         type: integer
         default: 0
     """
-    try:
-        params = InventoryHistoryParams.model_validate(
-            request.args.to_dict(flat=True))
-    except ValidationError as e:
-        return jsonify(_serialize_validation_error(e)), 400
+    params, error = validate_query_params(InventoryHistoryParams)
+    if error:
+        return error
 
     conn, err = db_connect()
     if err or not conn:
@@ -1023,10 +1005,7 @@ def inventory_history(code: str):
             "limit": params.limit, "offset": params.offset
         }), 500
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        _close_conn_safely(conn)
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Entrypoint (dev only; production uses Gunicorn with api.wsgi:app)

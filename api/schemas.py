@@ -68,7 +68,12 @@ class CatalogSearchParams(BaseModel):
         return self
 
 
-class PriceHistoryParams(BaseModel):
+class DateRangeParams(BaseModel):
+    """
+    Базовая модель для параметров с диапазоном дат (from/to + limit/offset).
+    Используется для history-эндпоинтов.
+    """
+
     dt_from: Optional[date] = Field(None, alias="from")
     dt_to: Optional[date] = Field(None, alias="to")
     limit: int = Field(50, ge=1, le=1000)
@@ -81,14 +86,9 @@ class PriceHistoryParams(BaseModel):
         return self
 
 
-class InventoryHistoryParams(BaseModel):
-    dt_from: Optional[date] = Field(None, alias="from")
-    dt_to: Optional[date] = Field(None, alias="to")
-    limit: int = Field(50, ge=1, le=1000)
-    offset: int = Field(0, ge=0, le=100_000)
+class PriceHistoryParams(DateRangeParams):
+    """Query params for price history endpoint."""
 
-    @model_validator(mode="after")
-    def _check_range(self):
-        if self.dt_from and self.dt_to and self.dt_from > self.dt_to:
-            raise ValueError("'from' must be <= 'to'")
-        return self
+
+class InventoryHistoryParams(DateRangeParams):
+    """Query params for inventory history endpoint."""
