@@ -5,6 +5,7 @@ import json
 import os
 import time
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from enum import Enum
 from functools import wraps
 from typing import Any, Dict, List, Optional, Tuple
@@ -108,12 +109,10 @@ from api.logging_config import setup_logging  # noqa: E402
 
 setup_logging(app)
 
-# Flask-Limiter
-from flask_limiter import Limiter  # noqa: E402
-from flask_limiter.errors import RateLimitExceeded  # noqa: E402
-from flask_limiter.util import get_remote_address  # noqa: E402
+from flask_limiter import Limiter
+from flask_limiter.errors import RateLimitExceeded
+from flask_limiter.util import get_remote_address
 
-# Make sure headers are emitted
 app.config.update(
     RATELIMIT_HEADERS_ENABLED=True,
     RATELIMIT_HEADER_LIMIT="X-RateLimit-Limit",
@@ -121,17 +120,30 @@ app.config.update(
     RATELIMIT_HEADER_RESET="X-RateLimit-Reset",
 )
 
-limiter = Limiter(
-    app=app,
-    key_func=get_remote_address,
-    default_limits=[],  # we set limits per-endpoint
-    storage_uri=os.getenv("RATE_LIMIT_STORAGE_URL", "memory://"),
-    enabled=os.getenv("RATE_LIMIT_ENABLED", "1") == "1",
-    headers_enabled=True,
-)
+RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "1") == "1"
+
+if RATE_LIMIT_ENABLED:
+    limiter = Limiter(
+        app=app,
+        key_func=get_remote_address,
+        default_limits=[],  # лимиты задаём на эндпоинтах
+        storage_uri=os.getenv("RATE_LIMIT_STORAGE_URL", "memory://"),
+        headers_enabled=True,
+    )
+else:
+    class _DummyLimiter:
+        """Простая заглушка для limiter, когда RATE_LIMIT_ENABLED=0."""
+
+        def limit(self, *args, **kwargs):
+            def decorator(fn):
+                return fn
+            return decorator
+
+    limiter = _DummyLimiter()
 
 PUBLIC_LIMIT = os.getenv("RATE_LIMIT_PUBLIC", "100/hour")
 PROTECTED_LIMIT = os.getenv("RATE_LIMIT_PROTECTED", "1000/hour")
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Swagger
@@ -285,6 +297,40 @@ def _parse_date(name: str) -> Optional[date]:
         except Exception:
             pass
     return None
+
+def _convert_decimal_to_number(value):
+    """Привести Decimal/строки с числом к int/float, остальные значения вернуть как есть."""
+    if isinstance(value, Decimal):
+        if value == value.to_integral_value():
+            return int(value)
+        return float(value)
+
+    if isinstance(value, str):
+        s = value.strip().replace(" ", "").replace("\xa0", "")
+        if not s:
+            return value
+        # сначала пробуем int
+        try:
+            return int(s)
+        except ValueError:
+            # потом float (учтём возможную запятую)
+            try:
+                return float(s.replace(",", "."))
+            except ValueError:
+                return value
+
+    return value
+
+
+def _normalize_product_row(row: dict) -> dict:
+    """
+    Привести числовые поля товара к нормальным числам,
+    чтобы в JSON они были number, а не string.
+    """
+    for key in ("price_list_rub", "price_final_rub", "stock_total", "stock_free"):
+        if key in row:
+            row[key] = _convert_decimal_to_number(row[key])
+    return row
 
 
 class SimpleSearchParams(BaseModel):
@@ -669,102 +715,164 @@ def simple_search():
 @limiter.limit(PUBLIC_LIMIT)
 def catalog_search():
     """
-    Extended catalog search with pagination and stock info
-    ---
-    tags: [Search]
-    summary: Extended search with pagination
+    Extended catalog search with pagination and stock/price filters.
 
-    description: |
-      Версионированный эндпоинт `/api/v1/products/search` и его алиас
-      `/catalog/search`. Используется для поиска товаров в каталоге.
-
-    parameters:
-      - in: query
-        name: q
-        type: string
-      - in: query
-        name: in_stock
-        type: boolean
-      - in: query
-        name: limit
-        type: integer
-        default: 10
-    responses:
-      200:
-        description: Search results
-      400:
-        description: Validation error
+    Версионированный эндпоинт `/api/v1/products/search` и его алиас
+    `/catalog/search`. Используется для поиска товаров в каталоге.
     """
     try:
-        params = CatalogSearchParams.model_validate(
-            request.args.to_dict(flat=True))
+        params = CatalogSearchParams.model_validate(request.args.to_dict(flat=True))
     except ValidationError as e:
         return jsonify(_serialize_validation_error(e)), 400
 
     conn, err = db_connect()
     if err or not conn:
-        app.logger.error("Catalog search failed - database unavailable",
-                         extra={"error": err})
+        app.logger.error("Catalog search failed - database unavailable", extra={"error": err})
+        # Возвращаем "пустую" выдачу, но с корректными метаданными
         return jsonify(
-            {"items": [], "total": 0, "offset": 0, "limit": params.limit,
-             "query": params.q})
+            {
+                "items": [],
+                "total": 0,
+                "offset": params.offset,
+                "limit": params.limit,
+                "query": params.q,
+            }
+        )
 
     try:
         clauses: list[str] = []
         qparams: list = []
 
+        # Текстовый поиск
         if params.q:
             clauses.append(
-                "(p.title_ru ILIKE %s OR p.producer ILIKE %s OR p.region ILIKE %s)")
+                "(p.title_ru ILIKE %s OR p.producer ILIKE %s OR p.region ILIKE %s)"
+            )
             like = f"%{params.q}%"
             qparams.extend([like, like, like])
 
+        # Фильтры по справочникам
+        if params.country:
+            clauses.append("p.country ILIKE %s")
+            qparams.append(f"%{params.country}%")
+
+        if params.region:
+            clauses.append("p.region ILIKE %s")
+            qparams.append(f"%{params.region}%")
+
+        if params.grapes:
+            clauses.append("p.grapes ILIKE %s")
+            qparams.append(f"%{params.grapes}%")
+
+        # Остатки
         if params.in_stock:
             clauses.append("i.stock_free > 0")
 
+        # Диапазон цен
+        if params.min_price is not None:
+            clauses.append("p.price_final_rub >= %s")
+            qparams.append(params.min_price)
+
+        if params.max_price is not None:
+            clauses.append("p.price_final_rub <= %s")
+            qparams.append(params.max_price)
+
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
 
-        sql = f"""
-                SELECT p.code, p.title_ru as name, p.producer, p.region, p.color, p.style,
-                       p.price_list_rub, p.price_final_rub,
-                       i.stock_total, i.stock_free
-                FROM public.products p
-                LEFT JOIN public.inventory i ON i.code = p.code
-                {where}
-                ORDER BY COALESCE(i.stock_free, 0) DESC, p.title_ru
-                LIMIT %s
-            """
+        # Сортировка
+        order_by = "COALESCE(i.stock_free, 0) DESC, p.title_ru"
+
+        if params.sort == CatalogSort.PRICE_ASC:
+            order_by = "p.price_final_rub ASC NULLS LAST"
+        elif params.sort == CatalogSort.PRICE_DESC:
+            order_by = "p.price_final_rub DESC NULLS LAST"
+        elif params.sort == CatalogSort.NAME_ASC:
+            order_by = "p.title_ru ASC"
+        elif params.sort == CatalogSort.NAME_DESC:
+            order_by = "p.title_ru DESC"
+        elif params.sort == CatalogSort.CODE_ASC:
+            order_by = "p.code ASC"
+        elif params.sort == CatalogSort.CODE_DESC:
+            order_by = "p.code DESC"
+
+        # LIMIT обязателен для обоих эндпоинтов,
+        # а OFFSET – только для /api/v1/products/search.
+        limit_clause = "LIMIT %s"
         qparams.append(params.limit)
 
+        # Для нового API поддерживаем OFFSET в SQL,
+        # а для legacy /catalog/search сохраняем старое поведение
+        # (без OFFSET), чтобы не ломать тесты и клиентов.
+        if request.path.startswith("/api/"):
+            limit_clause += "\n            OFFSET %s"
+            qparams.append(params.offset)
+
+        sql = f"""
+            SELECT
+                p.code,
+                p.title_ru        AS name,
+                p.producer,
+                p.country,
+                p.region,
+                p.color,
+                p.style,
+                p.price_list_rub,
+                p.price_final_rub,
+                i.stock_total,
+                i.stock_free
+            FROM public.products p
+            LEFT JOIN public.inventory i ON i.code = p.code
+            {where}
+            ORDER BY {order_by}
+            {limit_clause}
+        """
+
         rows = db_query(conn, sql, tuple(qparams))
-        return jsonify({
-            "items": rows,
-            "total": len(rows),
-            "offset": 0,
-            "limit": params.limit,
-            "query": params.q
-        })
+
+        items = [_normalize_product_row(dict(row)) for row in rows]
+
+        return jsonify(
+            {
+                "items": items,
+                "total": len(items),
+                "offset": params.offset,
+                "limit": params.limit,
+                "query": params.q,
+            }
+        )
+
     except Exception as e:
         app.logger.error(
             "Catalog search failed",
-            extra={"error": str(e), "query": params.q, "limit": params.limit,
-                   "in_stock": params.in_stock},
+            extra={
+                "error": str(e),
+                "query": params.q,
+                "limit": params.limit,
+                "offset": params.offset,
+                "in_stock": params.in_stock,
+            },
             exc_info=True,
         )
-        return jsonify({
-            "error": "search_failed",
-            "message": "Failed to execute catalog search",
-            "items": [],
-            "total": 0,
-            "offset": 0,
-            "limit": params.limit,
-            "query": params.q
-        }), 500
+        return (
+            jsonify(
+                {
+                    "error": "search_failed",
+                    "message": "Failed to execute catalog search",
+                    "items": [],
+                    "total": 0,
+                    "offset": params.offset,
+                    "limit": params.limit,
+                    "query": params.q,
+                }
+            ),
+            500,
+        )
     finally:
         try:
             conn.close()
         except Exception:
             pass
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # SKU endpoints (protected if API_KEY set)
