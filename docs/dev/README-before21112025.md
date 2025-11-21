@@ -72,38 +72,6 @@ FLASK_ENV=development flask --app app.py run
 
 ---
 
-## Как запустить проект и тесты локально
-
-### 1. Запустить проект (Docker Compose, рекомендовано)
-
-```bash
-git clone https://github.com/glinozem/wine-assistant.git
-cd wine-assistant
-
-cp .env.example .env    # при необходимости поправьте пароли/порты
-docker compose up -d --build
-```
-
-После этого API будет доступно по адресу, указанному в `docker-compose.yml`
-(см. также раздел «TL;DR — как быстро запустить» выше).
-
----
-
-### 2. Запустить тесты
-
-```bash
-# Базовый прогон как в CI (все тесты, кроме мониторинговых)
-pytest -q -m "not monitoring"
-
-# Только быстрые юнит-тесты (без интеграционных и мониторинговых)
-pytest -q -m "not integration and not monitoring"
-```
-
-> Для интеграционных тестов, которые работают с реальной PostgreSQL,
-> поднимите контейнер `db` (`docker compose up -d db`),
-> установите `RUN_DB_TESTS=1` и нужные `PG*`/`DB_*` переменные окружения.
-> Подробности — в `tests/README.md`.
-
 ## Архитектура и основные компоненты
 
 Проект условно состоит из трёх частей:
