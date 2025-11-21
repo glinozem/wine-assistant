@@ -1,0 +1,43 @@
+name: Semgrep (strict)
+
+on:
+  pull_request:
+    branches: [ main, master ]
+  push:
+    branches: [ main, master ]
+
+permissions:
+  contents: read
+
+jobs:
+  semgrep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    container:
+      image: semgrep/semgrep:latest
+
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Mark workspace as safe for git (container)
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Fetch base branch (PR only)
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          # Подтягиваем ветку-основание, чтобы точно был доступен base.sha
+          git fetch --no-tags --prune --depth=2 origin "${{ github.event.pull_request.base.ref }}"
+
+      - name: Semgrep (PR, baseline)
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          semgrep scan --config p/ci --error \
+            --baseline-commit "${{ github.event.pull_request.base.sha }}"
+
+      - name: Semgrep (push to main/master)
+        if: ${{ github.event_name != 'pull_request' }}
+        run: |
+          semgrep scan --config p/ci --error
