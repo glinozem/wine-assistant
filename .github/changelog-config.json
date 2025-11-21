@@ -1,0 +1,11 @@
+{
+  "categories": [
+    { "title": "🚀 Features", "labels": ["feat", "feature"] },
+    { "title": "🐛 Fixes", "labels": ["fix", "bug"] },
+    { "title": "🧰 Maintenance", "labels": ["chore", "ci", "refactor", "deps"] }
+  ],
+  "ignore_labels": ["skip-changelog"],
+  "pr_template": "- ${{TITLE}} (#${{NUMBER}}) @${{AUTHOR}}",
+  "max_pull_requests": 200,
+  "sort": { "order": "ASC", "on_property": "mergedAt" }
+}
