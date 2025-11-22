@@ -12,8 +12,6 @@ import openpyxl
 import pandas as pd
 import psycopg2
 
-from scripts.date_extraction import get_effective_date
-
 __all__ = [
     "get_conn",
     "_norm",
@@ -390,6 +388,10 @@ def upsert_records(df: pd.DataFrame, asof: date | datetime):
             df[col] = df[col].map(_to_int)
 
     disc: Optional[float] = df.attrs.get("discount_pct")
+    # Явный выбор источника скидки (CLI/окружение) может быть передан
+    # через df.attrs["prefer_discount_cell"] в load_csv.main().
+    # Если атрибут не задан, ниже упадём обратно на PREFER_S5 из env.
+    prefer_discount_attr: Optional[bool] = df.attrs.get("prefer_discount_cell")
 
     ins_products = """
                    INSERT INTO products(code, producer, title_ru, country,
@@ -445,7 +447,13 @@ def upsert_records(df: pd.DataFrame, asof: date | datetime):
             if disc is not None and price_list is not None:
                 price_calc_disc = round(price_list * (1.0 - disc), 2)
 
-            prefer_s5 = os.environ.get("PREFER_S5") in ("1", "true", "True")
+            if prefer_discount_attr is not None:
+                # CLI-флаг/явный выбор из load_csv.main() имеет приоритет над env.
+                # load_csv уже свёл вместе --prefer-discount-cell и PREFER_S5.
+                prefer_s5 = bool(prefer_discount_attr)
+            else:
+                prefer_s5 = os.environ.get("PREFER_S5") in ("1", "true", "True")
+
             eff = price_calc_disc if prefer_s5 else price_file_disc
             if eff is None:
                 eff = price_file_disc if prefer_s5 else price_calc_disc
