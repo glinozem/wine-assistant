@@ -1,18 +1,25 @@
 # scripts/load_csv.py
 from __future__ import annotations
 
+"""
+CLI entrypoint for importing a price list file (CSV or Excel) into the database.
+
+Responsibilities:
+  * parse CLI arguments (--csv/--excel, --asof, --date-cell, --discount-cell, --prefer-discount-cell);
+  * compute file hash and enforce idempotency (Issue #80);
+  * extract effective date from filename or Excel cell (Issue #81);
+  * read and normalize tabular data via scripts.load_utils.read_any();
+  * determine discount percentage from header / fixed cell and store it in df.attrs;
+  * call upsert_records() to write products / prices / inventory into the DB;
+  * update envelope and price_list metadata in the idempotency tables.
+"""
+
 import argparse
 import logging
-import math
 import os
-import re
 from datetime import date, datetime
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Optional
 
-import openpyxl  # чтение значения скидки из фиксированной ячейки (например, S5)
-import pandas as pd
-import psycopg2
-import psycopg2.extras
 from dotenv import load_dotenv
 
 # Date extraction module for automatic date parsing (Issue #81)
@@ -26,60 +33,105 @@ from scripts.idempotency import (
     create_price_list_entry,
     update_envelope_status,
 )
+
+# Low-level ETL helpers
 from scripts.load_utils import (
-    COLMAP,
-    _canonicalize_headers,
-    _csv_read,
-    _excel_read,
     _get_discount_from_cell,
-    _norm,
-    _norm_key,
     _to_float,
-    _to_int,
     get_conn,
     read_any,
     upsert_records,
 )
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 
 # =========================
 # CLI
 # =========================
-def main():
-    p = argparse.ArgumentParser()
+def build_arg_parser() -> argparse.ArgumentParser:
+    """
+    Build argument parser for the price import CLI.
+    """
+    p = argparse.ArgumentParser(
+        description=(
+            "Импорт прайс-листа (CSV/Excel) в БД. "
+            "Отвечает за идемпотентность, определение даты среза и выбор скидки."
+        )
+    )
     g = p.add_mutually_exclusive_group(required=True)
-    g.add_argument("--csv", help="Путь к CSV")
-    g.add_argument("--excel", help="Путь к Excel (xlsx/xls)")
-    p.add_argument("--sep", help="Разделитель CSV (если нужен)")
-    p.add_argument("--sheet", help="Имя/индекс листа Excel (по умолчанию 0)")
+    g.add_argument(
+        "--csv",
+        help="Путь к CSV-файлу прайс-листа.",
+    )
+    g.add_argument(
+        "--excel",
+        help="Путь к Excel-файлу прайс-листа (xlsx/xls).",
+    )
     p.add_argument(
-        "--header", type=int, help="Номер строки заголовка (0-based). Если не указан — авто-поиск"
+        "--sep",
+        help="Разделитель CSV (если нужен; по умолчанию авто-детект).",
+    )
+    p.add_argument(
+        "--sheet",
+        help="Имя/индекс листа Excel (по умолчанию 0).",
+    )
+    p.add_argument(
+        "--header",
+        type=int,
+        help=(
+            "Номер строки заголовка (0-based). "
+            "Если не указан — будет выполнен авто-поиск по ключам 'Код'/'code'/'Артикул'."
+        ),
     )
     p.add_argument(
         "--asof",
-        help="Дата 'среза' (YYYY-MM-DD) для истории цен и остатков. "
-        "Если не указана — автоматически извлекается из Excel ячейки или имени файла. "
-        "Fallback: сегодняшняя дата.",
+        help=(
+            "Дата 'среза' (YYYY-MM-DD) для истории цен и остатков. "
+            "Если не указана — автоматически извлекается из Excel-ячейки или имени файла "
+            "(см. scripts.date_extraction.get_effective_date). "
+            "Fallback: сегодняшняя дата."
+        ),
     )
     p.add_argument(
         "--date-cell",
         default="A1",
-        help="Ячейка Excel для извлечения даты (по умолчанию A1). "
-        "Также проверяются B1, A2, B2 как fallback.",
+        help=(
+            "Ячейка Excel для извлечения даты (по умолчанию A1). "
+            "Также проверяются B1, A2, B2 как fallback."
+        ),
     )
     p.add_argument(
         "--discount-cell",
         default=os.environ.get("DISCOUNT_CELL", "S5"),
-        help="Адрес ячейки со скидкой (по умолчанию S5). Пример: T3",
+        help=(
+            "Адрес ячейки со скидкой (по умолчанию S5, можно переопределить через DISCOUNT_CELL). "
+            "Пример: T3."
+        ),
     )
     p.add_argument(
         "--prefer-discount-cell",
         action="store_true",
-        help="Если указан флаг — финальная цена рассчитывается по скидке из ячейки даже при наличии колонки 'Цена со скидкой'",
+        help=(
+            "Если указан флаг — приоритет за скидкой из фиксированной ячейки "
+            "(--discount-cell) даже при наличии колонки 'Цена со скидкой'. "
+            "Флаг имеет приоритет над переменной окружения PREFER_S5."
+        ),
     )
-    args = p.parse_args()
+    return p
+
+
+def main(argv: Optional[list] = None) -> None:
+    """
+    CLI entrypoint.
+
+    Args:
+        argv: Список аргументов командной строки (без имени скрипта).
+              Если None — используются sys.argv[1:].
+    """
+    parser = build_arg_parser()
+    args = parser.parse_args(argv)
 
     path = args.csv or args.excel
 
@@ -91,17 +143,21 @@ def main():
     if args.asof:
         try:
             asof_override = datetime.strptime(args.asof, "%Y-%m-%d").date()
-        except ValueError as e:
-            print(f"Error: Invalid date format for --asof. Expected YYYY-MM-DD, got: {args.asof}")
-            raise
+        except ValueError:
+            msg = f"Invalid date format for --asof. Expected YYYY-MM-DD, got: {args.asof}"
+            print(f"Error: {msg}")
+            raise ValueError(msg)
 
     # Get effective date (auto-extract or use override)
     try:
         asof_dt = get_effective_date(
-            file_path=path, asof_override=asof_override, date_cell=args.date_cell
+            file_path=path,
+            asof_override=asof_override,
+            date_cell=args.date_cell,
         )
         print(
-            f"[date] Effective date: {asof_dt} (source: "
+            "[date] Effective date: "
+            f"{asof_dt} (source: "
             f"{'--asof override' if asof_override else 'auto-extracted'})"
         )
     except ValueError as e:
@@ -111,8 +167,6 @@ def main():
     # ==========================
     # Idempotency check (Issue #80)
     # ==========================
-    logger = logging.getLogger(__name__)
-
     # Compute SHA256 hash of the file
     file_hash = compute_file_sha256(path)
     file_size = os.path.getsize(path)
@@ -127,12 +181,13 @@ def main():
         },
     )
 
-    # Check if file already exists in database
     conn = get_conn()
+
     try:
         existing = check_file_exists(conn, file_hash)
 
         if existing:
+            # File already processed: log and exit early
             logger.warning(
                 ">> SKIP: File already imported",
                 extra={
@@ -143,14 +198,14 @@ def main():
                     "rows_inserted": existing["rows_inserted"],
                 },
             )
-            print(f"\n>> SKIP: File already imported")
+            print("\n>> SKIP: File already imported")
             print(f"   Envelope ID: {existing['envelope_id']}")
             print(f"   Status: {existing['status']}")
             print(f"   Uploaded: {existing['upload_timestamp']}")
             print(f"   Rows inserted: {existing['rows_inserted']}")
-            print(f"\n   This file has already been processed. No action taken.")
+            print("\n   This file has already been processed. No action taken.")
             conn.close()
-            return  # Exit early - file already processed
+            return
 
         # File is new - create envelope
         envelope_id = create_envelope(
@@ -161,36 +216,60 @@ def main():
             file_size_bytes=file_size,
         )
 
-        logger.info("Created new envelope for import", extra={"envelope_id": str(envelope_id)})
+        logger.info(
+            "Created new envelope for import",
+            extra={"envelope_id": str(envelope_id)},
+        )
 
-    except Exception as e:
-        logger.error(f"Error checking file idempotency: {e}", exc_info=True)
+    except Exception:
+        logger.error(
+            "Error checking file idempotency",
+            extra={"file_name": file_name, "file_hash": file_hash[:16] + "..."},
+            exc_info=True,
+        )
         conn.close()
         raise
 
-    # Continue with normal import process
+    # ==========================
+    # Read and normalize data
+    # ==========================
     df = read_any(path, sep=args.sep, sheet=args.sheet, header=args.header)
 
     # Получим скидку из шапки и/или из S5, выберем согласно приоритету
-    disc_hdr = df.attrs.get("discount_pct_header")  # возможно, извлекли из второй строки заголовка
+    disc_hdr = df.attrs.get(
+        "discount_pct_header"
+    )  # возможно, извлекли из второй строки заголовка
+
     # sheet для S5
     sh = args.sheet
     try:
         sh = int(sh) if sh not in (None, "") else 0
     except ValueError:
         sh = sh if sh not in (None, "") else 0
+
     disc_cell = _get_discount_from_cell(args.excel, sh, args.discount_cell) if args.excel else None
 
-    prefer_s5 = args.prefer_discount_cell or (os.environ.get("PREFER_S5") in ("1", "true", "True"))
+    # CLI-флаг имеет приоритет над окружением
+    prefer_s5_cli = bool(args.prefer_discount_cell)
+    prefer_s5_env = os.environ.get("PREFER_S5") in ("1", "true", "True")
+    prefer_s5 = prefer_s5_cli or prefer_s5_env
+
     if prefer_s5:
         discount = disc_cell if disc_cell is not None else disc_hdr
     else:
         discount = disc_hdr if disc_hdr is not None else disc_cell
 
+    # сохраняем все варианты в attrs, чтобы upsert_records()
+    # мог опираться на них при расчёте цен
+    df.attrs["discount_pct_header"] = disc_hdr
     df.attrs["discount_pct_cell"] = disc_cell
     df.attrs["discount_pct"] = discount
+    df.attrs["prefer_discount_cell"] = prefer_s5
+
     print(
-        f"[discount] header={disc_hdr}  cell({args.discount_cell})={disc_cell}  -> used={discount}"
+        "[discount] "
+        f"header={disc_hdr}  cell({args.discount_cell})={disc_cell}  "
+        f"prefer_s5_cli={prefer_s5_cli} prefer_s5_env={prefer_s5_env}  -> used={discount}"
     )
 
     # Отбираем только нужные поля
@@ -244,7 +323,7 @@ def main():
             conn,
             envelope_id,
             status="success",
-            rows_inserted=rows_before,  # All rows processed
+            rows_inserted=rows_before,
             rows_updated=0,
             rows_failed=0,
         )
@@ -270,7 +349,7 @@ def main():
             },
         )
 
-        print(f"\n[OK] Import completed successfully")
+        print("\n[OK] Import completed successfully")
         print(f"   Envelope ID: {envelope_id}")
         print(f"   Rows processed: {rows_before}")
         print(f"   Effective date: {asof_dt}")

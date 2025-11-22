@@ -11,6 +11,7 @@ from openpyxl import Workbook
 # Добавляем путь к scripts в sys.path, чтобы импортировать load_utils
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
 
+import scripts.load_utils as load_utils
 from scripts.load_utils import (
     _canonicalize_headers,
     _get_discount_from_cell,
@@ -22,6 +23,51 @@ from scripts.load_utils import (
     read_any,
     upsert_records,
 )
+
+# ------------
+
+
+class DummyCursor:
+    """Простой in-memory cursor для unit-тестов upsert_records без реальной БД."""
+
+    def __init__(self) -> None:
+        self.executed = []
+
+    def execute(self, sql, params=None):
+        self.executed.append((sql, params))
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        # Ничего особого не делаем, просто совместимость с контекстным менеджером
+        return False
+
+
+class DummyConn:
+    """Stub соединения: отдаёт DummyCursor и помечает commit/close."""
+
+    def __init__(self) -> None:
+        self.cursor_obj = DummyCursor()
+        self.committed = False
+        self.closed = False
+
+    def cursor(self):
+        return self.cursor_obj
+
+    def commit(self):
+        self.committed = True
+
+    def close(self):
+        self.closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
 
 # -----------------------------------------------------------------------------
 # Управление интеграционными DB-тестами
@@ -408,6 +454,99 @@ class TestReadAny:
 
         assert "code" in df.columns
         assert df.iloc[0]["code"] == "WINE123"
+
+@pytest.mark.unit
+def test_upsert_records_prefers_attr_over_env(monkeypatch):
+    """
+    upsert_records() должен уважать df.attrs['prefer_discount_cell'], если он задан,
+    независимо от значения PREFER_S5 в окружении.
+
+    Сценарий:
+      - price_rub = 100.0
+      - discount_pct = 0.20 → S5-цена = 80.0
+      - price_discount (из файла) = 90.0
+
+    Если prefer_discount_cell=True, ожидаем, что в products пойдёт 80.0.
+    """
+    # Окружение говорит "НЕ предпочитай S5"
+    monkeypatch.setenv("PREFER_S5", "0")
+
+    dummy_conn = DummyConn()
+    # Патчим get_conn внутри scripts.load_utils, чтобы не ходить в реальную БД
+    monkeypatch.setattr(load_utils, "get_conn", lambda: dummy_conn)
+
+    df = pd.DataFrame(
+        [
+            {
+                "code": "TEST_ATTR_TRUE",
+                "price_rub": 100.0,
+                "price_discount": 90.0,
+            }
+        ]
+    )
+    df.attrs["discount_pct"] = 0.20           # 20% скидка → 80.0
+    df.attrs["prefer_discount_cell"] = True   # явно просим использовать S5/discount_calc
+
+    inserted = upsert_records(df, date.today())
+    assert inserted == 1
+
+    # Ищем вызов INSERT INTO products и проверяем, какую цену туда положили
+    insert_calls = [
+        (sql, params)
+        for (sql, params) in dummy_conn.cursor_obj.executed
+        if "INSERT INTO products" in sql
+    ]
+    assert insert_calls, "Ожидался вызов INSERT INTO products"
+
+    sql, params = insert_calls[0]
+    assert params["price_list_rub"] == 100.0
+    # prefer_discount_cell=True → берём рассчитанную цену 80.0, а не 90.0 из файла
+    assert pytest.approx(params["price_final_rub"], rel=1e-6) == 80.0
+    assert pytest.approx(params["price_rub"], rel=1e-6) == 80.0
+
+
+@pytest.mark.unit
+def test_upsert_records_uses_env_when_attr_missing(monkeypatch):
+    """
+    Если df.attrs['prefer_discount_cell'] не задан,
+    upsert_records() должен опираться на PREFER_S5 из окружения.
+
+    Сценарий аналогичный предыдущему, но:
+      - атрибут prefer_discount_cell отсутствует,
+      - PREFER_S5=0 → ожидаем использование price_discount из файла (90.0).
+    """
+    # Окружение говорит "НЕ предпочитай S5" → берём price_discount
+    monkeypatch.setenv("PREFER_S5", "0")
+
+    dummy_conn = DummyConn()
+    monkeypatch.setattr(load_utils, "get_conn", lambda: dummy_conn)
+
+    df = pd.DataFrame(
+        [
+            {
+                "code": "TEST_NO_ATTR",
+                "price_rub": 100.0,
+                "price_discount": 90.0,
+            }
+        ]
+    )
+    df.attrs["discount_pct"] = 0.20  # дала бы 80.0, если бы мы предпочитали S5
+
+    inserted = upsert_records(df, date.today())
+    assert inserted == 1
+
+    insert_calls = [
+        (sql, params)
+        for (sql, params) in dummy_conn.cursor_obj.executed
+        if "INSERT INTO products" in sql
+    ]
+    assert insert_calls, "Ожидался вызов INSERT INTO products"
+
+    sql, params = insert_calls[0]
+    # Так как prefer_discount_cell не задан, а PREFER_S5=0,
+    # ожидание — использовать price_discount из файла (90.0), а не 80.0.
+    assert pytest.approx(params["price_final_rub"], rel=1e-6) == 90.0
+    assert pytest.approx(params["price_rub"], rel=1e-6) == 90.0
 
 
 # =============================================================================
