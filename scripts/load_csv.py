@@ -18,9 +18,12 @@ import argparse
 import logging
 import os
 from datetime import date, datetime
-from typing import Optional
+from typing import Dict, Optional
 
 from dotenv import load_dotenv
+
+# Low-level ETL helpers
+from scripts.data_quality import DQ_ERRORS_COLUMN, apply_quality_gates
 
 # Date extraction module for automatic date parsing (Issue #81)
 from scripts.date_extraction import get_effective_date
@@ -33,8 +36,6 @@ from scripts.idempotency import (
     create_price_list_entry,
     update_envelope_status,
 )
-
-# Low-level ETL helpers
 from scripts.load_utils import (
     _get_discount_from_cell,
     _to_float,
@@ -302,14 +303,31 @@ def main(argv: Optional[list] = None) -> None:
     pattern = r"^[A-Za-z0-9][A-Za-z0-9_-]{2,}$"
     df = df[df["code"].str.match(pattern, na=False)]
 
-    # выкинем строки, где вообще нет ни прайса, ни финальной из файла
-    if "price_rub" in df.columns:
-        df["price_rub_num"] = df["price_rub"].map(_to_float)
-    if "price_discount" in df.columns:
-        df["price_discount_num"] = df["price_discount"].map(_to_float)
-    if "price_rub_num" in df.columns and "price_discount_num" in df.columns:
-        df = df[df["price_rub_num"].notna() | df["price_discount_num"].notna()]
-    df = df.drop(columns=[c for c in ("price_rub_num", "price_discount_num") if c in df.columns])
+# ==========================
+# Data quality gates (Issue #83)
+# ==========================
+    good_df, bad_df = apply_quality_gates(df)
+
+    if not bad_df.empty:
+        total_bad = len(bad_df)
+        error_counts: Dict[str, int] = {}
+        for errs in bad_df[DQ_ERRORS_COLUMN]:
+            for code in errs:
+               error_counts[code] = error_counts.get(code, 0) + 1
+
+        logger.warning("[dq] Some rows failed data quality checks; they will be skipped from import",
+                             extra = {
+                                "rows_failed": total_bad,
+                                "dq_error_counts": error_counts,
+                            },
+        )
+        print(
+            f"[dq] {total_bad} row(s) failed data quality checks and will be skipped. "
+            "See logs for aggregated error statistics."
+        )
+
+    # дальше в импорт идём только с good_df
+    df = good_df
 
     # ==========================
     # Import data
@@ -323,9 +341,9 @@ def main(argv: Optional[list] = None) -> None:
             conn,
             envelope_id,
             status="success",
-            rows_inserted=rows_before,
-            rows_updated=0,
-            rows_failed=0,
+            rows_inserted = rows_before,
+            rows_updated = 0,
+            rows_failed = len(bad_df),
         )
 
         # Create price_list entry linking envelope to effective date
