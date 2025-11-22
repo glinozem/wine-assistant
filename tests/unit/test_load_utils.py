@@ -424,7 +424,7 @@ def test_get_conn_returns_valid_connection(monkeypatch):
     monkeypatch.setenv("PGHOST", "localhost")
     monkeypatch.setenv("PGPORT", "15432")
     monkeypatch.setenv("PGUSER", "postgres")
-    monkeypatch.setenv("PGPASSWORD", "dev_local_pw")
+    monkeypatch.setenv("PGPASSWORD", "postgres")
     monkeypatch.setenv("PGDATABASE", "wine_db")
 
     conn = get_conn()
@@ -453,7 +453,7 @@ def test_upsert_records_insert_and_update(monkeypatch):
     monkeypatch.setenv("PGHOST", "localhost")
     monkeypatch.setenv("PGPORT", "15432")
     monkeypatch.setenv("PGUSER", "postgres")
-    monkeypatch.setenv("PGPASSWORD", "dev_local_pw")
+    monkeypatch.setenv("PGPASSWORD", "postgres")
     monkeypatch.setenv("PGDATABASE", "wine_db")
 
     conn = get_conn()
