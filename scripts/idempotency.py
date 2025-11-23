@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 from uuid import UUID
 
 import psycopg2
+import psycopg2.extras
 
 logger = logging.getLogger(__name__)
 

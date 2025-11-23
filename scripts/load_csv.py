@@ -12,6 +12,7 @@ Responsibilities:
   * determine discount percentage from header / fixed cell and store it in df.attrs;
   * call upsert_records() to write products / prices / inventory into the DB;
   * update envelope and price_list metadata in the idempotency tables.
+  * опционально сохраняет некорректные строки прайса в таблицу карантина (price_list_quarantine).
 """
 
 import argparse
@@ -23,7 +24,11 @@ from typing import Dict, Optional
 from dotenv import load_dotenv
 
 # Low-level ETL helpers
-from scripts.data_quality import DQ_ERRORS_COLUMN, apply_quality_gates
+from scripts.data_quality import (
+    DQ_ERRORS_COLUMN,
+    apply_quality_gates,
+    persist_quarantine_rows,
+)
 
 # Date extraction module for automatic date parsing (Issue #81)
 from scripts.date_extraction import get_effective_date
@@ -303,9 +308,9 @@ def main(argv: Optional[list] = None) -> None:
     pattern = r"^[A-Za-z0-9][A-Za-z0-9_-]{2,}$"
     df = df[df["code"].str.match(pattern, na=False)]
 
-# ==========================
-# Data quality gates (Issue #83)
-# ==========================
+    # ==========================
+    # Data quality gates (Issue #83)
+    # ==========================
     good_df, bad_df = apply_quality_gates(df)
 
     if not bad_df.empty:
@@ -313,13 +318,14 @@ def main(argv: Optional[list] = None) -> None:
         error_counts: Dict[str, int] = {}
         for errs in bad_df[DQ_ERRORS_COLUMN]:
             for code in errs:
-               error_counts[code] = error_counts.get(code, 0) + 1
+                error_counts[code] = error_counts.get(code, 0) + 1
 
-        logger.warning("[dq] Some rows failed data quality checks; they will be skipped from import",
-                             extra = {
-                                "rows_failed": total_bad,
-                                "dq_error_counts": error_counts,
-                            },
+        logger.warning(
+            "[dq] Some rows failed data quality checks; they will be skipped from import",
+            extra={
+                "rows_failed": total_bad,
+                "dq_error_counts": error_counts,
+            },
         )
         print(
             f"[dq] {total_bad} row(s) failed data quality checks and will be skipped. "
@@ -333,7 +339,12 @@ def main(argv: Optional[list] = None) -> None:
     # Import data
     # ==========================
     try:
-        rows_before = len(df)
+        rows_good = len(df)
+
+        # сначала сохраняем плохие строки в карантин (если есть)
+        rows_failed = persist_quarantine_rows(conn, envelope_id, bad_df)
+
+        # затем импортируем только хорошие строки
         upsert_records(df, asof_dt)
 
         # Update envelope status to success
@@ -341,9 +352,9 @@ def main(argv: Optional[list] = None) -> None:
             conn,
             envelope_id,
             status="success",
-            rows_inserted = rows_before,
-            rows_updated = 0,
-            rows_failed = len(bad_df),
+            rows_inserted=rows_good,
+            rows_updated=0,
+            rows_failed=rows_failed,
         )
 
         # Create price_list entry linking envelope to effective date
@@ -360,7 +371,8 @@ def main(argv: Optional[list] = None) -> None:
             extra={
                 "envelope_id": str(envelope_id),
                 "price_list_id": str(price_list_id),
-                "rows_processed": rows_before,
+                "rows_processed": rows_good,
+                "rows_failed": rows_failed,
                 "effective_date": asof_dt.isoformat()
                 if isinstance(asof_dt, date)
                 else asof_dt.date().isoformat(),
@@ -369,7 +381,8 @@ def main(argv: Optional[list] = None) -> None:
 
         print("\n[OK] Import completed successfully")
         print(f"   Envelope ID: {envelope_id}")
-        print(f"   Rows processed: {rows_before}")
+        print(f"   Rows processed (good): {rows_good}")
+        print(f"   Rows failed (quarantine): {rows_failed}")
         print(f"   Effective date: {asof_dt}")
 
     except Exception as e:
