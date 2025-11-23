@@ -2,20 +2,22 @@
 from __future__ import annotations
 
 """
-Data quality checks for imported price list data.
+Data quality utilities for imported price list data.
 
 Responsibilities:
     * validate individual rows (код, цены, остатки, abv, объём);
     * split incoming DataFrame into "good" and "bad" rows;
-    * attach machine-readable error codes to "bad" rows.
+    * attach machine-readable error codes to "bad" rows;
+    * optionally persist invalid rows into a quarantine table.
 
-This module is intentionally pure-Pandas and does not access DB.
-It can be used from scripts/load_csv.py before upsert_records().
+Quality gates themselves are pure Pandas operations; only
+`persist_quarantine_rows()` выполняет запись в БД.
 """
 
+import json
 import re
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import Iterable, List, Tuple
 
 import pandas as pd
 
@@ -26,9 +28,15 @@ DQ_ERRORS_COLUMN = "__dq_errors"
 # Тот же паттерн для кода, что и в load_csv: "похож на артикул"
 CODE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{2,}$")
 
-
+# [INTERNAL] reserved for future use
 @dataclass(frozen=True)
 class DataQualityIssue:
+    """
+    [PUBLIC API]:
+      validate_row, apply_quality_gates, persist_quarantine_rows
+    [INTERNAL]:
+      _is_empty, CODE_PATTERN, DQ_ERRORS_COLUMN
+    """
     row_index: int
     code: str
     message: str
@@ -154,3 +162,61 @@ def apply_quality_gates(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         bad_df[DQ_ERRORS_COLUMN] = []
 
     return good_df, bad_df
+
+
+def persist_quarantine_rows(
+    conn,
+    envelope_id,
+    bad_df: pd.DataFrame,
+    dq_errors_column: str = DQ_ERRORS_COLUMN,
+) -> int:
+    """
+    Сохраняет некорректные строки из bad_df в таблицу price_list_quarantine.
+
+    - Каждая строка сохраняется в raw_row (jsonb) без служебной колонки dq_errors_column.
+    - Код (если есть) пишется отдельно в колонку code.
+    - Список ошибок пишется в dq_errors::text[].
+    - Возвращает количество записанных строк.
+    """
+    if bad_df is None or bad_df.empty:
+        return 0
+
+    rows = []
+    for _, row in bad_df.iterrows():
+        raw = row.to_dict()
+
+        # отдельно забираем dq_errors
+        errors_val = raw.pop(dq_errors_column, None)
+
+        if errors_val is None:
+            errors: Iterable[str] = []
+        elif isinstance(errors_val, str):
+            errors = [errors_val]
+        else:
+            try:
+                errors = list(errors_val)
+            except TypeError:
+                errors = [str(errors_val)]
+
+        code_val = raw.get("code")
+
+        rows.append(
+            (
+                envelope_id,
+                code_val,
+                json.dumps(raw, ensure_ascii=False),
+                errors,
+            )
+        )
+
+    with conn.cursor() as cur:
+        cur.executemany(
+            """
+            INSERT INTO price_list_quarantine (envelope_id, code, raw_row, dq_errors)
+            VALUES (%s, %s, %s::jsonb, %s::text[])
+            """,
+            rows,
+        )
+
+    conn.commit()
+    return len(rows)
