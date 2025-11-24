@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # api/app.py — hardened v0.4.0
 
+import io
 import os
 import time
 from datetime import date, datetime, timezone
@@ -9,12 +10,13 @@ from functools import wraps
 from typing import Any, Dict, List, Optional, Tuple
 
 from flasgger import Swagger
-from flask import Flask, g, jsonify, request
+from flask import Flask, g, jsonify, request, send_file
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.errors import RateLimitExceeded
 from flask_limiter.util import get_remote_address
 
+from api.export import ExportService
 from api.logging_config import setup_logging
 from api.schemas import (
     CatalogSearchParams,
@@ -147,6 +149,7 @@ else:
 PUBLIC_LIMIT = os.getenv("RATE_LIMIT_PUBLIC", "100/hour")
 PROTECTED_LIMIT = os.getenv("RATE_LIMIT_PROTECTED", "1000/hour")
 
+export_service = ExportService()
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Swagger
@@ -785,6 +788,205 @@ def catalog_search():
         _close_conn_safely(conn)
 
 
+@app.route("/export/search", methods=["GET"])
+@app.route("/api/v1/export/search", methods=["GET"])
+@limiter.limit(PUBLIC_LIMIT)
+def export_search():
+    """
+    Export catalog search results.
+
+    ---
+    tags: [Export]
+    summary: Export catalog search results
+    description: >
+      Экспорт результатов `/api/v1/products/search` в Excel/PDF/JSON.
+      Поддерживает те же фильтры, что и основной search.
+    parameters:
+      - in: query
+        name: q
+        type: string
+        description: Текстовый поиск по названию/производителю/региону
+      - in: query
+        name: max_price
+        type: number
+      - in: query
+        name: min_price
+        type: number
+      - in: query
+        name: color
+        type: string
+      - in: query
+        name: region
+        type: string
+      - in: query
+        name: country
+        type: string
+      - in: query
+        name: in_stock
+        type: boolean
+      - in: query
+        name: limit
+        type: integer
+        default: 100
+        description: Максимальное количество строк для экспорта
+      - in: query
+        name: format
+        type: string
+        enum: [xlsx, pdf, json]
+        default: xlsx
+        description: Формат экспорта
+      - in: query
+        name: fields
+        type: string
+        description: >
+          Список полей через запятую (например: code,title_ru,price_final_rub,region).
+          Если не задан, используется дефолтный набор.
+    responses:
+      200:
+        description: Exported file
+      400:
+        description: Validation error or unsupported format
+    """
+    # 1. Разбираем format/fields
+    fmt = request.args.get("format", "xlsx").lower()
+    if fmt not in ("xlsx", "pdf", "json"):
+        return (
+            jsonify(
+                {
+                    "error": "unsupported_format",
+                    "supported": ["xlsx", "pdf", "json"],
+                }
+            ),
+            400,
+        )
+
+    raw_fields = request.args.get("fields")
+    fields: list[str] | None = None
+    if raw_fields:
+        fields = [f.strip() for f in raw_fields.split(",") if f.strip()]
+
+    # 2. Переиспользуем ту же валидацию, что и для /api/v1/products/search
+    #    но limit для экспорта можно сделать больше дефолта (например, 100 или 1000)
+    params, error = validate_query_params(CatalogSearchParams)
+    if error:
+        return error
+
+    # Для экспорта разумно ограничить лимит сверху, чтобы не убить прод
+    export_limit = min(params.limit, 1000)
+    params.limit = export_limit
+
+    conn, err = db_connect()
+    if err or not conn:
+        app.logger.error(
+            "Export search failed - database unavailable",
+            extra={"error": err},
+        )
+        # Для экспорта в случае проблем можно вернуть JSON-ошибку
+        return jsonify({"error": "db_unavailable"}), 503
+
+    try:
+        # Здесь мы по сути копируем query-часть catalog_search,
+        # но вместо json ответа возвращаем данные в Excel/PDF/JSON через ExportService.
+        clauses: list[str] = []
+        qparams: list = []
+
+        if params.q:
+            clauses.append(
+                "(p.title_ru ILIKE %s OR p.producer ILIKE %s OR p.region ILIKE %s)"
+            )
+            like = f"%{params.q}%"
+            qparams.extend([like, like, like])
+
+        if params.country:
+            clauses.append("p.country ILIKE %s")
+            qparams.append(f"%{params.country}%")
+
+        if params.region:
+            clauses.append("p.region ILIKE %s")
+            qparams.append(f"%{params.region}%")
+
+        if params.grapes:
+            clauses.append("p.grapes ILIKE %s")
+            qparams.append(f"%{params.grapes}%")
+
+        if params.in_stock:
+            clauses.append("i.stock_free > 0")
+
+        if params.min_price is not None:
+            clauses.append("p.price_final_rub >= %s")
+            qparams.append(params.min_price)
+
+        if params.max_price is not None:
+            clauses.append("p.price_final_rub <= %s")
+            qparams.append(params.max_price)
+
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+        # Для экспорта сортировка по названию — наиболее ожидаемое поведение
+        order_by = "p.title_ru"
+
+        sql = f"""
+            SELECT
+                p.code,
+                p.title_ru,
+                p.producer,
+                p.country,
+                p.region,
+                p.color,
+                p.style,
+                p.price_list_rub,
+                p.price_final_rub,
+                COALESCE(i.stock_total, 0) AS stock_total,
+                COALESCE(i.stock_free, 0)  AS stock_free
+            FROM public.products p
+            LEFT JOIN public.inventory i ON i.code = p.code
+            {where}
+            ORDER BY {order_by}
+            LIMIT %s
+        """
+        qparams.append(params.limit)
+
+        rows = db_query(conn, sql, tuple(qparams))
+
+        # 3. В зависимости от формата используем ExportService
+        if fmt == "json":
+            items = [_normalize_product_row(dict(row)) for row in rows]
+            return jsonify(items)
+
+        if fmt == "xlsx":
+            content = export_service.export_search_to_excel(rows, fields)
+            return send_file(
+                io.BytesIO(content),
+                mimetype=(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                ),
+                as_attachment=True,
+                download_name="wine_search.xlsx",
+            )
+
+        if fmt == "pdf":
+            content = export_service.export_search_to_pdf(rows)
+            return send_file(
+                io.BytesIO(content),
+                mimetype="application/pdf",
+                as_attachment=True,
+                download_name="wine_search.pdf",
+            )
+
+        # сюда по идее не дойдём
+        return jsonify({"error": "unsupported_format"}), 400
+
+    except Exception as e:
+        app.logger.error(
+            "Export search failed",
+            extra={"error": str(e)},
+            exc_info=True,
+        )
+        return jsonify({"error": "export_failed"}), 500
+    finally:
+        _close_conn_safely(conn)
+
+
 # ────────────────────────────────────────────────────────────────────────────────
 # SKU endpoints (protected if API_KEY set)
 # ────────────────────────────────────────────────────────────────────────────────
@@ -832,6 +1034,124 @@ def get_sku(code: str):
         return jsonify({"error": "internal_error"}), 500
     finally:
         _close_conn_safely(conn)
+
+
+@app.route("/export/sku/<code>", methods=["GET"])
+@app.route("/api/v1/export/sku/<code>", methods=["GET"])
+@require_api_key
+@limiter.limit(PROTECTED_LIMIT)
+def export_sku(code: str):
+    """
+    Export SKU card
+    ---
+    tags: [Export]
+    security: [ { ApiKeyAuth: [] } ]
+    parameters:
+      - in: path
+        name: code
+        required: true
+        type: string
+      - in: query
+        name: format
+        type: string
+        enum: [pdf, json]
+        default: pdf
+        description: Формат экспорта (pdf или json)
+    responses:
+      200:
+        description: Exported SKU card
+      400:
+        description: Unsupported format
+      404:
+        description: SKU not found
+    """
+    format_type = request.args.get("format", "pdf").lower()
+
+    if format_type not in ("pdf", "json"):
+        return (
+            jsonify(
+                {
+                    "error": "unsupported_format",
+                    "supported": ["pdf", "json"],
+                }
+            ),
+            400,
+        )
+
+    conn, err = db_connect()
+    if err or not conn:
+        app.logger.error(
+            "Export SKU failed - DB unavailable",
+            extra={"error": err, "code": code},
+        )
+        return jsonify({"error": "internal_error"}), 503
+
+    try:
+        # Ровно та же выборка, что и в /api/v1/sku/<code>
+        rows = db_query(
+            conn,
+            """
+            SELECT
+                p.code,
+                p.title_ru        AS title_ru,
+                p.title_ru        AS name,
+                p.country,
+                p.producer,
+                p.region,
+                p.color,
+                p.style,
+                p.price_list_rub,
+                p.price_final_rub,
+                COALESCE(i.stock_total, 0) AS stock_total,
+                COALESCE(i.stock_free, 0)  AS stock_free
+            FROM public.products p
+            LEFT JOIN public.inventory i
+              ON i.code = p.code
+            WHERE p.code = %s
+            """,
+            (code,),
+        )
+
+        if not rows:
+            # В БД нет такого SKU вообще
+            return jsonify({"error": "not_found"}), 404
+
+        wine = rows[0]
+
+        # Нормализуем Decimal → float для JSON
+        wine["price_list_rub"] = _convert_decimal_to_number(
+            wine.get("price_list_rub")
+        )
+        wine["price_final_rub"] = _convert_decimal_to_number(
+            wine.get("price_final_rub")
+        )
+
+        if "title_ru" in wine and "name" not in wine:
+            wine["name"] = wine["title_ru"]
+
+        if format_type == "json":
+            return jsonify(wine)
+
+        # PDF
+        pdf_data = export_service.export_wine_card_to_pdf(wine)
+
+        return send_file(
+            io.BytesIO(pdf_data),
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name=f"wine_card_{code}.pdf",
+        )
+
+    except Exception as e:  # noqa: BLE001
+        app.logger.error(
+            "Export SKU failed",
+            extra={"error": str(e), "code": code},
+            exc_info=True,
+        )
+        return jsonify({"error": "export_failed"}), 500
+    finally:
+        _close_conn_safely(conn)
+
 
 @app.route("/sku/<code>/price-history", methods=["GET"])
 @app.route("/api/v1/sku/<code>/price-history", methods=["GET"])
@@ -919,6 +1239,146 @@ def price_history(code: str):
         }), 500
     finally:
         _close_conn_safely(conn)
+
+
+@app.route("/export/price-history/<code>", methods=["GET"])
+@app.route("/api/v1/export/price-history/<code>", methods=["GET"])
+@require_api_key
+@limiter.limit(PROTECTED_LIMIT)
+def export_price_history(code: str):
+    """
+    Export price history for SKU
+    ---
+    tags: [Export]
+    security: [ { ApiKeyAuth: [] } ]
+    parameters:
+      - in: path
+        name: code
+        required: true
+        type: string
+      - in: query
+        name: from
+        type: string
+        format: date
+      - in: query
+        name: to
+        type: string
+        format: date
+      - in: query
+        name: limit
+        type: integer
+        default: 50
+      - in: query
+        name: offset
+        type: integer
+        default: 0
+      - in: query
+        name: format
+        type: string
+        enum: [xlsx, json]
+        default: xlsx
+        description: Формат экспорта (Excel или JSON)
+    responses:
+      200:
+        description: Exported price history
+      400:
+        description: Unsupported format or validation error
+    """
+    fmt = request.args.get("format", "xlsx").lower()
+    if fmt not in ("xlsx", "json"):
+        return (
+            jsonify(
+                {
+                    "error": "unsupported_format",
+                    "supported": ["xlsx", "json"],
+                }
+            ),
+            400,
+        )
+
+    params, error = validate_query_params(PriceHistoryParams)
+    if error:
+        return error
+
+    conn, err = db_connect()
+    if err or not conn:
+        app.logger.error(
+            "Export price history failed - database unavailable",
+            extra={"error": err, "code": code},
+        )
+        return jsonify({"error": "db_unavailable"}), 503
+
+    try:
+        clauses = ["code = %s"]
+        sql_params: list = [code]
+
+        if params.dt_from:
+            clauses.append("effective_from::date >= %s")
+            sql_params.append(params.dt_from)
+        if params.dt_to:
+            clauses.append("effective_from::date <= %s")
+            sql_params.append(params.dt_to)
+
+        where = " AND ".join(clauses)
+        sql = f"""
+            SELECT code, price_rub, effective_from, effective_to
+            FROM public.product_prices
+            WHERE {where}
+            ORDER BY effective_from DESC
+            LIMIT %s OFFSET %s
+        """
+        sql_params.extend([params.limit, params.offset])
+
+        rows = db_query(conn, sql, tuple(sql_params))
+
+        # Приводим к формату, который ожидает ExportService.export_price_history_to_excel
+        items: list[dict] = []
+        for r in rows:
+            items.append(
+                {
+                    "effective_from": str(r["effective_from"]),
+                    "effective_to": str(r["effective_to"]) if r["effective_to"] else None,
+                    # В БД одна цена, дублируем в прайс/финальную
+                    "price_list_rub": r["price_rub"],
+                    "price_final_rub": r["price_rub"],
+                }
+            )
+
+        history = {
+            "code": code,
+            "items": items,
+            "total": len(items),
+            "limit": params.limit,
+            "offset": params.offset,
+        }
+
+        if fmt == "json":
+            # Нормализуем числа в JSON
+            for item in history["items"]:
+                item["price_list_rub"] = _convert_decimal_to_number(item["price_list_rub"])
+                item["price_final_rub"] = _convert_decimal_to_number(item["price_final_rub"])
+            return jsonify(history)
+
+        # fmt == "xlsx"
+        content = export_service.export_price_history_to_excel(history)
+        return send_file(
+            io.BytesIO(content),
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name=f"price_history_{code}.xlsx",
+        )
+
+    except Exception as e:
+        app.logger.error(
+            "Export price history failed",
+            extra={"error": str(e), "code": code},
+            exc_info=True,
+        )
+        return jsonify({"error": "export_failed"}), 500
+    finally:
+        _close_conn_safely(conn)
+
+
 
 @app.route("/sku/<code>/inventory-history", methods=["GET"])
 @app.route("/api/v1/sku/<code>/inventory-history", methods=["GET"])

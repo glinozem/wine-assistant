@@ -11,8 +11,13 @@ WORKDIR /app
 # - был curl (healthcheck)
 # - собирались нативные пакеты (если в req есть psycopg2 без -binary)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl build-essential libpq-dev && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get install -y --no-install-recommends \
+        curl \
+        build-essential \
+        libpq-dev \
+        fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
 
 # Ставим зависимости заранее для лучшего кэширования
 COPY requirements.txt .
