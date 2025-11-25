@@ -285,6 +285,8 @@ def main(argv: Optional[list] = None) -> None:
         "producer",
         "country",
         "region",
+        "color",
+        "style",
         "grapes",
         "abv",
         "pack",
@@ -295,6 +297,7 @@ def main(argv: Optional[list] = None) -> None:
         "reserved",
         "stock_free",
     }
+
     have = [c for c in df.columns if c in keep]
     have = list(dict.fromkeys(have))  # удалим дубликаты имён, сохраняя порядок
 

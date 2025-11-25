@@ -24,6 +24,7 @@ __all__ = [
     "_csv_read",
     "read_any",
     "COLMAP",
+    "upsert_records",
 ]
 
 # Date extraction module for automatic date parsing (Issue #81)
@@ -159,9 +160,9 @@ COLMAP: Dict[str, Optional[str]] = {
     "vivino": None,
     "фото": None,
     "сайт": None,
-    "категория": None,
-    "тип": None,
-    "цвет": None,
+    "категория": "style",
+    "тип": "style",
+    "цвет": "color",
     "рейтинг": None,
     "поставщик": None,
     "св_во": None,
@@ -395,25 +396,29 @@ def upsert_records(df: pd.DataFrame, asof: date | datetime):
 
     ins_products = """
                    INSERT INTO products(code, producer, title_ru, country,
-                                        region, grapes, abv, pack, volume,
+                                        region, color, style,
+                                        grapes, abv, pack, volume,
                                         price_list_rub, price_final_rub,
                                         price_rub)
                    VALUES (%(code)s, %(producer)s, %(title_ru)s, %(country)s,
-                           %(region)s, %(grapes)s, %(abv)s, %(pack)s,
+                           %(region)s, %(color)s, %(style)s,
+                           %(grapes)s, %(abv)s, %(pack)s,
                            %(volume)s, %(price_list_rub)s, %(price_final_rub)s,
-                           %(price_rub)s)
-                   ON CONFLICT (code) DO UPDATE SET
-                       producer = EXCLUDED.producer,
-                       title_ru = EXCLUDED.title_ru,
-                       country = EXCLUDED.country,
-                       region = EXCLUDED.region,
-                       grapes = EXCLUDED.grapes,
-                       abv = EXCLUDED.abv,
-                       pack = EXCLUDED.pack,
-                       volume = EXCLUDED.volume,
-                       price_list_rub = EXCLUDED.price_list_rub,
-                       price_final_rub = EXCLUDED.price_final_rub,
-                       price_rub = EXCLUDED.price_rub;
+                           %(price_rub)s) ON CONFLICT (code) DO \
+                   UPDATE SET
+                       producer = EXCLUDED.producer, \
+                       title_ru = EXCLUDED.title_ru, \
+                       country = EXCLUDED.country, \
+                       region = EXCLUDED.region, \
+                       color = COALESCE (EXCLUDED.color, products.color), \
+                       style = COALESCE (EXCLUDED.style, products.style), \
+                       grapes = EXCLUDED.grapes, \
+                       abv = EXCLUDED.abv, \
+                       pack = EXCLUDED.pack, \
+                       volume = EXCLUDED.volume, \
+                       price_list_rub = EXCLUDED.price_list_rub, \
+                       price_final_rub = EXCLUDED.price_final_rub, \
+                       price_rub = EXCLUDED.price_rub; \
                    """
 
     upsert_inventory = """
@@ -475,6 +480,8 @@ def upsert_records(df: pd.DataFrame, asof: date | datetime):
                 title_ru=r.get("title_ru"),
                 country=r.get("country"),
                 region=r.get("region"),
+                color=r.get("color"),
+                style=r.get("style"),
                 grapes=r.get("grapes"),
                 abv=r.get("abv"),
                 pack=r.get("pack"),
@@ -483,6 +490,26 @@ def upsert_records(df: pd.DataFrame, asof: date | datetime):
                 price_final_rub=eff,
                 price_rub=eff,
             )
+
+            # Приводим значения к скалярным типам, чтобы psycopg2 не увидел Series
+            from numpy import (
+                generic as np_generic,  # импорт в начале файла у тебя уже, скорее всего, есть
+            )
+
+            def _to_scalar(v):
+                import numpy as np
+                import pandas as pd
+
+                # Если вдруг прилетел Series — берем одно значение или None
+                if isinstance(v, pd.Series):
+                    return v.iloc[0] if len(v) else None
+                # numpy-скаляры -> обычные питоновские
+                if isinstance(v, np.generic):
+                    return v.item()
+                return v
+
+            payload = {k: _to_scalar(v) for k, v in payload.items()}
+
             cur.execute(ins_products, payload)
             prod_upd += 1
 
