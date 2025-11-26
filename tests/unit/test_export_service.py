@@ -44,6 +44,7 @@ def test_export_search_to_excel_default_columns():
     rows = _load_rows_from_xlsx(data)
 
     # Первая строка — заголовки
+    # Должны совпадать с DEFAULT_SEARCH_COLUMNS в ExportService
     assert rows[0] == [
         "Код",
         "Название",
@@ -52,16 +53,23 @@ def test_export_search_to_excel_default_columns():
         "Цвет",
         "Регион",
         "Производитель",
+        "Сортовой состав",
+        "Год урожая",
+        "Рейтинг Vivino",
+        "Экспертный рейтинг",
+        "Поставщик",
     ]
 
-    # Первая запись
-    assert rows[1][0] == "D000001"
-    assert rows[1][1] == "Test Wine 1"
-    assert float(rows[1][2]) == 1000.0
-    assert float(rows[1][3]) == 900.0
-    assert rows[1][4] == "red"
-    assert rows[1][5] == "Region 1"
-    assert rows[1][6] == "Producer 1"
+    # Первая запись: проверяем только те поля, которые реально передаем
+    assert rows[1][0] == "D000001"      # Код
+    assert rows[1][1] == "Test Wine 1"  # Название
+    assert float(rows[1][2]) == 1000.0  # Цена прайс
+    assert float(rows[1][3]) == 900.0   # Цена финальная
+    assert rows[1][4] == "red"          # Цвет
+    assert rows[1][5] == "Region 1"     # Регион
+    assert rows[1][6] == "Producer 1"   # Производитель
+    # Остальные новые поля (сортовой состав, год урожая, vivino, поставщик)
+    # в тестовых данных не заданы, могут быть пустыми/None — не проверяем
 
 
 def test_export_search_to_excel_with_custom_fields():

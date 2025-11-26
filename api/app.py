@@ -321,7 +321,13 @@ def _normalize_product_row(row: dict) -> dict:
     Привести числовые поля товара к нормальным числам,
     чтобы в JSON они были number, а не string.
     """
-    for key in ("price_list_rub", "price_final_rub", "stock_total", "stock_free"):
+    for key in (
+        "price_list_rub",
+        "price_final_rub",
+        "stock_total",
+        "stock_free",
+        "vivino_rating",
+    ):
         if key in row:
             row[key] = _convert_decimal_to_number(row[key])
     return row
@@ -733,6 +739,11 @@ def catalog_search():
                 p.region,
                 p.color,
                 p.style,
+                p.grapes,
+                p.vintage,
+                p.vivino_url,
+                p.vivino_rating,
+                p.supplier,
                 p.price_list_rub,
                 p.price_final_rub,
                 i.stock_total,
@@ -743,6 +754,7 @@ def catalog_search():
             ORDER BY {order_by}
             {limit_clause}
         """
+
 
         rows = db_query(conn, sql, tuple(qparams))
 
@@ -934,6 +946,11 @@ def export_search():
                 p.region,
                 p.color,
                 p.style,
+                p.grapes,
+                p.vintage,
+                p.vivino_url,
+                p.vivino_rating,
+                p.supplier,
                 p.price_list_rub,
                 p.price_final_rub,
                 COALESCE(i.stock_total, 0) AS stock_total,
@@ -944,6 +961,7 @@ def export_search():
             ORDER BY {order_by}
             LIMIT %s
         """
+
         qparams.append(params.limit)
 
         rows = db_query(conn, sql, tuple(qparams))
@@ -951,7 +969,10 @@ def export_search():
         # 3. В зависимости от формата используем ExportService
         if fmt == "json":
             items = [_normalize_product_row(dict(row)) for row in rows]
-            return jsonify(items)
+            return jsonify({
+                "value": items,
+                "Count": len(items),
+            })
 
         if fmt == "xlsx":
             content = export_service.export_search_to_excel(rows, fields)
@@ -1015,10 +1036,23 @@ def get_sku(code: str):
         rows = db_query(
             conn,
             """
-            SELECT p.code, p.title_ru AS name, p.producer, p.region, p.color, p.style,
-                   p.price_list_rub, p.price_final_rub,
-                   COALESCE(i.stock_total, 0) AS stock_total,
-                   COALESCE(i.stock_free, 0)  AS stock_free
+            SELECT
+                p.code,
+                p.title_ru AS name,
+                p.producer,
+                p.country,
+                p.region,
+                p.color,
+                p.style,
+                p.grapes,
+                p.vintage,
+                p.vivino_url,
+                p.vivino_rating,
+                p.supplier,
+                p.price_list_rub,
+                p.price_final_rub,
+                COALESCE(i.stock_total, 0) AS stock_total,
+                COALESCE(i.stock_free, 0)  AS stock_free
             FROM public.products p
             LEFT JOIN public.inventory i ON i.code = p.code
             WHERE p.code = %s
@@ -1091,22 +1125,26 @@ def export_sku(code: str):
         rows = db_query(
             conn,
             """
-            SELECT
-                p.code,
-                p.title_ru        AS title_ru,
-                p.title_ru        AS name,
-                p.country,
-                p.producer,
-                p.region,
-                p.color,
-                p.style,
-                p.price_list_rub,
-                p.price_final_rub,
-                COALESCE(i.stock_total, 0) AS stock_total,
-                COALESCE(i.stock_free, 0)  AS stock_free
+            SELECT p.code,
+                   p.title_ru                 AS title_ru,
+                   p.title_ru                 AS name,
+                   p.country,
+                   p.producer,
+                   p.region,
+                   p.color,
+                   p.style,
+                   p.grapes,
+                   p.vintage,
+                   p.vivino_url,
+                   p.vivino_rating,
+                   p.supplier,
+                   p.price_list_rub,
+                   p.price_final_rub,
+                   COALESCE(i.stock_total, 0) AS stock_total,
+                   COALESCE(i.stock_free, 0)  AS stock_free
             FROM public.products p
-            LEFT JOIN public.inventory i
-              ON i.code = p.code
+                     LEFT JOIN public.inventory i
+                               ON i.code = p.code
             WHERE p.code = %s
             """,
             (code,),
@@ -1119,12 +1157,15 @@ def export_sku(code: str):
         wine = rows[0]
 
         # Нормализуем Decimal → float для JSON
-        wine["price_list_rub"] = _convert_decimal_to_number(
-            wine.get("price_list_rub")
-        )
-        wine["price_final_rub"] = _convert_decimal_to_number(
-            wine.get("price_final_rub")
-        )
+        # Нормализуем числа для JSON: цены, рейтинг, остатки
+        for key in (
+            "price_list_rub",
+            "price_final_rub",
+            "vivino_rating",
+            "stock_total",
+            "stock_free",
+        ):
+            wine[key] = _convert_decimal_to_number(wine.get(key))
 
         if "title_ru" in wine and "name" not in wine:
             wine["name"] = wine["title_ru"]
