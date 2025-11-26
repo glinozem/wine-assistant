@@ -169,7 +169,56 @@ swagger_template = {
         "ApiKeyAuth": {"type": "apiKey", "name": "X-API-Key", "in": "header"},
     },
     "security": [],
+    "definitions": {
+        "ProductSearchItem": {
+            "type": "object",
+            "required": ["code", "name"],
+            "properties": {
+                "code": {"type": "string", "example": "D010210"},
+                "name": {
+                    "type": "string",
+                    "example": "Delampa Monastrell Делампа Монастрель",
+                },
+                "producer": {"type": "string"},
+                "country": {"type": "string"},
+                "region": {"type": "string"},
+                "color": {"type": "string"},
+                "style": {"type": "string"},
+                "grapes": {"type": "string"},
+                "vintage": {"type": "integer", "format": "int32"},
+                "price_list_rub": {"type": "number", "format": "float"},
+                "price_final_rub": {"type": "number", "format": "float"},
+                "stock_total": {"type": "integer", "format": "int32"},
+                "stock_free": {"type": "integer", "format": "int32"},
+                "vivino_rating": {"type": "number", "format": "float"},
+                "vivino_url": {"type": "string"},
+                "supplier": {"type": "string"},
+                "producer_site": {
+                    "type": "string",
+                    "example": "https://producer.example.com",
+                },
+                "image_url": {
+                    "type": "string",
+                    "example": "https://cdn.example.com/wines/D010210.png",
+                },
+            },
+        },
+        "CatalogSearchResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {"$ref": "#/definitions/ProductSearchItem"},
+                },
+                "total": {"type": "integer", "format": "int32"},
+                "offset": {"type": "integer", "format": "int32"},
+                "limit": {"type": "integer", "format": "int32"},
+                "query": {"type": "string"},
+            },
+        },
+    },
 }
+
 swagger_config = {
     "headers": [],
     "openapi": "2.0",
@@ -643,6 +692,54 @@ def catalog_search():
 
     Версионированный эндпоинт `/api/v1/products/search` и его алиас
     `/catalog/search`. Используется для поиска товаров в каталоге.
+    ---
+    tags: [Search]
+    summary: Catalog search with filters and pagination
+    parameters:
+      - in: query
+        name: q
+        type: string
+        required: false
+        description: Поиск по названию, производителю и региону
+      - in: query
+        name: country
+        type: string
+      - in: query
+        name: region
+        type: string
+      - in: query
+        name: grapes
+        type: string
+      - in: query
+        name: in_stock
+        type: boolean
+        default: false
+        description: Только позиции с положительным свободным остатком
+      - in: query
+        name: min_price
+        type: number
+      - in: query
+        name: max_price
+        type: number
+      - in: query
+        name: sort
+        type: string
+        enum: [price_asc, price_desc, name_asc, name_desc, code_asc, code_desc]
+      - in: query
+        name: offset
+        type: integer
+        default: 0
+      - in: query
+        name: limit
+        type: integer
+        default: 10
+    responses:
+      200:
+        description: Catalog search results
+        schema:
+          $ref: '#/definitions/CatalogSearchResponse'
+      400:
+        description: Validation error
     """
     params, error = validate_query_params(CatalogSearchParams)
     if error:
@@ -744,6 +841,8 @@ def catalog_search():
                 p.vivino_url,
                 p.vivino_rating,
                 p.supplier,
+                p.producer_site,
+                p.image_url,
                 p.price_list_rub,
                 p.price_final_rub,
                 i.stock_total,
@@ -754,7 +853,6 @@ def catalog_search():
             ORDER BY {order_by}
             {limit_clause}
         """
-
 
         rows = db_query(conn, sql, tuple(qparams))
 
@@ -951,6 +1049,8 @@ def export_search():
                 p.vivino_url,
                 p.vivino_rating,
                 p.supplier,
+                p.producer_site,
+                p.image_url,
                 p.price_list_rub,
                 p.price_final_rub,
                 COALESCE(i.stock_total, 0) AS stock_total,
@@ -1049,6 +1149,8 @@ def get_sku(code: str):
                 p.vivino_url,
                 p.vivino_rating,
                 p.supplier,
+                p.producer_site,
+                p.image_url,
                 p.price_list_rub,
                 p.price_final_rub,
                 COALESCE(i.stock_total, 0) AS stock_total,
@@ -1062,7 +1164,9 @@ def get_sku(code: str):
         if not rows:
             app.logger.info("SKU not found", extra={"code": code})
             return jsonify({"error": "not_found"}), 404
-        return jsonify(rows[0])
+        row = dict(rows[0])
+        row = _normalize_product_row(row)
+        return jsonify(row)
     except Exception as e:
         app.logger.error("SKU lookup failed", extra={"error": str(e), "code": code}, exc_info=True)
         return jsonify({"error": "internal_error"}), 500
@@ -1138,6 +1242,8 @@ def export_sku(code: str):
                    p.vivino_url,
                    p.vivino_rating,
                    p.supplier,
+                   p.producer_site,
+                   p.image_url,
                    p.price_list_rub,
                    p.price_final_rub,
                    COALESCE(i.stock_total, 0) AS stock_total,
