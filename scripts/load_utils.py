@@ -8,9 +8,11 @@ from datetime import date, datetime
 from functools import lru_cache
 from typing import Any, Dict, Iterable, Optional, Tuple
 
+import numpy as np
 import openpyxl
 import pandas as pd
 import psycopg2
+from pandas.api import types as pd_types
 
 __all__ = [
     "get_conn",
@@ -24,6 +26,7 @@ __all__ = [
     "_csv_read",
     "read_any",
     "COLMAP",
+    "upsert_records",
 ]
 
 # Date extraction module for automatic date parsing (Issue #81)
@@ -99,6 +102,63 @@ def _to_int(x: Any) -> Optional[int]:
     return None if f is None else int(round(f))
 
 
+def _parse_vintage(x: Any) -> Optional[int]:
+    """
+    Парсим год урожая из текстового поля.
+
+    Берём первый (минимальный) 4-значный год формата 19xx или 20xx.
+    Примеры:
+      "2019" -> 2019
+      "2019 2021 2022 2023" -> 2019
+      "N/A 25-30 лет" -> None
+    """
+    if x is None:
+        return None
+
+    # numpy NaN / float NaN -> None
+    if isinstance(x, (float, np.floating)) and math.isnan(float(x)):
+        return None
+
+    s = _norm(x)
+    years = re.findall(r"\b(19\d{2}|20\d{2})\b", s)
+    if not years:
+        return None
+
+    try:
+        return min(int(y) for y in years)
+    except Exception:
+        return None
+
+
+def _to_scalar(v: Any):
+    """
+    Приводим значение к скалярному типу перед отправкой в psycopg2.
+
+    - pandas.Series -> одно значение или None
+    - numpy-скаляры -> обычные питоновские типы
+    - NaN / Inf -> None
+    - аномально большие int обнуляем (защита от integer out of range)
+    """
+    # Если вдруг прилетел Series — берём одно значение или None
+    if isinstance(v, pd.Series):
+        v = v.iloc[0] if len(v) else None
+
+    # numpy-скаляры -> обычные питоновские
+    if isinstance(v, np.generic):
+        v = v.item()
+
+    # NaN / Inf -> None
+    if isinstance(v, (float, np.floating)):
+        if not math.isfinite(v):
+            return None
+
+    # Подстрахуемся от аномальных огромных int
+    if isinstance(v, int) and abs(v) > 2_000_000_000:
+        return None
+
+    return v
+
+
 # Синонимы колонок -> целевые имена
 # ВАЖНО: «цена прайс» -> price_rub (списочная), «цена со скидкой» -> price_discount (финальная из файла)
 COLMAP: Dict[str, Optional[str]] = {
@@ -119,6 +179,7 @@ COLMAP: Dict[str, Optional[str]] = {
     "регион": "region",
     "провинция": "region",
     "область": "region",
+    "год_урожая": "vintage",
     # сорт
     "сорт": "grapes",
     "сорт_винограда": "grapes",
@@ -154,17 +215,21 @@ COLMAP: Dict[str, Optional[str]] = {
     "резерв": "reserved",
     "свободный_остаток": "stock_free",
     "свободный": "stock_free",
-    # игнор
+    # игнор / доп. поля
     "unnamed": None,
-    "vivino": None,
-    "фото": None,
-    "сайт": None,
-    "категория": None,
-    "тип": None,
-    "цвет": None,
-    "рейтинг": None,
-    "поставщик": None,
-    "св_во": None,
+
+    # дополнительные поля прайса
+    "vivino": "vivino_url",
+    "фото": "image_url",
+    "сайт": "producer_site",
+    "сайт_производителя": "producer_site",
+    "рейтинг": "vivino_rating",
+    "поставщик": "supplier",
+    "св_во": "features",
+
+    "категория": "style",
+    "тип": "style",
+    "цвет": "color",
     "технический_столбец_для_второго_кода_в_случае_его_наличия": None,
 }
 
@@ -359,9 +424,20 @@ def read_any(
                 "Не нашли колонку с кодом (Код / code / Артикул). Проверь шапку файла."
             )
 
-    # зачистка значений
-    for c in df.columns:
-        df[c] = df[c].map(lambda x: _norm(x) if pd.notna(x) else None)
+    # Нормализуем только строковые/объектные колонки:
+    # - срезка пробелов
+    # - замена нестандартных пробелов
+    # Числовые колонки не трогаем, чтобы не ломать их dtype (важно для тестов и pandas 3.x).
+    for idx in range(len(df.columns)):
+        col = df.iloc[:, idx]
+
+        # если колонка не строковая / не object — просто пропускаем
+        if not (pd_types.is_object_dtype(col) or pd_types.is_string_dtype(col)):
+            continue
+
+        df.iloc[:, idx] = col.map(
+            lambda x: _norm(x) if pd.notna(x) else None
+        )
 
     return df
 
@@ -376,16 +452,24 @@ def upsert_records(df: pd.DataFrame, asof: date | datetime):
     if "price_discount" in df.columns:
         df["price_discount"] = df["price_discount"].map(_to_float)
 
+    # упаковка (бутылок в коробке)
     for col in ("pack",):
         if col in df.columns:
             df[col] = df[col].map(_to_int)
-    for col in ("volume", "abv"):
+
+    # дробные величины: объём, крепость, рейтинг Vivino
+    for col in ("volume", "abv", "vivino_rating"):
         if col in df.columns:
             df[col] = df[col].map(_to_float)
 
+    # остатки и резерв – целые числа
     for col in ("stock_total", "reserved", "stock_free"):
         if col in df.columns:
             df[col] = df[col].map(_to_int)
+
+    # год урожая – отдельный парсер, НИ В КАКОМ СЛУЧАЕ НЕ _to_int
+    if "vintage" in df.columns:
+        df["vintage"] = df["vintage"].map(_parse_vintage)
 
     disc: Optional[float] = df.attrs.get("discount_pct")
     # Явный выбор источника скидки (CLI/окружение) может быть передан
@@ -394,27 +478,75 @@ def upsert_records(df: pd.DataFrame, asof: date | datetime):
     prefer_discount_attr: Optional[bool] = df.attrs.get("prefer_discount_cell")
 
     ins_products = """
-                   INSERT INTO products(code, producer, title_ru, country,
-                                        region, grapes, abv, pack, volume,
-                                        price_list_rub, price_final_rub,
-                                        price_rub)
-                   VALUES (%(code)s, %(producer)s, %(title_ru)s, %(country)s,
-                           %(region)s, %(grapes)s, %(abv)s, %(pack)s,
-                           %(volume)s, %(price_list_rub)s, %(price_final_rub)s,
-                           %(price_rub)s)
-                   ON CONFLICT (code) DO UPDATE SET
-                       producer = EXCLUDED.producer,
-                       title_ru = EXCLUDED.title_ru,
-                       country = EXCLUDED.country,
-                       region = EXCLUDED.region,
-                       grapes = EXCLUDED.grapes,
-                       abv = EXCLUDED.abv,
-                       pack = EXCLUDED.pack,
-                       volume = EXCLUDED.volume,
-                       price_list_rub = EXCLUDED.price_list_rub,
-                       price_final_rub = EXCLUDED.price_final_rub,
-                       price_rub = EXCLUDED.price_rub;
+                   INSERT INTO products(
+                       code,
+                       producer,
+                       title_ru,
+                       country,
+                       region,
+                       color,
+                       style,
+                       grapes,
+                       abv,
+                       pack,
+                       volume,
+                       vintage,
+                       vivino_url,
+                       vivino_rating,
+                       supplier,
+                       features,
+                       producer_site,
+                       image_url,
+                       price_list_rub,
+                       price_final_rub,
+                       price_rub
+                   )
+                   VALUES (
+                       %(code)s,
+                       %(producer)s,
+                       %(title_ru)s,
+                       %(country)s,
+                       %(region)s,
+                       %(color)s,
+                       %(style)s,
+                       %(grapes)s,
+                       %(abv)s,
+                       %(pack)s,
+                       %(volume)s,
+                       %(vintage)s,
+                       %(vivino_url)s,
+                       %(vivino_rating)s,
+                       %(supplier)s,
+                       %(features)s,
+                       %(producer_site)s,
+                       %(image_url)s,
+                       %(price_list_rub)s,
+                       %(price_final_rub)s,
+                       %(price_rub)s
+                   ) ON CONFLICT (code) DO \
+                   UPDATE SET
+                       producer        = EXCLUDED.producer, \
+                       title_ru        = EXCLUDED.title_ru, \
+                       country         = EXCLUDED.country, \
+                       region          = EXCLUDED.region, \
+                       color           = COALESCE(EXCLUDED.color,  products.color), \
+                       style           = COALESCE(EXCLUDED.style,  products.style), \
+                       grapes          = EXCLUDED.grapes, \
+                       abv             = EXCLUDED.abv, \
+                       pack            = EXCLUDED.pack, \
+                       volume          = EXCLUDED.volume, \
+                       vintage         = COALESCE(EXCLUDED.vintage,        products.vintage), \
+                       vivino_url      = COALESCE(EXCLUDED.vivino_url,     products.vivino_url), \
+                       vivino_rating   = COALESCE(EXCLUDED.vivino_rating,  products.vivino_rating), \
+                       supplier        = COALESCE(EXCLUDED.supplier,       products.supplier), \
+                       features        = COALESCE(EXCLUDED.features,       products.features), \
+                       producer_site   = COALESCE(EXCLUDED.producer_site,  products.producer_site), \
+                       image_url       = COALESCE(EXCLUDED.image_url,      products.image_url), \
+                       price_list_rub  = EXCLUDED.price_list_rub, \
+                       price_final_rub = EXCLUDED.price_final_rub, \
+                       price_rub       = EXCLUDED.price_rub; \
                    """
+
 
     upsert_inventory = """
                        INSERT INTO inventory(code, stock_total, reserved,
@@ -475,15 +607,37 @@ def upsert_records(df: pd.DataFrame, asof: date | datetime):
                 title_ru=r.get("title_ru"),
                 country=r.get("country"),
                 region=r.get("region"),
+                color=r.get("color"),
+                style=r.get("style"),
                 grapes=r.get("grapes"),
                 abv=r.get("abv"),
                 pack=r.get("pack"),
                 volume=r.get("volume"),
+
+                vintage=r.get("vintage"),
+                vivino_url=r.get("vivino_url"),
+                vivino_rating=r.get("vivino_rating"),
+                supplier=r.get("supplier"),
+                features=r.get("features"),
+                producer_site=r.get("producer_site"),
+                image_url=r.get("image_url"),
+
                 price_list_rub=price_list,
                 price_final_rub=eff,
                 price_rub=eff,
             )
-            cur.execute(ins_products, payload)
+
+            # Приводим значения к скалярным типам, чтобы psycopg2 не увидел Series
+
+            payload = {k: _to_scalar(v) for k, v in payload.items()}
+
+            try:
+                cur.execute(ins_products, payload)
+            except Exception as e:
+                print("[DEBUG] failed for code:", code)
+                print("[DEBUG] payload:", payload)
+                raise
+
             prod_upd += 1
 
             if eff is not None:

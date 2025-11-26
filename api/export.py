@@ -82,6 +82,13 @@ class ExportService:
         ("color", "Цвет"),
         ("region", "Регион"),
         ("producer", "Производитель"),
+
+        # новые поля, которые уже есть в products
+        ("grapes", "Сортовой состав"),
+        ("vintage", "Год урожая"),
+        ("vivino_url", "Рейтинг Vivino"),
+        ("vivino_rating", "Экспертный рейтинг"),
+        ("supplier", "Поставщик"),
     )
 
     @staticmethod
@@ -103,6 +110,29 @@ class ExportService:
         except Exception:
             return str(value)
 
+    @staticmethod
+    def _fmt_vivino_score(value: Any, placeholder: str = "—") -> str:
+        """
+        Красивое форматирование оценки Vivino:
+        - если это число, печатаем с одним знаком после запятой;
+        - иначе ведём себя как _fmt_value.
+        """
+        if value is None:
+            return placeholder
+
+        text = str(value).strip()
+        if not text:
+            return placeholder
+
+        try:
+            score = float(text.replace(",", "."))
+            # типичный диапазон оценок Vivino 0..5
+            if 0.0 < score <= 5.0:
+                return f"{score:.1f}"
+            # если внезапно пришло что-то вроде 96 — считаем, что это не Vivino
+            return text
+        except (TypeError, ValueError):
+            return text
 
     def export_search_to_excel(
         self,
@@ -183,12 +213,28 @@ class ExportService:
         elements.append(title)
 
         data: list[list[str]] = [
-            ["Код", "Название", "Цена", "Цвет", "Регион"],
+            [
+                "Код",
+                "Название",
+                "Цена",
+                "Цвет",
+                "Регион",
+                "Сорт",
+                "Год",
+                "Рейтинг Vivino",
+                "Экспертный рейтинг",
+            ],
         ]
 
         for wine in wines:
             title_ru = (wine.get("title_ru") or "")[:max_title_len]
             price_final = wine.get("price_final_rub") or 0
+            grapes = wine.get("grapes") or ""
+            vintage = wine.get("vintage") or ""
+
+            vivino_score = wine.get("vivino_url") or ""
+            expert_score = wine.get("vivino_rating") or ""
+
             data.append(
                 [
                     str(wine.get("code", "")),
@@ -196,6 +242,10 @@ class ExportService:
                     f"{price_final:.0f} ₽",
                     str(wine.get("color", "") or ""),
                     str(wine.get("region", "") or ""),
+                    str(grapes),
+                    str(vintage),
+                    str(vivino_score),
+                    str(expert_score),
                 ]
             )
 
@@ -259,14 +309,21 @@ class ExportService:
             except Exception:
                 reserved = None
 
+        # По данным текущих прайсов колонка "Vivino" содержит именно оценку,
+        # а не ссылку, поэтому используем vivino_url как источник рейтинга.
+        vivino_score_raw = wine.get("vivino_url") or wine.get("vivino_rating")
+
         fields: list[tuple[str, str]] = [
             ("Код товара", self._fmt_value(wine.get("code"))),
             ("Производитель", self._fmt_value(wine.get("producer"))),
             ("Регион", self._fmt_value(wine.get("region"))),
             ("Цвет", self._fmt_value(wine.get("color"))),
             ("Стиль", self._fmt_value(wine.get("style"))),
-            ("Сорт винограда",
-             self._fmt_value(wine.get("grapes") or wine.get("grape"))),
+            ("Сорт винограда", self._fmt_value(wine.get("grapes"))),
+            ("Год урожая", self._fmt_value(wine.get("vintage"))),
+            ("Поставщик", self._fmt_value(wine.get("supplier"))),
+            ("Рейтинг Vivino", self._fmt_value(wine.get("vivino_url"))),
+            ("Экспертный рейтинг", self._fmt_value(wine.get("vivino_rating"))),
             ("", ""),
             ("Цена прайс", self._fmt_price(wine.get("price_list_rub"))),
             ("Цена финальная", self._fmt_price(wine.get("price_final_rub"))),
@@ -275,6 +332,7 @@ class ExportService:
             ("Зарезервировано", self._fmt_qty(reserved)),
             ("Свободно", self._fmt_qty(wine.get("stock_free"))),
         ]
+
 
         for label, value in fields:
             if y < 2 * cm:

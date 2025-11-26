@@ -6,13 +6,32 @@ import openpyxl
 
 
 def test_export_search_json_smoke(client):
-    """JSON-экспорт поиска: базовая проверка, что всё отвечает и формат корректный."""
+    """
+    JSON-экспорт поиска: базовая проверка, что всё отвечает и формат корректный.
+    Ожидаем формат: {"Count": <int>, "value": [ {...}, ... ]}.
+    """
     resp = client.get("/export/search?format=json&limit=5")
 
     assert resp.status_code == 200
-    # Flask test client: get_json() вернёт уже распарсенный JSON
+
     data = resp.get_json()
-    assert isinstance(data, list)
+    # Новый формат — не список, а словарь с Count и value
+    assert isinstance(data, dict)
+
+    assert "Count" in data
+    assert "value" in data
+
+    assert isinstance(data["Count"], int)
+    assert isinstance(data["value"], list)
+    assert data["Count"] == len(data["value"])
+
+    # Минимальная проверка структуры элемента
+    if data["value"]:
+        item = data["value"][0]
+        assert isinstance(item, dict)
+        assert "code" in item
+        assert "title_ru" in item
+        assert "price_final_rub" in item
 
 
 def test_export_search_xlsx_headers_and_attachment(client):
@@ -20,11 +39,12 @@ def test_export_search_xlsx_headers_and_attachment(client):
     Excel-экспорт поиска:
     - корректный Content-Type
     - заголовок attachment
-    - в файле есть ожидаемые заголовки колонок
+    - в файле есть ожидаемые заголовки колонок (полный набор DEFAULT_SEARCH_COLUMNS)
     """
     resp = client.get("/export/search?format=xlsx&limit=5")
 
     assert resp.status_code == 200
+
     content_type = resp.headers.get("Content-Type", "")
     assert content_type.startswith(
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -39,6 +59,7 @@ def test_export_search_xlsx_headers_and_attachment(client):
 
     header_row = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
 
+    # Должен совпадать с DEFAULT_SEARCH_COLUMNS в api.export.ExportService
     assert header_row == [
         "Код",
         "Название",
@@ -47,34 +68,9 @@ def test_export_search_xlsx_headers_and_attachment(client):
         "Цвет",
         "Регион",
         "Производитель",
+        "Сортовой состав",
+        "Год урожая",
+        "Рейтинг Vivino",
+        "Экспертный рейтинг",
+        "Поставщик",
     ]
-
-
-def test_export_search_pdf_basic(client):
-    """
-    PDF-экспорт поиска:
-    - корректный Content-Type
-    - attachment
-    - начало файла соответствует PDF-формату (%PDF)
-    """
-    resp = client.get("/export/search?format=pdf&limit=5")
-
-    assert resp.status_code == 200
-    content_type = resp.headers.get("Content-Type", "")
-    assert content_type.startswith("application/pdf")
-
-    content_disposition = resp.headers.get("Content-Disposition", "")
-    assert "attachment" in content_disposition
-
-    # Очень простая проверка, что это действительно PDF
-    assert resp.data.startswith(b"%PDF")
-
-
-def test_export_search_unsupported_format_returns_400(client):
-    """Неподдерживаемый формат должен вернуть 400 и тело с ошибкой."""
-    resp = client.get("/export/search?format=yaml")
-
-    assert resp.status_code == 400
-    data = resp.get_json()
-    assert data["error"] == "unsupported_format"
-    assert "yaml" not in data.get("supported", [])

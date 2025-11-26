@@ -397,6 +397,15 @@ class TestCanonicalizeHeaders:
         assert result["Код"] == "code"
         assert result["Цена со скидкой 10%"] == "price_discount"
 
+    @pytest.mark.unit
+    def test_canonicalize_headers_maps_color_and_style(self):
+        cols = ["Категория", "Тип", "Цвет"]
+        result = _canonicalize_headers(cols)
+
+        assert result["Категория"] == "style"
+        assert result["Тип"] == "style"
+        assert result["Цвет"] == "color"
+
 
 class TestReadAny:
     """
