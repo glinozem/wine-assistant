@@ -68,6 +68,59 @@ class CatalogSearchParams(BaseModel):
         return self
 
 
+class ProductSearchItem(BaseModel):
+    """
+    Один товар в ответе /api/v1/products/search.
+
+    Поля синхронизированы с SELECT в catalog_search и _normalize_product_row().
+    """
+
+    code: str
+    name: str
+
+    producer: Optional[str] = None
+    country: Optional[str] = None
+    region: Optional[str] = None
+    color: Optional[str] = None
+    style: Optional[str] = None
+
+    grapes: Optional[str] = None
+    vintage: Optional[int] = None
+
+    price_list_rub: Optional[float] = None
+    price_final_rub: Optional[float] = None
+
+    stock_total: Optional[int] = None
+    stock_free: Optional[int] = None
+
+    vivino_rating: Optional[float] = None
+    vivino_url: Optional[str] = None
+
+    supplier: Optional[str] = None
+
+    # новые поля, про которые мы дальше будем говорить в UI/экспорте
+    producer_site: Optional[str] = None
+    image_url: Optional[str] = None
+
+
+class CatalogSearchResponse(BaseModel):
+    """
+    Ответ /api/v1/products/search.
+
+    items — список товаров (ProductSearchItem),
+    total — общее количество найденных,
+    offset/limit — параметры пагинации,
+    query — исходная строка поиска (может быть None).
+    """
+
+    items: list[ProductSearchItem]
+    total: int
+    offset: int
+    limit: int
+    query: str | None = None
+
+
+
 class DateRangeParams(BaseModel):
     """
     Базовая модель для параметров с диапазоном дат (from/to + limit/offset).
