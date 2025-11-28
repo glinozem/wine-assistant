@@ -73,4 +73,6 @@ def test_export_search_xlsx_headers_and_attachment(client):
         "Рейтинг Vivino",
         "Экспертный рейтинг",
         "Поставщик",
+        "Сайт производителя",
+        "Фото (URL)",
     ]

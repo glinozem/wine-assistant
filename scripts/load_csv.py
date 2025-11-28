@@ -44,6 +44,7 @@ from scripts.idempotency import (
 from scripts.load_utils import (
     _get_discount_from_cell,
     _to_float,
+    enrich_site_from_photo_column,
     get_conn,
     read_any,
     upsert_records,
@@ -277,6 +278,11 @@ def main(argv: Optional[list] = None) -> None:
         f"header={disc_hdr}  cell({args.discount_cell})={disc_cell}  "
         f"prefer_s5_cli={prefer_s5_cli} prefer_s5_env={prefer_s5_env}  -> used={discount}"
     )
+
+    # Обогатим df: протащим producer_site из строк-шапок в товарные строки.
+    # В прайсах DreamWine сайт производителя лежит в колонке «Фото» (image_url)
+    # у строк без кода, а товары ниже используют тот же сайт.
+    df = enrich_site_from_photo_column(df)
 
     # Отбираем только нужные поля
     keep = {

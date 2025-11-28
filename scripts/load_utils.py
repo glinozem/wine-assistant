@@ -27,6 +27,7 @@ __all__ = [
     "read_any",
     "COLMAP",
     "upsert_records",
+    "enrich_site_from_photo_column",
 ]
 
 # Date extraction module for automatic date parsing (Issue #81)
@@ -80,6 +81,41 @@ def _norm_key(s: Any) -> str:
     s = s.replace("алк__", "алк_").replace("емк__л", "емк_л")
     # «Цена со скидкой 0%» -> «цена_со_скидкой»
     s = re.sub(r"(цена_со_скидкой)(_?\d+_?)?$", "цена_со_скидкой", s)
+    return s
+
+
+# Ищем «домен.tld» как подстроку, а не как всю строку
+SITE_RE = re.compile(r"(https?://)?([\w\-]+\.)+[a-z]{2,}(/[^\s]*)?", re.IGNORECASE)
+
+
+def _looks_like_site(value: Any) -> bool:
+    """
+    Грубая проверка, что в строке есть что-то похожее на URL сайта.
+    Например: 'www.vins-perrier.com', 'https://casepaolin.it',
+    'Maison Perrier www.vins-perrier.com' и т.п.
+    """
+    if value is None:
+        return False
+    s = _norm(value)
+    if not s:
+        return False
+    # убираем пробелы, чтобы 'www. vins-perrier.com' тоже поймался
+    s_compact = s.replace(" ", "")
+    return bool(SITE_RE.search(s_compact))
+
+
+def _normalize_site(value: Any) -> Optional[str]:
+    """
+    Нормализуем строку сайта к виду с протоколом:
+      'www.vins-perrier.com' -> 'https://www.vins-perrier.com'
+    """
+    if value is None:
+        return None
+    s = _norm(value)
+    if not s:
+        return None
+    if not s.startswith("http://") and not s.startswith("https://"):
+        s = "https://" + s
     return s
 
 
@@ -438,6 +474,59 @@ def read_any(
         df.iloc[:, idx] = col.map(
             lambda x: _norm(x) if pd.notna(x) else None
         )
+
+    return df
+
+
+def enrich_site_from_photo_column(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Заполняет колонку producer_site по данным из строк прайса.
+
+    Логика:
+      * В КАЖДОЙ строке ищем что-то похожее на URL сайта (во всех колонках).
+      * Если код пустой (code == '') и сайт найден -> считаем строку «шапкой производителя»
+        и запоминаем current_site.
+      * Если код есть и сайт найден -> пишем его в producer_site для этой строки
+        и обновляем current_site.
+      * Если код есть, сайта в строке нет, но current_site уже есть -> протаскиваем
+        current_site в producer_site, если там ещё пусто.
+    """
+    # если нет колонки producer_site — создадим пустую
+    if "producer_site" not in df.columns:
+        df["producer_site"] = None
+
+    current_site: Optional[str] = None
+
+    for idx, row in df.iterrows():
+        code = _norm(row.get("code"))
+
+        # 1. Ищем сайт в текущей строке (в любых колонках)
+        site_in_row: Optional[str] = None
+        for val in row.values:
+            if _looks_like_site(val):
+                site_in_row = _normalize_site(val)
+                break
+
+        # 2. Строка без кода -> считаем кандидатом на шапку производителя
+        if not code:
+            if site_in_row:
+                current_site = site_in_row
+            # такие строки в products не идут
+            continue
+
+        # 3. Строка с кодом (товар)
+        if site_in_row:
+            # Сайт явно указан в этой строке товара
+            existing = row.get("producer_site")
+            if existing is None or _norm(existing) == "":
+                df.at[idx, "producer_site"] = site_in_row
+            # и запоминаем его как текущий для следующих строк
+            current_site = site_in_row
+        elif current_site:
+            # В строке сайта нет, но есть current_site из шапки/предыдущего товара
+            existing = row.get("producer_site")
+            if existing is None or _norm(existing) == "":
+                df.at[idx, "producer_site"] = current_site
 
     return df
 

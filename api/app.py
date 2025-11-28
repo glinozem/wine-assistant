@@ -1111,6 +1111,57 @@ def export_search():
 # ────────────────────────────────────────────────────────────────────────────────
 # SKU endpoints (protected if API_KEY set)
 # ────────────────────────────────────────────────────────────────────────────────
+
+def _fetch_sku_row(conn, code: str) -> dict | None:
+    """
+    Общая выборка SKU из products + inventory.
+    Используется и для /api/v1/sku, и для /api/v1/export/sku.
+    """
+    rows = db_query(
+        conn,
+        """
+        SELECT
+            p.code,
+            p.title_ru                 AS title_ru,
+            p.title_ru                 AS name,
+            p.producer,
+            p.country,
+            p.region,
+            p.color,
+            p.style,
+            p.grapes,
+            p.vintage,
+            p.vivino_url,
+            p.vivino_rating,
+            p.supplier,
+            p.producer_site,
+            p.image_url,
+            p.price_list_rub,
+            p.price_final_rub,
+            COALESCE(i.stock_total, 0) AS stock_total,
+            COALESCE(i.stock_free, 0)  AS stock_free
+        FROM public.products p
+        LEFT JOIN public.inventory i
+               ON i.code = p.code
+        WHERE p.code = %s
+        """,
+        (code,),
+    )
+
+    if not rows:
+        app.logger.info("SKU not found in _fetch_sku_row", extra={"code": code})
+        return None
+
+    row = dict(rows[0])
+    row = _normalize_product_row(row)
+
+    # гарантируем наличие ключей, чтобы ExportService не спотыкался
+    row.setdefault("producer_site", None)
+    row.setdefault("image_url", None)
+
+    return row
+
+
 @app.route("/sku/<code>", methods=["GET"])
 @app.route("/api/v1/sku/<code>", methods=["GET"])
 @require_api_key
@@ -1129,50 +1180,26 @@ def get_sku(code: str):
     """
     conn, err = db_connect()
     if err or not conn:
-        app.logger.error("SKU lookup failed - DB unavailable", extra={"error": err, "code": code})
+        app.logger.error(
+            "SKU lookup failed - DB unavailable",
+            extra={"error": err, "code": code},
+        )
         return jsonify({"error": "not_found"}), 404
 
     try:
-        rows = db_query(
-            conn,
-            """
-            SELECT
-                p.code,
-                p.title_ru AS name,
-                p.producer,
-                p.country,
-                p.region,
-                p.color,
-                p.style,
-                p.grapes,
-                p.vintage,
-                p.vivino_url,
-                p.vivino_rating,
-                p.supplier,
-                p.producer_site,
-                p.image_url,
-                p.price_list_rub,
-                p.price_final_rub,
-                COALESCE(i.stock_total, 0) AS stock_total,
-                COALESCE(i.stock_free, 0)  AS stock_free
-            FROM public.products p
-            LEFT JOIN public.inventory i ON i.code = p.code
-            WHERE p.code = %s
-            """,
-            (code,),
-        )
-        if not rows:
-            app.logger.info("SKU not found", extra={"code": code})
+        row = _fetch_sku_row(conn, code)
+        if row is None:
             return jsonify({"error": "not_found"}), 404
-        row = dict(rows[0])
-        row = _normalize_product_row(row)
         return jsonify(row)
-    except Exception as e:
-        app.logger.error("SKU lookup failed", extra={"error": str(e), "code": code}, exc_info=True)
+    except Exception as e:  # noqa: BLE001
+        app.logger.error(
+            "SKU lookup failed",
+            extra={"error": str(e), "code": code},
+            exc_info=True,
+        )
         return jsonify({"error": "internal_error"}), 500
     finally:
         _close_conn_safely(conn)
-
 
 @app.route("/export/sku/<code>", methods=["GET"])
 @app.route("/api/v1/export/sku/<code>", methods=["GET"])
@@ -1203,8 +1230,12 @@ def export_sku(code: str):
       404:
         description: SKU not found
     """
-    format_type = request.args.get("format", "pdf").lower()
+    app.logger.info(
+        "export_sku called",
+        extra={"code": code, "path": request.path},
+    )
 
+    format_type = request.args.get("format", "pdf").lower()
     if format_type not in ("pdf", "json"):
         return (
             jsonify(
@@ -1225,61 +1256,15 @@ def export_sku(code: str):
         return jsonify({"error": "internal_error"}), 503
 
     try:
-        # Ровно та же выборка, что и в /api/v1/sku/<code>
-        rows = db_query(
-            conn,
-            """
-            SELECT p.code,
-                   p.title_ru                 AS title_ru,
-                   p.title_ru                 AS name,
-                   p.country,
-                   p.producer,
-                   p.region,
-                   p.color,
-                   p.style,
-                   p.grapes,
-                   p.vintage,
-                   p.vivino_url,
-                   p.vivino_rating,
-                   p.supplier,
-                   p.producer_site,
-                   p.image_url,
-                   p.price_list_rub,
-                   p.price_final_rub,
-                   COALESCE(i.stock_total, 0) AS stock_total,
-                   COALESCE(i.stock_free, 0)  AS stock_free
-            FROM public.products p
-                     LEFT JOIN public.inventory i
-                               ON i.code = p.code
-            WHERE p.code = %s
-            """,
-            (code,),
-        )
-
-        if not rows:
-            # В БД нет такого SKU вообще
+        wine = _fetch_sku_row(conn, code)
+        if wine is None:
             return jsonify({"error": "not_found"}), 404
 
-        wine = rows[0]
-
-        # Нормализуем Decimal → float для JSON
-        # Нормализуем числа для JSON: цены, рейтинг, остатки
-        for key in (
-            "price_list_rub",
-            "price_final_rub",
-            "vivino_rating",
-            "stock_total",
-            "stock_free",
-        ):
-            wine[key] = _convert_decimal_to_number(wine.get(key))
-
-        if "title_ru" in wine and "name" not in wine:
-            wine["name"] = wine["title_ru"]
-
+        # format=json → отдаём те же данные, что и /api/v1/sku
         if format_type == "json":
             return jsonify(wine)
 
-        # PDF
+        # format=pdf → отдаём в ExportService
         pdf_data = export_service.export_wine_card_to_pdf(wine)
 
         return send_file(
