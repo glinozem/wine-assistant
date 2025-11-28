@@ -89,6 +89,8 @@ class ExportService:
         ("vivino_url", "Рейтинг Vivino"),
         ("vivino_rating", "Экспертный рейтинг"),
         ("supplier", "Поставщик"),
+        ("producer_site", "Сайт производителя"),
+        ("image_url", "Фото (URL)"),
     )
 
     @staticmethod
@@ -223,6 +225,8 @@ class ExportService:
                 "Год",
                 "Рейтинг Vivino",
                 "Экспертный рейтинг",
+                "Сайт производителя",
+                "Фото (URL)",
             ],
         ]
 
@@ -234,6 +238,8 @@ class ExportService:
 
             vivino_score = wine.get("vivino_url") or ""
             expert_score = wine.get("vivino_rating") or ""
+            producer_site = (wine.get("producer_site") or "").strip()
+            image_url = wine.get("image_url") or ""
 
             data.append(
                 [
@@ -246,6 +252,8 @@ class ExportService:
                     str(vintage),
                     str(vivino_score),
                     str(expert_score),
+                    producer_site,
+                    image_url,
                 ]
             )
 
@@ -312,17 +320,20 @@ class ExportService:
         # По данным текущих прайсов колонка "Vivino" содержит именно оценку,
         # а не ссылку, поэтому используем vivino_url как источник рейтинга.
         vivino_score_raw = wine.get("vivino_url") or wine.get("vivino_rating")
+        vivino_score = self._fmt_vivino_score(vivino_score_raw)
 
         fields: list[tuple[str, str]] = [
             ("Код товара", self._fmt_value(wine.get("code"))),
             ("Производитель", self._fmt_value(wine.get("producer"))),
+            ("Фото (URL)", self._fmt_value(wine.get("image_url"))),
             ("Регион", self._fmt_value(wine.get("region"))),
             ("Цвет", self._fmt_value(wine.get("color"))),
             ("Стиль", self._fmt_value(wine.get("style"))),
             ("Сорт винограда", self._fmt_value(wine.get("grapes"))),
             ("Год урожая", self._fmt_value(wine.get("vintage"))),
             ("Поставщик", self._fmt_value(wine.get("supplier"))),
-            ("Рейтинг Vivino", self._fmt_value(wine.get("vivino_url"))),
+            ("Сайт производителя", self._fmt_value(wine.get("producer_site"))),
+            ("Рейтинг Vivino", vivino_score),
             ("Экспертный рейтинг", self._fmt_value(wine.get("vivino_rating"))),
             ("", ""),
             ("Цена прайс", self._fmt_price(wine.get("price_list_rub"))),
