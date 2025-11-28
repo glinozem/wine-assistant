@@ -99,7 +99,11 @@ def db_query(conn: Any, sql: str, params: Optional[tuple] = None) -> List[Dict[s
 # ────────────────────────────────────────────────────────────────────────────────
 # App / CORS / Logging / Rate limiting
 # ────────────────────────────────────────────────────────────────────────────────
-app = Flask(__name__)
+app = Flask(
+    __name__,
+    static_folder="../static",   # /app/api -> /app/static
+    static_url_path="/static",  # URL вида /static/...
+)
 
 APP_VERSION = os.getenv("APP_VERSION", "0.4.0")
 STARTED_AT = datetime.now(timezone.utc)
