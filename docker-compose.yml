@@ -60,8 +60,12 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:-postgres}
       DB_NAME: ${DB_NAME:-wine_db}
       API_KEY: ${API_KEY}
+      WINE_IMAGE_DIR: /app/static/images
+      WINE_IMAGE_BASE_URL: http://localhost:18000/static/images
     ports:
       - "127.0.0.1:${API_PORT_OUT:-18000}:8000"
+    volumes:
+      - ./static:/app/static
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/ready || exit 1"]
       interval: 5s
