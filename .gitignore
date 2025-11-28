@@ -16,6 +16,7 @@ data/out/
 *.xls
 data/archive/
 data/sample/
+static/images/
 logs/
 
 # python

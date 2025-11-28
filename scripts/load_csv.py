@@ -23,6 +23,8 @@ from typing import Dict, Optional
 
 from dotenv import load_dotenv
 
+from etl.image_extractor import extract_images_from_excel
+
 # Low-level ETL helpers
 from scripts.data_quality import (
     DQ_ERRORS_COLUMN,
@@ -327,6 +329,57 @@ def main(argv: Optional[list] = None) -> None:
     # только «похожие на артикул»: без пробелов, латиница/цифры/_, -, длина ≥ 3
     pattern = r"^[A-Za-z0-9][A-Za-z0-9_-]{2,}$"
     df = df[df["code"].str.match(pattern, na=False)]
+
+    # ==========================
+    # Извлечение картинок из Excel -> image_url
+    # ==========================
+    image_map: Dict[str, str] = {}
+    if args.excel:
+        try:
+            if args.header is not None:
+                image_map = extract_images_from_excel(
+                    excel_path=args.excel,
+                    header_row_zero_based=args.header,
+                )
+            else:
+                # используем дефолт из image_extractor (3-я строка, т.е. 4-я в Excel)
+                image_map = extract_images_from_excel(
+                    excel_path=args.excel,
+                )
+
+            logger.info(
+                "[images] Extracted images",
+                extra={
+                    "file_name": os.path.basename(args.excel),
+                    "images_count": len(image_map),
+                },
+            )
+            print(f"[images] Extracted images for {len(image_map)} SKU(s)")
+        except Exception:
+            logger.exception(
+                "[images] Failed to extract images from Excel",
+                extra={"file_name": os.path.basename(args.excel)},
+            )
+            image_map = {}
+
+    if image_map:
+        # Series с новыми URL по коду
+        new_urls = df["code"].astype(str).map(image_map.get)
+
+        if "image_url" in df.columns:
+            # берём URL из image_map, если есть;
+            # иначе оставляем то, что было в таблице (из прайса / предыдущей логики)
+            df["image_url"] = new_urls.combine_first(df["image_url"])
+        else:
+            df["image_url"] = new_urls
+
+        not_null_count = df["image_url"].notna().sum()
+        print(f"[images] image_url merged, non-null count = {not_null_count}")
+    else:
+        # image_map пустой — либо картинок нет, либо не получилось их разобрать
+        if "image_url" not in df.columns:
+            df["image_url"] = None
+        print("[images] No images extracted or mapped (image_map is empty)")
 
     # ==========================
     # Data quality gates (Issue #83)
