@@ -102,6 +102,60 @@ class ProductSearchItem(BaseModel):
     producer_site: Optional[str] = None
     image_url: Optional[str] = None
 
+    # ⚙️ новые поля из справочника wineries
+    winery_name_ru: Optional[str] = None
+    winery_description_ru: Optional[str] = None
+
+
+class SkuResponse(BaseModel):
+    """
+    Карточка товара для `GET /api/v1/sku/<code>`.
+
+    Поля синхронизированы с `_fetch_sku_row()` и `_normalize_product_row()`.
+    """
+
+    code: str
+
+    # Заголовок из Excel / products.title_ru
+    title_ru: Optional[str] = None
+    # Человекочитаемое имя в API; сейчас дублирует title_ru
+    name: str
+
+    producer: Optional[str] = None
+    country: Optional[str] = None
+    region: Optional[str] = None
+    color: Optional[str] = None
+    style: Optional[str] = None
+
+    grapes: Optional[int] = None
+    vintage: Optional[int] = None
+
+    price_list_rub: Optional[float] = None
+    price_final_rub: Optional[float] = None
+
+    stock_total: Optional[int] = None
+    stock_free: Optional[int] = None
+
+    vivino_rating: Optional[float] = None
+    vivino_url: Optional[str] = None
+
+    supplier: Optional[str] = None
+    producer_site: Optional[str] = None
+    image_url: Optional[str] = None
+
+    # ⚙️ поля из справочника wineries
+    supplier_ru: Optional[str] = None
+    winery_description_ru: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _fill_title_ru(self):
+        """
+        Совместимость со старыми тестами/кодом:
+        если title_ru не пришёл, используем name.
+        """
+        if self.title_ru is None:
+            self.title_ru = self.name
+        return self
 
 class CatalogSearchResponse(BaseModel):
     """

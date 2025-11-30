@@ -24,6 +24,7 @@ from api.schemas import (
     InventoryHistoryParams,
     PriceHistoryParams,
     SimpleSearchParams,
+    SkuResponse,
 )
 from api.validation import validate_query_params
 
@@ -205,6 +206,14 @@ swagger_template = {
                     "type": "string",
                     "example": "https://cdn.example.com/wines/D010210.png",
                 },
+                "winery_name_ru": {
+                    "type": "string",
+                    "example": "Каза Сантуш Лима",
+                },
+                "winery_description_ru": {
+                    "type": "string",
+                    "example": "Семейная винодельня в регионе Лиссабон...",
+                },
             },
         },
         "CatalogSearchResponse": {
@@ -218,6 +227,121 @@ swagger_template = {
                 "offset": {"type": "integer", "format": "int32"},
                 "limit": {"type": "integer", "format": "int32"},
                 "query": {"type": "string"},
+            },
+        },
+        "SkuResponse": {
+            "type": "object",
+            "required": ["code", "title_ru", "name"],
+            "properties": {
+                "code": {"type": "string", "example": "D010210"},
+                "title_ru": {
+                    "type": "string",
+                    "example": "Delampa Monastrell Делампа Монастрель",
+                },
+                "name": {
+                    "type": "string",
+                    "example": "Delampa Monastrell Делампа Монастрель",
+                },
+                "producer": {"type": "string", "example": "Bodegas Delampa"},
+                "country": {"type": "string", "example": "Испания"},
+                "region": {"type": "string", "example": "Хумилия"},
+                "color": {"type": "string", "example": "красное"},
+                "style": {"type": "string", "example": "сухое"},
+                "grapes": {
+                    "type": "string",
+                    "example": "Monastrell",
+                },
+                "vintage": {"type": "integer", "format": "int32", "example": 2020},
+                "price_list_rub": {"type": "number", "format": "float"},
+                "price_final_rub": {"type": "number", "format": "float"},
+                "stock_total": {"type": "integer", "format": "int32"},
+                "stock_free": {"type": "integer", "format": "int32"},
+                "vivino_rating": {"type": "number", "format": "float"},
+                "vivino_url": {"type": "string"},
+                "supplier": {"type": "string", "example": "Bodegas Delampa, S.L."},
+                "producer_site": {"type": "string"},
+                "image_url": {"type": "string"},
+                "supplier_ru": {"type": "string", "example": "Бодегас Делампа"},
+                "winery_description_ru": {"type": "string"},
+            },
+        },
+        "PriceHistoryItem": {
+            "type": "object",
+            "properties": {
+                "code": {"type": "string", "example": "D009704"},
+                "price_rub": {
+                    "type": "number",
+                    "format": "float",
+                    "example": 1890.0,
+                },
+                "effective_from": {
+                    "type": "string",
+                    "format": "date-time",
+                    "example": "2025-10-01T00:00:00+03:00",
+                },
+                "effective_to": {
+                    "type": "string",
+                    "format": "date-time",
+                    "example": "2025-10-22T00:00:00+03:00",
+                },
+            },
+        },
+        "PriceHistoryResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "example": "D009704",
+                },
+                "items": {
+                    "type": "array",
+                    "items": {"$ref": "#/definitions/PriceHistoryItem"},
+                },
+                "total": {"type": "integer", "format": "int32", "example": 12},
+                "limit": {"type": "integer", "format": "int32", "example": 50},
+                "offset": {"type": "integer", "format": "int32", "example": 0},
+            },
+        },
+        "InventoryHistoryItem": {
+            "type": "object",
+            "properties": {
+                "code": {"type": "string", "example": "D009704"},
+                "stock_total": {
+                    "type": "integer",
+                    "format": "int32",
+                    "example": 120,
+                },
+                "reserved": {
+                    "type": "integer",
+                    "format": "int32",
+                    "example": 5,
+                },
+                "stock_free": {
+                    "type": "integer",
+                    "format": "int32",
+                    "example": 115,
+                },
+                "as_of": {
+                    "type": "string",
+                    "format": "date-time",
+                    "example": "2025-10-27T12:00:00+03:00",
+                },
+            },
+        },
+        "InventoryHistoryResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "example": "D009704",
+                },
+                "items": {
+                    "type": "array",
+                    "items": {"$ref": "#/definitions/InventoryHistoryItem"},
+                },
+                "total": {"type": "integer", "format": "int32", "example": 20},
+                "limit": {"type": "integer", "format": "int32", "example": 50},
+                "offset": {"type": "integer", "format": "int32", "example": 0},
             },
         },
     },
@@ -770,7 +894,7 @@ def catalog_search():
         # Текстовый поиск
         if params.q:
             clauses.append(
-                "(p.title_ru ILIKE %s OR p.producer ILIKE %s OR p.region ILIKE %s)"
+                "(p.title_ru ILIKE %s OR p.producer ILIKE %s OR COALESCE(p.region, w.region) ILIKE %s)"
             )
             like = f"%{params.q}%"
             qparams.extend([like, like, like])
@@ -781,7 +905,7 @@ def catalog_search():
             qparams.append(f"%{params.country}%")
 
         if params.region:
-            clauses.append("p.region ILIKE %s")
+            clauses.append("COALESCE(p.region, w.region) ILIKE %s")
             qparams.append(f"%{params.region}%")
 
         if params.grapes:
@@ -837,7 +961,7 @@ def catalog_search():
                 p.title_ru        AS name,
                 p.producer,
                 p.country,
-                p.region,
+                COALESCE(p.region, w.region)         AS region,
                 p.color,
                 p.style,
                 p.grapes,
@@ -845,14 +969,17 @@ def catalog_search():
                 p.vivino_url,
                 p.vivino_rating,
                 p.supplier,
-                p.producer_site,
+                COALESCE(p.producer_site, w.producer_site) AS producer_site,
                 p.image_url,
                 p.price_list_rub,
                 p.price_final_rub,
                 i.stock_total,
-                i.stock_free
+                i.stock_free,
+                w.supplier_ru     AS winery_name_ru,
+                w.description_ru  AS winery_description_ru
             FROM public.products p
             LEFT JOIN public.inventory i ON i.code = p.code
+            LEFT JOIN public.wineries  w ON w.supplier = p.supplier
             {where}
             ORDER BY {order_by}
             {limit_clause}
@@ -1118,7 +1245,7 @@ def export_search():
 
 def _fetch_sku_row(conn, code: str) -> dict | None:
     """
-    Общая выборка SKU из products + inventory.
+    Общая выборка SKU из products + inventory + wineries.
     Используется и для /api/v1/sku, и для /api/v1/export/sku.
     """
     rows = db_query(
@@ -1143,10 +1270,15 @@ def _fetch_sku_row(conn, code: str) -> dict | None:
             p.price_list_rub,
             p.price_final_rub,
             COALESCE(i.stock_total, 0) AS stock_total,
-            COALESCE(i.stock_free, 0)  AS stock_free
+            COALESCE(i.stock_free, 0)  AS stock_free,
+            -- данные из справочника виноделен
+            w.supplier_ru,
+            w.description_ru           AS winery_description_ru
         FROM public.products p
         LEFT JOIN public.inventory i
                ON i.code = p.code
+        LEFT JOIN public.wineries w
+               ON w.supplier = p.supplier
         WHERE p.code = %s
         """,
         (code,),
@@ -1159,9 +1291,11 @@ def _fetch_sku_row(conn, code: str) -> dict | None:
     row = dict(rows[0])
     row = _normalize_product_row(row)
 
-    # гарантируем наличие ключей, чтобы ExportService не спотыкался
+    # гарантируем наличие ключей, чтобы ExportService и API не спотыкались
     row.setdefault("producer_site", None)
     row.setdefault("image_url", None)
+    row.setdefault("supplier_ru", None)
+    row.setdefault("winery_description_ru", None)
 
     return row
 
@@ -1181,6 +1315,13 @@ def get_sku(code: str):
         name: code
         required: true
         type: string
+    responses:
+      200:
+        description: SKU card
+        schema:
+          $ref: '#/definitions/SkuResponse'
+      404:
+        description: SKU not found
     """
     conn, err = db_connect()
     if err or not conn:
@@ -1194,7 +1335,9 @@ def get_sku(code: str):
         row = _fetch_sku_row(conn, code)
         if row is None:
             return jsonify({"error": "not_found"}), 404
-        return jsonify(row)
+
+        payload = SkuResponse(**row).model_dump()
+        return jsonify(payload)
     except Exception as e:  # noqa: BLE001
         app.logger.error(
             "SKU lookup failed",
@@ -1296,31 +1439,53 @@ def export_sku(code: str):
 def price_history(code: str):
     """
     Get price history for SKU
+
     ---
     tags: [Products]
+    summary: Price history for SKU
+    description: >
+      Возвращает историю цен для одного SKU из таблицы product_prices.
+      Поддерживает фильтрацию по диапазону дат и пагинацию.
     security: [ { ApiKeyAuth: [] } ]
     parameters:
       - in: path
         name: code
         required: true
         type: string
+        description: Код SKU (например, D009704)
       - in: query
         name: from
         type: string
         format: date
+        required: false
+        description: Начало диапазона (YYYY-MM-DD, по effective_from::date)
       - in: query
         name: to
         type: string
         format: date
+        required: false
+        description: Конец диапазона (YYYY-MM-DD, включительно)
       - in: query
         name: limit
         type: integer
         default: 50
+        description: Максимальное количество записей в ответе
       - in: query
         name: offset
         type: integer
         default: 0
+        description: Смещение для пагинации
+    responses:
+      200:
+        description: Price history data
+        schema:
+          $ref: '#/definitions/PriceHistoryResponse'
+      400:
+        description: Validation error (невалидный диапазон дат или параметры)
+      500:
+        description: Internal error during price history lookup
     """
+
     params, error = validate_query_params(PriceHistoryParams)
     if error:
         return error
@@ -1523,31 +1688,53 @@ def export_price_history(code: str):
 def inventory_history(code: str):
     """
     Get inventory history for SKU
+
     ---
     tags: [Products]
+    summary: Inventory history for SKU
+    description: >
+      Возвращает историю остатков по SKU из таблицы inventory_history.
+      Можно ограничить по диапазону дат и использовать пагинацию.
     security: [ { ApiKeyAuth: [] } ]
     parameters:
       - in: path
         name: code
         required: true
         type: string
+        description: Код SKU (например, D009704)
       - in: query
         name: from
         type: string
         format: date
+        required: false
+        description: Начало диапазона (YYYY-MM-DD, по as_of::date)
       - in: query
         name: to
         type: string
         format: date
+        required: false
+        description: Конец диапазона (YYYY-MM-DD, включительно)
       - in: query
         name: limit
         type: integer
         default: 50
+        description: Максимальное количество записей в ответе
       - in: query
         name: offset
         type: integer
         default: 0
+        description: Смещение для пагинации
+    responses:
+      200:
+        description: Inventory history data
+        schema:
+          $ref: '#/definitions/InventoryHistoryResponse'
+      400:
+        description: Validation error (невалидный диапазон дат или параметры)
+      500:
+        description: Internal error during inventory history lookup
     """
+
     params, error = validate_query_params(InventoryHistoryParams)
     if error:
         return error

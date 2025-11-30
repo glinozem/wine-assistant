@@ -50,3 +50,6 @@ coverage.xml
 
 # Pre-commit cache
 .pre-commit-config.yaml
+
+# PDF-каталоги поставщика (не храним в репо)
+data/catalog/*.pdf
