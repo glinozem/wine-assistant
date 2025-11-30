@@ -118,8 +118,11 @@ class SkuResponse(BaseModel):
 
     # Заголовок из Excel / products.title_ru
     title_ru: Optional[str] = None
-    # Человекочитаемое имя в API; сейчас дублирует title_ru
-    name: str
+    # 🔧 Раньше было: name: str
+    # Для тестовых SKU (INTTEST_...) продукта в справочнике может не быть,
+    # поэтому name может оказаться None.
+    name: Optional[str] = None
+
 
     producer: Optional[str] = None
     country: Optional[str] = None
@@ -127,7 +130,7 @@ class SkuResponse(BaseModel):
     color: Optional[str] = None
     style: Optional[str] = None
 
-    grapes: Optional[int] = None
+    grapes: Optional[str] = None
     vintage: Optional[int] = None
 
     price_list_rub: Optional[float] = None
