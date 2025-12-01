@@ -50,6 +50,7 @@ wine-assistant/
 │   │   ├── README-before*.md         # Снапшоты README во времени
 │   │   └── ...                       # Прочие рабочие заметки
 │   ├── dev-checklist.ps1             # Скрипт/чеклист для ежедневной dev-рутины [INTERNAL]
+│   ├── manual-smoke-check.md         # Пошаговая инструкция для ручного smoke-теста API [INTERNAL]
 │   ├── pr-93-summary.md              # Конспект по PR #93 (для истории) [INTERNAL]
 │   ├── requirements.md               # Функциональные/тех. требования к системе [PUBLIC API]
 │   ├── roadmap_sprint7+.md           # Ранняя дорожная карта [INTERNAL][EXPERIMENTAL]
@@ -74,7 +75,8 @@ wine-assistant/
 │   ├── load_utils.py                 # Общие утилиты для сценариев загрузки [INTERNAL]
 │   ├── migrate.ps1                   # Удобный запуск миграций под Windows [INTERNAL]
 │   ├── run_integration_tests.ps1     # Скрипт запуска интеграционных тестов [INTERNAL]
-│   └── setup_scheduler.ps1           # Настройка планировщика задач (Windows) [INTERNAL]
+│   ├── setup_scheduler.ps1           # Настройка планировщика задач (Windows) [INTERNAL]
+│   └── manual_smoke_check.ps1        # Автоматический smoke-check API (PowerShell, health/search/SKU/export) [INTERNAL]
 
 ├── tests/                            # Автотесты (API, ETL, утилиты) [INTERNAL]
 │   ├── README.md                     # Пояснения к структуре и уровням тестирования [INTERNAL]

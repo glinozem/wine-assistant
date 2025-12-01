@@ -30,6 +30,7 @@ wine-assistant/
     CACHEDIR.TAG
  api/
     app.py
+    export.py
     logging_config.py
     request_middleware.py
     schemas.py
@@ -38,16 +39,16 @@ wine-assistant/
  data/
     archive/
     inbox/
-       2025_06_03 Прайс_Легенда_Виноделия.xlsx
-       2025_06_25 Прайс_Легенда_Виноделия.xlsx
-       2025_08_06 Прайс_Легенда_Виноделия.xlsx
-       2025_08_19 Прайс_Легенда_Виноделия.xlsx
-       2025_09_29 Прайс_Легенда_Виноделия.xlsx
-       2025_10_22 Прайс_Легенда_Виноделия.xlsx
-       2025_10_27 Прайс_Легенда_Виноделия.xlsx
-       Копия 2025_01_20 Прайс_Легенда_Виноделия.xlsx
+       2025_06_03 РџСЂР°Р№СЃ_Р›РµРіРµРЅРґР°_Р’РёРЅРѕРґРµР»РёСЏ.xlsx
+       2025_06_25 РџСЂР°Р№СЃ_Р›РµРіРµРЅРґР°_Р’РёРЅРѕРґРµР»РёСЏ.xlsx
+       2025_08_06 РџСЂР°Р№СЃ_Р›РµРіРµРЅРґР°_Р’РёРЅРѕРґРµР»РёСЏ.xlsx
+       2025_08_19 РџСЂР°Р№СЃ_Р›РµРіРµРЅРґР°_Р’РёРЅРѕРґРµР»РёСЏ.xlsx
+       2025_09_29 РџСЂР°Р№СЃ_Р›РµРіРµРЅРґР°_Р’РёРЅРѕРґРµР»РёСЏ.xlsx
+       2025_10_22 РџСЂР°Р№СЃ_Р›РµРіРµРЅРґР°_Р’РёРЅРѕРґРµР»РёСЏ.xlsx
+       2025_10_27 РџСЂР°Р№СЃ_Р›РµРіРµРЅРґР°_Р’РёРЅРѕРґРµР»РёСЏ.xlsx
+       РљРѕРїРёСЏ 2025_01_20 РџСЂР°Р№СЃ_Р›РµРіРµРЅРґР°_Р’РёРЅРѕРґРµР»РёСЏ.xlsx
     sample/
-        dw_sample_products.csv
+       dw_sample_products.csv
  db/
     migrations/
        0000_schema_migrations.sql
@@ -55,7 +56,7 @@ wine-assistant/
        0002_price-history-guardrails.sql
        0003_inventory-columns-and-asof.sql
        0004_diagnostics.sql
-       0005_price-check.sql
+       0005-price-check.sql
        0006_add-idempotency-tables.sql
        0007_schema-migrations-view.sql
        0008_schema-migrations-view.sql
@@ -89,6 +90,7 @@ wine-assistant/
        README-before21112025.md
        README-before22112025.md
     dev-checklist.ps1
+    manual-smoke-check.md
     pr-93-summary.md
     requirements.md
     roadmap_sprint7+.md
@@ -110,6 +112,7 @@ wine-assistant/
     load_csv.py
     load_utils.py
     migrate.ps1
+    manual_smoke_check.ps1
     run_integration_tests.ps1
     setup_scheduler.ps1
  tests/
@@ -143,7 +146,7 @@ wine-assistant/
     test_api_products_happy.py
     test_api_products_validation.py
     test_api_search_validation.py
-  .dockerignore
+ .dockerignore
  .coveragerc
  .env
  .env.example
