@@ -148,6 +148,7 @@ class SkuResponse(BaseModel):
 
     # ⚙️ поля из справочника wineries
     supplier_ru: Optional[str] = None
+    winery_name_ru: Optional[str] = None
     winery_description_ru: Optional[str] = None
 
     @model_validator(mode="after")

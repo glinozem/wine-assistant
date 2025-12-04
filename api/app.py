@@ -10,7 +10,7 @@ from functools import wraps
 from typing import Any, Dict, List, Optional, Tuple
 
 from flasgger import Swagger
-from flask import Flask, g, jsonify, request, send_file
+from flask import Flask, g, jsonify, render_template, request, send_file
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.errors import RateLimitExceeded
@@ -109,6 +109,11 @@ app = Flask(
 APP_VERSION = os.getenv("APP_VERSION", "0.4.0")
 STARTED_AT = datetime.now(timezone.utc)
 API_KEY = os.getenv("API_KEY")  # if set → protect certain endpoints
+
+@app.route("/ui")
+def ui_index():
+    # позже сюда можно добавить передачу API-ключа из конфига
+    return render_template("ui.html", api_key=API_KEY or "")
 
 # CORS
 cors_origins = os.getenv("CORS_ORIGINS", "*")
@@ -262,6 +267,10 @@ swagger_template = {
                 "producer_site": {"type": "string"},
                 "image_url": {"type": "string"},
                 "supplier_ru": {"type": "string", "example": "Бодегас Делампа"},
+                "winery_name_ru": {
+                    "type": "string",
+                    "example": "Каза Сантуш Лима",
+                },
                 "winery_description_ru": {"type": "string"},
             },
         },
@@ -507,6 +516,22 @@ def _normalize_product_row(row: dict) -> dict:
     ):
         if key in row:
             row[key] = _convert_decimal_to_number(row[key])
+    return row
+
+
+def _normalize_price_and_inventory_row(row: dict) -> dict:
+    """
+    Универсальный нормализатор числовых полей для строк с ценами/остатками.
+    Подойдёт для простого поиска и любых выборок, где есть price_* и stock_*.
+    """
+    # сначала используем уже существующую логику для цен/остатков/рейтинга
+    row = _normalize_product_row(row)
+
+    # при необходимости — расширяем дополнительными полями остатков
+    for key in ("reserved",):
+        if key in row:
+            row[key] = _convert_decimal_to_number(row[key])
+
     return row
 
 
@@ -793,7 +818,10 @@ def simple_search():
         """
         qparams.append(params.limit)
         rows = db_query(conn, sql, tuple(qparams))
-        return jsonify({"items": rows, "total": len(rows), "query": params.q})
+        items = [_normalize_price_and_inventory_row(dict(r)) for r in rows]
+
+        return jsonify(
+            {"items": items, "total": len(items), "query": params.q})
     except Exception as e:
         app.logger.error(
             "Search query failed",
@@ -987,7 +1015,7 @@ def catalog_search():
 
         rows = db_query(conn, sql, tuple(qparams))
 
-        items = [_normalize_product_row(dict(row)) for row in rows]
+        items = [_normalize_price_and_inventory_row(dict(row)) for row in rows]
 
         return jsonify(
             {
@@ -1272,7 +1300,8 @@ def _fetch_sku_row(conn, code: str) -> dict | None:
             COALESCE(i.stock_total, 0) AS stock_total,
             COALESCE(i.stock_free, 0)  AS stock_free,
             -- данные из справочника виноделен
-            w.supplier_ru,
+            w.supplier_ru              AS supplier_ru,
+            w.supplier_ru              AS winery_name_ru,
             w.description_ru           AS winery_description_ru
         FROM public.products p
         LEFT JOIN public.inventory i
@@ -1295,6 +1324,7 @@ def _fetch_sku_row(conn, code: str) -> dict | None:
     row.setdefault("producer_site", None)
     row.setdefault("image_url", None)
     row.setdefault("supplier_ru", None)
+    row.setdefault("winery_name_ru", None)
     row.setdefault("winery_description_ru", None)
 
     return row
@@ -1519,12 +1549,18 @@ def price_history(code: str):
         sql_params.extend([params.limit, params.offset])
 
         rows = db_query(conn, sql, tuple(sql_params))
+
+        # Нормализуем цену, чтобы в JSON был number, а не строка
+        for r in rows:
+            if "price_rub" in r:
+                r["price_rub"] = _convert_decimal_to_number(r["price_rub"])
+
         return jsonify({
+            "code": code,
             "items": rows,
             "total": len(rows),
-            "code": code,
             "limit": params.limit,
-            "offset": params.offset
+            "offset": params.offset,
         })
     except Exception as e:
         app.logger.error(
@@ -1679,6 +1715,150 @@ def export_price_history(code: str):
     finally:
         _close_conn_safely(conn)
 
+@app.route("/export/inventory-history/<code>", methods=["GET"])
+@app.route("/api/v1/export/inventory-history/<code>", methods=["GET"])
+@require_api_key
+@limiter.limit(PROTECTED_LIMIT)
+def export_inventory_history(code: str):
+    """
+    Export inventory history for SKU
+    ---
+    tags: [Export]
+    security: [ { ApiKeyAuth: [] } ]
+    parameters:
+      - in: path
+        name: code
+        required: true
+        type: string
+        description: Код SKU (например, D009704)
+      - in: query
+        name: from
+        type: string
+        format: date
+        required: false
+        description: Начало диапазона (YYYY-MM-DD, по as_of::date)
+      - in: query
+        name: to
+        type: string
+        format: date
+        required: false
+        description: Конец диапазона (YYYY-MM-DD, включительно)
+      - in: query
+        name: limit
+        type: integer
+        default: 50
+      - in: query
+        name: offset
+        type: integer
+        default: 0
+      - in: query
+        name: format
+        type: string
+        enum: [xlsx, json]
+        default: xlsx
+        description: Формат экспорта (Excel или JSON)
+    responses:
+      200:
+        description: Exported inventory history
+      400:
+        description: Unsupported format or validation error
+    """
+    fmt = request.args.get("format", "xlsx").lower()
+    if fmt not in ("xlsx", "json"):
+        return (
+            jsonify(
+                {
+                    "error": "unsupported_format",
+                    "supported": ["xlsx", "json"],
+                }
+            ),
+            400,
+        )
+
+    # те же параметры, что и у /api/v1/sku/<code>/inventory-history
+    params, error = validate_query_params(InventoryHistoryParams)
+    if error:
+        return error
+
+    conn, err = db_connect()
+    if err or not conn:
+        app.logger.error(
+            "Export inventory history failed - database unavailable",
+            extra={"error": err, "code": code},
+        )
+        return jsonify({"error": "db_unavailable"}), 503
+
+    try:
+        clauses = ["code = %s"]
+        sql_params: list = [code]
+
+        if params.dt_from:
+            clauses.append("as_of::date >= %s")
+            sql_params.append(params.dt_from)
+        if params.dt_to:
+            clauses.append("as_of::date <= %s")
+            sql_params.append(params.dt_to)
+
+        where = " AND ".join(clauses)
+        sql = f"""
+            SELECT
+                code,
+                stock_total::bigint AS stock_total,
+                reserved::bigint    AS reserved,
+                stock_free::bigint  AS stock_free,
+                as_of
+            FROM public.inventory_history
+            WHERE {where}
+            ORDER BY as_of DESC
+            LIMIT %s OFFSET %s
+        """
+        sql_params.extend([params.limit, params.offset])
+
+        rows = db_query(conn, sql, tuple(sql_params))
+
+        # Приводим к формату, который ожидает ExportService.export_inventory_history_to_excel
+        items: list[dict] = []
+        for r in rows:
+            items.append(
+                {
+                    "as_of": str(r["as_of"]),
+                    "stock_total": int(r["stock_total"]) if r["stock_total"] is not None else None,
+                    "stock_free": int(r["stock_free"]) if r["stock_free"] is not None else None,
+                    "reserved": int(r["reserved"]) if r["reserved"] is not None else None,
+                }
+            )
+
+        history = {
+            "code": code,
+            "items": items,
+            "total": len(items),
+            "limit": params.limit,
+            "offset": params.offset,
+        }
+
+        if fmt == "json":
+            return jsonify(history)
+
+        # fmt == "xlsx"
+        content = export_service.export_inventory_history_to_excel(history)
+        return send_file(
+            io.BytesIO(content),
+            mimetype=(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ),
+            as_attachment=True,
+            download_name=f"inventory_history_{code}.xlsx",
+        )
+
+    except Exception as e:  # noqa: BLE001
+        app.logger.error(
+            "Export inventory history failed",
+            extra={"error": str(e), "code": code},
+            exc_info=True,
+        )
+        return jsonify({"error": "export_failed"}), 500
+    finally:
+        _close_conn_safely(conn)
 
 
 @app.route("/sku/<code>/inventory-history", methods=["GET"])
@@ -1759,12 +1939,18 @@ def inventory_history(code: str):
 
         where = " AND ".join(clauses)
         sql = f"""
-            SELECT code, stock_total, reserved, stock_free, as_of
+            SELECT
+                code,
+                stock_total::bigint AS stock_total,
+                reserved::bigint    AS reserved,
+                stock_free::bigint  AS stock_free,
+                as_of
             FROM public.inventory_history
             WHERE {where}
             ORDER BY as_of DESC
             LIMIT %s OFFSET %s
         """
+
         sql_params.extend([params.limit, params.offset])
 
         rows = db_query(conn, sql, tuple(sql_params))

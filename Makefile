@@ -1,4 +1,5 @@
 .PHONY: help dev-up dev-down dev-logs db-shell db-migrate         test test-unit test-int test-int-noslow lint fmt         check test-all test-db db-reset load-price show-quarantine
+.PHONY: sync-inventory-history sync-inventory-history-dry-run
 
 # Значения по умолчанию для окружения, можно переопределить при вызове:
 # например: make test-int DB_HOST=127.0.0.1
@@ -41,6 +42,9 @@ help:
 	@echo "  make load-price      - загрузить прайс-лист в БД (scripts/load_csv)"
 	@echo "  make show-quarantine - показать последние строки из price_list_quarantine"
 	@echo "  make db-reset        - пересоздать БД (docker compose down -v && up db+migrator)"
+	@echo "  make sync-inventory-history        - синхронизировать текущие остатки (inventory) в историю (inventory_history)"
+	@echo "  make sync-inventory-history-dry-run - показать, сколько записей будет добавлено в inventory_history (без изменений БД)"
+
 
 dev-up:
 	docker compose up -d db api
@@ -93,3 +97,9 @@ load-price:
 
 show-quarantine:
 	psql "host=$(DB_HOST) port=$(DB_PORT) user=$(PGUSER) password=$(PGPASSWORD) dbname=$(PGDATABASE)" -c "SELECT id, envelope_id, code, dq_errors, created_at FROM price_list_quarantine ORDER BY created_at DESC LIMIT 50;"
+
+sync-inventory-history:
+	docker compose exec api python scripts/sync_inventory_history.py
+
+sync-inventory-history-dry-run:
+	docker compose exec api python scripts/sync_inventory_history.py --dry-run

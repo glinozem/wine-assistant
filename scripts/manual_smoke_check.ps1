@@ -1,167 +1,325 @@
-param(
-    [string]$BaseUrl = "http://localhost:18000",
-    [string]$ApiKey  = $env:API_KEY
-)
+﻿Param()
 
-if (-not $ApiKey -or $ApiKey.Trim() -eq "") {
-    Write-Host "[ERROR] API key is not set. Please set API_KEY env var or pass -ApiKey." -ForegroundColor Red
-    exit 1
+$ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
+
+# -----------------------------------------------------------------------------
+# Helpers
+# -----------------------------------------------------------------------------
+
+function Write-Section {
+    param(
+        [Parameter(Mandatory = $true)][string]$Text
+    )
+    Write-Host ""
+    Write-Host "=== $Text ===" -ForegroundColor Cyan
 }
 
-$headers = @{ "X-API-Key" = $ApiKey }
-
-$results = @()
-
-function Test-Endpoint {
+function Invoke-External {
     param(
-        [string]$Name,
-        [string]$Url,
-        [hashtable]$Headers = $null,
-        [switch]$Optional,
-        [scriptblock]$Validate = $null
+        [Parameter(Mandatory = $true)][string[]]$Command,
+        [string]$WorkingDirectory = $null
     )
 
-    Write-Host ("==> Checking {0}: {1}" -f $Name, $Url)
+    $display = $Command -join ' '
+    Write-Host ">> $display"
 
-    $success = $false
-    $message = ""
-    $status  = $null
+    if ($WorkingDirectory) {
+        Push-Location $WorkingDirectory
+    }
 
     try {
-        if ($Headers) {
-            $resp = Invoke-RestMethod -Uri $Url -Headers $Headers -TimeoutSec 10
-        } else {
-            $resp = Invoke-RestMethod -Uri $Url -TimeoutSec 10
+        & $Command[0] @($Command[1..($Command.Length - 1)])
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0) {
+            Write-Error ("Command failed with exit code {0}: {1}" -f $exitCode, $display)
+            throw "Command failed"
         }
+    }
+    finally {
+        if ($WorkingDirectory) {
+            Pop-Location
+        }
+    }
+}
 
-        $success = $true
-        $status  = 200
+function Get-DateFromFilename {
+    param(
+        [Parameter(Mandatory = $true)][string]$FileName
+    )
+    # Ищем шаблон YYYY_MM_DD в имени (работает и для "Копия 2025_01_20 Прайс...")
+    if ($FileName -match '(\d{4})_(\d{2})_(\d{2})') {
+        $y = [int]$matches[1]
+        $m = [int]$matches[2]
+        $d = [int]$matches[3]
+        return [datetime]::new($y, $m, $d)
+    }
+    else {
+        # Если по какой-то причине дата не нашлась — отправляем в конец
+        return [datetime]::MaxValue
+    }
+}
 
-        if ($Validate) {
-            $validationResult = & $Validate $resp
-            if (-not $validationResult.Success) {
-                $success = $false
-                $message = $validationResult.Message
+function Wait-ForApiReady {
+    param(
+        [string]$BaseUrl,
+        [int]$MaxAttempts = 30,
+        [int]$DelaySeconds = 2
+    )
+
+    Write-Section "Waiting for API to be alive/ready/healthy..."
+
+    for ($i = 1; $i -le $MaxAttempts; $i++) {
+        try {
+            $live   = Invoke-RestMethod -Method GET -Uri "$BaseUrl/live"  -TimeoutSec 5
+            $ready  = Invoke-RestMethod -Method GET -Uri "$BaseUrl/ready" -TimeoutSec 5
+            $health = Invoke-RestMethod -Method GET -Uri "$BaseUrl/health" -TimeoutSec 5
+
+            if ($live.status -eq "alive" -and $ready.status -eq "ready" -and $health.ok -eq $true) {
+                Write-Host ("API is alive and ready (attempt {0})." -f $i)
+                Write-Host "  /live  -> status = $($live.status)"
+                Write-Host "  /ready -> status = $($ready.status)"
+                Write-Host "  /health-> @{ok=$($health.ok)}"
+                return
             }
         }
-
-        if ($success) {
-            Write-Host "   OK" -ForegroundColor Green
-        } else {
-            Write-Host ("   FAIL: {0}" -f $message) -ForegroundColor Yellow
+        catch {
+            # Игнорируем, просто ждём дальше
         }
-    }
-    catch {
-        $success = $false
-        $message = $_.Exception.Message
-        if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
-            $status = [int]$_.Exception.Response.StatusCode
-        }
-        Write-Host ("   ERROR: {0}" -f $message) -ForegroundColor Red
+
+        Start-Sleep -Seconds $DelaySeconds
     }
 
-    $results += [pscustomobject]@{
-        Name     = $Name
-        Url      = $Url
-        Success  = $success
-        Optional = [bool]$Optional
-        Message  = $message
-        Status   = $status
-    }
+    throw "API did not become ready after $MaxAttempts attempts."
 }
 
-# 1. Health / liveness / readiness
-Test-Endpoint -Name "live"  -Url "$BaseUrl/live"  -Validate {
-    param($resp)
-    $ok = $resp.status -eq "alive"
-    if ($ok) {
-        return [pscustomobject]@{ Success = $true;  Message = "" }
-    } else {
-        return [pscustomobject]@{ Success = $false; Message = ("status is '{0}'" -f $resp.status) }
-    }
+# -----------------------------------------------------------------------------
+# Setup: paths and config
+# -----------------------------------------------------------------------------
+
+Write-Section "manual_smoke_check.ps1: start"
+
+# Определяем корень репо: ...\wine-assistant
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$RepoRoot  = Split-Path $ScriptDir -Parent
+
+Set-Location $RepoRoot
+
+# Base URL
+$BaseUrl = $env:WINE_ASSISTANT_BASE_URL
+if (-not $BaseUrl -or $BaseUrl.Trim() -eq "") {
+    $BaseUrl = "http://localhost:18000"
 }
 
-Test-Endpoint -Name "ready" -Url "$BaseUrl/ready" -Validate {
-    param($resp)
-    $ok = $resp.status -eq "ready"
-    if ($ok) {
-        return [pscustomobject]@{ Success = $true;  Message = "" }
-    } else {
-        return [pscustomobject]@{ Success = $false; Message = ("status is '{0}'" -f $resp.status) }
+# API key: берём из .env или из переменной окружения
+$EnvFile = Join-Path $RepoRoot ".env"
+$ApiKey = $null
+
+if (Test-Path $EnvFile) {
+    $line = Get-Content $EnvFile | Where-Object { $_ -match '^\s*API_KEY\s*=' } | Select-Object -First 1
+    if ($line) {
+        $ApiKey = $line.Split('=', 2)[1].Trim()
     }
 }
 
-Test-Endpoint -Name "health" -Url "$BaseUrl/health" -Validate {
-    param($resp)
-    $ok = ($resp -eq $true) -or ("$resp" -match "ok")
-    if ($ok) {
-        return [pscustomobject]@{ Success = $true;  Message = "" }
-    } else {
-        return [pscustomobject]@{ Success = $false; Message = ("unexpected health response '{0}'" -f $resp) }
-    }
+if (-not $ApiKey -or $ApiKey.Trim() -eq "") {
+    $ApiKey = $env:API_KEY
 }
 
-# 2. Search
-Test-Endpoint -Name "products.search" -Url "$BaseUrl/api/v1/products/search?limit=3" -Headers $headers -Validate {
-    param($resp)
-    $hasItems = $resp.items -and $resp.items.Count -gt 0
-    if ($hasItems) {
-        return [pscustomobject]@{ Success = $true;  Message = "" }
-    } else {
-        return [pscustomobject]@{ Success = $false; Message = "no items returned" }
-    }
+if (-not $ApiKey -or $ApiKey.Trim() -eq "") {
+    throw "API key not found. Please set API_KEY in .env or environment."
 }
 
-# 3. SKU + history (using first code from search)
-$skuCode = $null
-try {
-    $search = Invoke-RestMethod -Uri "$BaseUrl/api/v1/products/search?limit=3" -Headers $headers -TimeoutSec 10
-    if ($search.items -and $search.items.Count -gt 0) {
-        $skuCode = $search.items[0].code
-        Write-Host ("Using SKU code from search: {0}" -f $skuCode)
-    } else {
-        Write-Host "[WARN] Search returned no items, skipping SKU/history checks." -ForegroundColor Yellow
-    }
-}
-catch {
-    Write-Host ("[WARN] Could not perform initial search for SKU, skipping SKU/history checks: {0}" -f $_.Exception.Message) -ForegroundColor Yellow
-}
+Write-Host "BaseUrl = $BaseUrl"
+Write-Host "API key = $ApiKey"
+Write-Host ""
+Write-Host "Repo root = $RepoRoot"
+Write-Host ""
 
-if ($skuCode) {
-    Test-Endpoint -Name "sku" -Url "$BaseUrl/api/v1/sku/$skuCode" -Headers $headers
+# -----------------------------------------------------------------------------
+# STEP 1. Docker: down -v / build / up -d
+# -----------------------------------------------------------------------------
 
-    Test-Endpoint -Name "price-history" -Url "$BaseUrl/api/v1/sku/$skuCode/price-history?from=2025-01-01&to=2025-12-31&limit=50" -Headers $headers -Optional
+Write-Section "STEP 1. Docker: down -v / build / up -d"
 
-    Test-Endpoint -Name "inventory-history" -Url "$BaseUrl/api/v1/sku/$skuCode/inventory-history?from=2025-01-01&to=2025-12-31&limit=50" -Headers $headers -Optional
-}
-
-# 4. Export (JSON mode)
-Test-Endpoint -Name "export.search.json" -Url "$BaseUrl/export/search?format=json&limit=3" -Headers $headers
-
-if ($skuCode) {
-    # Export SKU card as JSON (required)
-    $exportSkuUrl = "$BaseUrl/export/sku/$($skuCode)?format=json"
-    Test-Endpoint -Name "export.sku.json" -Url $exportSkuUrl -Headers $headers
-
-    # Export price history as JSON (optional)
-    $exportPriceHistoryUrl = "$BaseUrl/export/price-history/$($skuCode)?format=json"
-    Test-Endpoint -Name "export.price-history.json" -Url $exportPriceHistoryUrl -Headers $headers -Optional
-}
-
+Invoke-External @("docker", "compose", "down", "-v")
+Invoke-External @("docker", "compose", "build")
+Invoke-External @("docker", "compose", "up", "-d")
 
 Write-Host ""
-Write-Host "==== SMOKE SUMMARY ===="
+Invoke-External @("docker", "compose", "ps")
 
-$results | Format-Table Name, Success, Optional, Status, Message -AutoSize
+# Ждем готовности API
+Wait-ForApiReady -BaseUrl $BaseUrl
 
-$hardFailures = $results | Where-Object { -not $_.Success -and -not $_.Optional }
+# -----------------------------------------------------------------------------
+# STEP 2. Load Excel price lists (ETL) in chronological order
+# -----------------------------------------------------------------------------
 
-if ($hardFailures.Count -gt 0) {
-    Write-Host ""
-    Write-Host "[FAIL] Smoke-check finished with errors (required endpoints failed)." -ForegroundColor Red
-    exit 1
-} else {
-    Write-Host ""
-    Write-Host "[OK] Smoke-check passed (all required endpoints are healthy)." -ForegroundColor Green
-    exit 0
+Write-Section "STEP 2. Load Excel price lists and enrich products"
+
+$InboxDir = Join-Path $RepoRoot "data\inbox"
+
+if (-not (Test-Path $InboxDir)) {
+    throw "Inbox dir not found: $InboxDir"
 }
+
+$priceFiles = Get-ChildItem -Path $InboxDir -Filter "*.xlsx" | Sort-Object {
+    Get-DateFromFilename $_.Name
+}
+
+$filesCount = $priceFiles.Count
+Write-Host "Inbox dir: $InboxDir"
+Write-Host ("Found {0} price file(s) (sorted oldest → newest by filename date):" -f $filesCount)
+
+foreach ($file in $priceFiles) {
+    $effDate = Get-DateFromFilename $file.Name
+    $dateStr = if ($effDate -eq [datetime]::MaxValue) { "????-??-??" } else { $effDate.ToString("yyyy-MM-dd") }
+    Write-Host ("  {0}  {1}" -f $dateStr, $file.FullName)
+}
+
+if ($filesCount -eq 0) {
+    throw "No Excel files found in inbox directory."
+}
+
+foreach ($file in $priceFiles) {
+    Write-Host ""
+    Write-Host (">> load_csv: {0}" -f $file.FullName)
+
+    $dockerPricePath = $file.Name  # только имя, без хостового пути
+
+    Invoke-External @(
+        "docker", "compose", "exec", "-T", "api",
+        "python", "-m", "scripts.load_csv",
+        "--excel", "/app/data/inbox/$dockerPricePath"
+    )
+}
+
+# -----------------------------------------------------------------------------
+# STEP 3. (Optional) Wineries & enrichment
+# -----------------------------------------------------------------------------
+
+Write-Section "STEP 3. (Optional) Wineries & enrichment"
+
+$WineriesExcelPath = Join-Path $RepoRoot "data\catalog\wineries_enrichment_from_pdf_norm.xlsx"
+
+if (Test-Path $WineriesExcelPath) {
+    Write-Host "Found wineries catalog: $WineriesExcelPath"
+
+    # 1) Загружаем/обновляем винодельни
+    Write-Host ">> load_wineries (--apply)"
+    Invoke-External @(
+        "docker", "compose", "exec", "-T", "api",
+        "python", "-m", "scripts.load_wineries",
+        "--excel", "/app/data/catalog/wineries_enrichment_from_pdf_norm.xlsx",
+        "--apply"
+    )
+
+    # 2) Обогащаем производителей по тем же данным
+    Write-Host ">> enrich_producers (--apply)"
+    Invoke-External @(
+        "docker", "compose", "exec", "-T", "api",
+        "python", "-m", "scripts.enrich_producers",
+        "--excel", "/app/data/catalog/wineries_enrichment_from_pdf_norm.xlsx",
+        "--apply"
+    )
+}
+else {
+    Write-Host "Wineries catalog not found, skipping STEP 3." -ForegroundColor Yellow
+}
+
+# -----------------------------------------------------------------------------
+# STEP 4. Manual API smoke checks
+# -----------------------------------------------------------------------------
+
+Write-Section "STEP 4. Manual API smoke checks"
+
+$headers = @{
+    "X-API-Key" = $ApiKey
+}
+
+Write-Host ">> /live /ready /health"
+$live   = Invoke-RestMethod -Method GET -Uri "$BaseUrl/live"   -TimeoutSec 10
+$ready  = Invoke-RestMethod -Method GET -Uri "$BaseUrl/ready"  -TimeoutSec 10
+$health = Invoke-RestMethod -Method GET -Uri "$BaseUrl/health" -TimeoutSec 10
+
+$live
+$ready
+$health
+
+Write-Host ""
+Write-Host ">> /api/v1/products/search?limit=5&in_stock=true"
+$searchUrl = "$BaseUrl/api/v1/products/search?limit=5&in_stock=true"
+
+$searchResponse = Invoke-RestMethod -Method GET -Uri $searchUrl -Headers $headers -TimeoutSec 30
+
+$searchResponse | Format-List
+
+Write-Host ""
+Write-Host ">> Краткий список найденных SKU"
+$searchResponse.items |
+    Select-Object code, name, price_final_rub, stock_total |
+    Format-Table -AutoSize
+
+if (-not $searchResponse.items -or $searchResponse.items.Count -eq 0) {
+    throw "Search returned no items; cannot continue with SKU checks."
+}
+
+# Берём первый код SKU для дальнейших проверок
+$skuCode = $searchResponse.items[0].code
+Write-Host ""
+Write-Host "Выбран код для smoke-чека SKU: $skuCode"
+
+Write-Host ""
+Write-Host ">> /api/v1/sku/$skuCode"
+$skuUrl = "$BaseUrl/api/v1/sku/$skuCode"
+$skuResponse = Invoke-RestMethod -Method GET -Uri $skuUrl -Headers $headers -TimeoutSec 30
+$skuResponse | ConvertTo-Json -Depth 10 | Write-Host
+
+Write-Host ""
+Write-Host ">> /api/v1/sku/$skuCode/price-history?from=2020-01-01&to=2030-12-31&limit=50"
+$priceHistUrl = "$BaseUrl/api/v1/sku/$skuCode/price-history?from=2020-01-01&to=2030-12-31&limit=50"
+$priceHist = Invoke-RestMethod -Method GET -Uri $priceHistUrl -Headers $headers -TimeoutSec 30
+$priceHist | Format-List
+
+Write-Host ""
+Write-Host ">> /api/v1/sku/$skuCode/inventory-history?from=2020-01-01&to=2030-12-31&limit=50"
+$invHistUrl = "$BaseUrl/api/v1/sku/$skuCode/inventory-history?from=2020-01-01&to=2030-12-31&limit=50"
+$invHist = Invoke-RestMethod -Method GET -Uri $invHistUrl -Headers $headers -TimeoutSec 30
+$invHist | Format-List
+
+
+# -----------------------------------------------------------------------------
+# STEP 5. Export endpoints (JSON/PDF/XLSX)
+# -----------------------------------------------------------------------------
+
+Write-Section "STEP 5. Export endpoints"
+Write-Host ("Using SKU code for export: '{0}'" -f $skuCode)
+
+# 5.1. Экспорт карточки SKU в JSON и PDF
+$skuJsonUrl = "$BaseUrl/export/sku/${skuCode}?format=json"
+$skuPdfUrl  = "$BaseUrl/export/sku/${skuCode}?format=pdf"
+
+$skuJsonPath = Join-Path $RepoRoot "sku_${skuCode}.json"
+$skuPdfPath  = Join-Path $RepoRoot "sku_${skuCode}.pdf"
+
+Write-Host ">> $skuJsonUrl -> $skuJsonPath"
+Invoke-WebRequest -Method GET -Uri $skuJsonUrl -Headers $headers -OutFile $skuJsonPath
+
+Write-Host ">> $skuPdfUrl -> $skuPdfPath"
+Invoke-WebRequest -Method GET -Uri $skuPdfUrl -Headers $headers -OutFile $skuPdfPath
+
+# 5.2. Экспорт истории цен и остатков в XLSX
+$priceHistXlsxUrl = "$BaseUrl/export/price-history/${skuCode}?format=xlsx&from=2020-01-01&to=2030-12-31&limit=20"
+$invHistXlsxUrl   = "$BaseUrl/export/inventory-history/${skuCode}?format=xlsx&from=2020-01-01&to=2030-12-31&limit=20"
+
+$priceHistXlsxPath = Join-Path $RepoRoot "price_history_${skuCode}.xlsx"
+$invHistXlsxPath   = Join-Path $RepoRoot "inventory_history_${skuCode}.xlsx"
+
+Write-Host ">> $priceHistXlsxUrl -> $priceHistXlsxPath"
+Invoke-WebRequest -Method GET -Uri $priceHistXlsxUrl -Headers $headers -OutFile $priceHistXlsxPath
+
+Write-Host ">> $invHistXlsxUrl -> $invHistXlsxPath"
+Invoke-WebRequest -Method GET -Uri $invHistXlsxUrl -Headers $headers -OutFile $invHistXlsxPath
+
+Write-Section "manual_smoke_check.ps1: done"
