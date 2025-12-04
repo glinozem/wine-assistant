@@ -4,7 +4,7 @@
 [![Semgrep](https://github.com/glinozem/wine-assistant/actions/workflows/semgrep.yml/badge.svg)](../../actions/workflows/semgrep.yml)
 [![Secrets](https://github.com/glinozem/wine-assistant/actions/workflows/secrets.yml/badge.svg)](../../actions/workflows/secrets.yml)
 
-**Production-ready система управления винным каталогом** с REST API, ETL-пайплайном, справочником виноделен, автоматическим импортом изображений и расширенными возможностями экспорта данных.
+**Production-ready система управления винным каталогом** с REST API, ETL-пайплайном, справочником виноделен, автоматическим импортом изображений, историей остатков и расширенными возможностями экспорта данных.
 
 Изначально учебный проект, Wine Assistant вырос в полноценное решение, демонстрирующее best practices современной backend-разработки на Python.
 
@@ -21,6 +21,7 @@
 - **Справочник виноделен** (`wineries`) из PDF-каталога поставщика
 - **Enrichment каталога** данными о регионе, производителе, сайтах виноделен
 - **История цен и остатков** с автоматическим версионированием
+- **Ежедневная синхронизация остатков** в `inventory_history` для аналитики и графиков
 - **Карантин данных** для невалидных записей (Data Quality Gates)
 - **Идемпотентность** загрузок через SHA-256 хеши
 - **Партиционирование** таблиц по кварталам для масштабирования
@@ -42,8 +43,16 @@
 - **Экспорт результатов поиска** с фильтрами
 - **PDF-карточки товаров** с изображениями
 - **История цен в Excel** для аналитики
+- **История остатков в Excel/JSON** с временной шкалой
 - **Unicode поддержка** в PDF (кириллица, символ ₽)
 - **Фиксированный набор полей** для каждого типа экспорта
+
+### 📈 Визуализация и аналитика
+
+- **Графики истории цен** (Chart.js) в веб-интерфейсе
+- **Графики динамики остатков** по SKU
+- **Временные срезы** с настраиваемыми диапазонами (`from`/`to`)
+- **Экспорт данных для BI** (Excel/JSON)
 
 ### 🖼️ Работа с изображениями
 
@@ -84,6 +93,7 @@
 - **CI/CD Pipeline** с GitHub Actions
 - **Pre-commit hooks** для проверки кода
 - **Adminer** для управления БД
+- **Smoke-check скрипты** для быстрой проверки готовности системы
 
 ---
 
@@ -136,6 +146,29 @@ cp .env.example .env
 FLASK_ENV=development FLASK_APP=api.wsgi:app flask run
 ```
 
+### Быстрая проверка работоспособности (Smoke Check)
+
+После запуска стека выполните быстрый smoke-check:
+
+```powershell
+# Windows PowerShell
+# Установить API ключ
+$env:API_KEY = "ВАШ_API_КЛЮЧ"
+
+# Быстрый smoke-check
+.\scripts\quick_smoke_check.ps1
+
+# Или полный smoke-check с проверкой всех эндпоинтов
+.\scripts\manual_smoke_check.ps1
+```
+
+Скрипты проверят:
+- Health endpoints (`/live`, `/ready`, `/health`)
+- Поиск по каталогу
+- Карточки SKU
+- Историю цен и остатков
+- Экспортные эндпоинты
+
 ---
 
 ## 📊 Архитектура системы
@@ -158,6 +191,7 @@ FLASK_ENV=development FLASK_APP=api.wsgi:app flask run
 │         Business Logic                       │
 │  • Product Service                           │
 │  • Price Management                          │
+│  • Inventory History Sync                    │
 │  • Wineries Enrichment                       │
 │  • Export Service (XLSX/PDF/JSON)            │
 │  • Data Validation (Pydantic)                │
@@ -170,6 +204,7 @@ FLASK_ENV=development FLASK_APP=api.wsgi:app flask run
 │  • Partitioned Tables (quarterly)            │
 │  • Vector Similarity Search (HNSW) - ready   │
 │  • Wineries Reference Table                  │
+│  • Inventory History Table                   │
 └──────────────────────────────────────────────┘
 ```
 
@@ -190,6 +225,7 @@ FLASK_ENV=development FLASK_APP=api.wsgi:app flask run
 - `load_wineries.py` - Загрузка справочника виноделен в БД
 - `enrich_producers.py` - Обогащение продуктов данными из справочника
 - `check_wineries_vs_products.py` - Верификация синхронизации
+- `sync_inventory_history.py` - Ежедневная синхронизация остатков
 - `image_extractor.py` - Извлечение изображений из Excel
 - `date_extraction.py` - Интеллектуальное извлечение дат
 - `idempotency.py` - Проверка дубликатов через хеши
@@ -201,6 +237,7 @@ FLASK_ENV=development FLASK_APP=api.wsgi:app flask run
 - Хранимые процедуры для upsert
 - Карантинная таблица для DQ
 - Справочник виноделен (`wineries`)
+- История остатков (`inventory_history`)
 - Векторные индексы (HNSW) для pgvector (готовность к AI)
 
 #### 4. AI Layer (`/api/ai`) - Планируемая структура (Sprint 8) 🔜
@@ -224,366 +261,393 @@ FLASK_ENV=development FLASK_APP=api.wsgi:app flask run
 #### `products`
 Текущие данные по каждому SKU:
 - Базовые: `code`, `name`, `title_ru`, `country`, `region`, `color`, `style`
-- Характеристики: `grapes`, `vintage`, `producer`
-- Цены и остатки: `price_list_rub`, `price_final_rub`, `stock_free`, `stock_total`
-- Рейтинги: `vivino_url`, `vivino_rating`
-- Enrichment: `supplier`, `producer_site`, `image_url`
-- Флаги: `features` (например, "Э" для эксклюзивов)
+- Характеристики: `grapes`, `vintage`, `alcohol`
+- Цены: `price_list_rub`, `price_final_rub`, `discount_pct`
+- Остатки: `stock_total`, `stock_free`
+- Поставщик: `supplier`, `producer_site`
+- Рейтинги: `vivino_rating`, `vivino_url`
+- Медиа: `image_url`
+- Справочник: связь с `wineries` по `supplier`
 
-#### `wineries` 🆕
-Справочник виноделен (источник истины для производителей):
-- `supplier` - ключ для связи с `products.supplier` (UNIQUE)
+#### `product_prices`
+История изменений цен с партиционированием:
+- `code`, `effective_from`, `effective_to`
+- `price_rub`, `discount_pct`
+- Партиционирование по кварталам (Issue #85)
+
+#### `inventory`
+Текущие остатки товаров:
+- `code`, `stock_total`, `stock_free`, `reserved`
+- `last_updated`
+
+#### `inventory_history`
+История изменений остатков для аналитики:
+- `code`, `stock_total`, `stock_free`, `reserved`
+- `as_of` - timestamp снимка
+- Используется для построения графиков динамики остатков
+- Наполняется ежедневно через `sync_inventory_history.py`
+
+#### `wineries`
+Справочник производителей (Issue #127):
+- `supplier` - ключ связи с `products.supplier`
 - `supplier_ru` - русское название винодельни
 - `region` - нормализованный регион
 - `producer_site` - официальный сайт
-- `winery_name_ru` - полное имя для витрины
-- `winery_description_ru` - описание из PDF-каталога
-- Служебные: `id`, `created_at`, `updated_at`
+- `description_ru` - описание из каталога
 
-#### `product_prices`
-История цен (партиционирована по кварталам):
-- `code`, `effective_from`, `effective_to`
-- `price_list_rub`, `price_final_rub`
+#### `price_list_quarantine`
+Карантин для невалидных строк прайса:
+- Строки, не прошедшие Data Quality Gates
+- `code`, `raw_row`, `error_reason`
+- Для ручной верификации
 
-#### `inventory` & `product_inventory_history`
-Текущие и исторические остатки
+#### `file_imports`
+Журнал импортов файлов:
+- `file_sha256` - хеш для идемпотентности
+- `filename`, `import_date`, `status`
 
-#### `quarantine`
-Карантин для невалидных записей из ETL
+### Схема связей
 
-#### `idempotency`
-SHA-256 хеши для предотвращения дубликатов
+```
+products
+  └──> supplier (FK) ──> wineries.supplier
+  └──> code ──> product_prices.code (1:many)
+  └──> code ──> inventory.code (1:1)
+  └──> code ──> inventory_history.code (1:many)
+```
 
 ---
 
 ## 🔌 API Endpoints
 
-### Публичные endpoints
+### Health & Status
+- `GET /live` - Liveness probe
+- `GET /ready` - Readiness probe (с проверкой БД)
+- `GET /health` - Простой health check
 
-```http
-GET /live                          # Liveness probe
-GET /ready                         # Readiness probe
-GET /api/v1/products               # Список товаров с пагинацией
-GET /api/v1/products/search        # Расширенный поиск по каталогу
-GET /static/images/<filename>      # Раздача изображений товаров
+### Catalog & Search
+- `GET /api/v1/products/search` - Поиск по каталогу
+  - Query params: `query`, `color`, `country`, `in_stock`, `limit`, `offset`
+  - Поддержка фильтров, сортировки, pagination
+- `GET /catalog/search` - Алиас `/api/v1/products/search`
+
+### SKU Details
+- `GET /api/v1/sku/<code>` - Полная карточка товара
+  - Включает данные из `products` и `wineries`
+  - Актуальная цена и остатки
+  - Ссылка на изображение, сайт производителя
+
+### Price History
+- `GET /api/v1/sku/<code>/price-history` - История цен по SKU
+  - Query params: `from`, `to`, `limit`, `offset`
+  - Возвращает временной ряд изменений цен
+
+### Inventory History
+- `GET /api/v1/sku/<code>/inventory-history` - История остатков по SKU
+  - Query params: `from`, `to`, `limit`, `offset`
+  - Возвращает снимки остатков по дням
+  - Используется для построения графиков
+
+### Export
+- `GET /export/search` - Экспорт результатов поиска
+  - Query params: `format` (json/xlsx/pdf), фильтры как в search
+- `GET /export/sku/<code>` - Экспорт карточки товара
+  - Query params: `format` (json/pdf)
+- `GET /export/price-history/<code>` - Экспорт истории цен
+  - Query params: `format` (json/xlsx), `from`, `to`, `limit`
+- `GET /export/inventory-history/<code>` - Экспорт истории остатков
+  - Query params: `format` (json/xlsx), `from`, `to`, `limit`
+
+### Static Files
+- `GET /static/images/<filename>` - Статические изображения товаров
+  - Формат: `<SKU>.<ext>` (jpg, jpeg, png)
+  - Публичный доступ без авторизации
+
+### AI Endpoints (Планируются - Sprint 8) 🔜
+
+- `POST /api/v1/ai/search/semantic` - Семантический поиск по описаниям
+- `POST /api/v1/ai/sommelier/chat` - Диалог с AI-сомелье
+- `POST /api/v1/ai/descriptions/generate` - Генерация описаний товаров
+- `GET /api/v1/ai/embeddings/status` - Статус индексации embeddings
+
+Все AI endpoints защищены API-key авторизацией.
+
+---
+
+## 📤 Использование API
+
+### Примеры запросов
+
+#### PowerShell
+
+```powershell
+# Установка API ключа
+$env:API_KEY = "ВАШ_API_КЛЮЧ"
+$baseUrl = "http://localhost:18000"
+$headers = @{ "X-API-Key" = $env:API_KEY }
+
+# Поиск товаров
+Invoke-RestMethod "$baseUrl/api/v1/products/search?limit=5&in_stock=true" -Headers $headers
+
+# Карточка SKU
+$code = "D010210"
+Invoke-RestMethod "$baseUrl/api/v1/sku/$code" -Headers $headers
+
+# История цен
+Invoke-RestMethod "$baseUrl/api/v1/sku/$code/price-history?from=2025-01-01&to=2025-12-31" -Headers $headers
+
+# История остатков
+Invoke-RestMethod "$baseUrl/api/v1/sku/$code/inventory-history?from=2025-01-01&to=2025-12-31" -Headers $headers
+
+# Экспорт в Excel
+$url = "$baseUrl/export/inventory-history/${code}?format=xlsx&limit=100"
+Invoke-WebRequest $url -Headers $headers -OutFile "inventory_$code.xlsx"
 ```
 
-#### Пример поиска с фильтрами
+#### curl + jq (Windows/Linux)
 
 ```bash
-# Поиск по названию
-curl "http://localhost:18000/api/v1/products/search?q=Brunello&in_stock=true"
+# Установка переменных
+export API_KEY="ВАШ_API_КЛЮЧ"
+export BASE_URL="http://localhost:18000"
 
-# Фильтр по стране и региону
-curl "http://localhost:18000/api/v1/products/search?country=Италия&region=Toscana&limit=20"
+# Поиск с фильтрами
+curl -H "X-API-Key: $API_KEY" \
+  "$BASE_URL/api/v1/products/search?color=red&country=Франция&limit=10" | jq
 
-# Сортировка по цене
-curl "http://localhost:18000/api/v1/products/search?sort_by=price_asc&in_stock=true"
+# Карточка SKU с выбором полей
+curl -H "X-API-Key: $API_KEY" \
+  "$BASE_URL/api/v1/sku/D010210" | \
+  jq '{code, name, price_final_rub, stock_free, vivino_rating}'
+
+# История остатков за период
+curl -H "X-API-Key: $API_KEY" \
+  "$BASE_URL/api/v1/sku/D010210/inventory-history?from=2025-01-01&to=2025-12-31&limit=50" | \
+  jq '.items[] | {as_of, stock_total, stock_free}'
 ```
 
-**Возвращаемые поля** (ProductSearchItem):
-```json
-{
-  "code": "D011194",
-  "name": "Altesino Brunello di Montalcino Montosoli",
-  "country": "Италия",
-  "region": "Toscana",
-  "color": "красное",
-  "style": "DOCG",
-  "grapes": "Санджовезе 100%",
-  "vintage": 2017,
-  "price_list_rub": 33276,
-  "price_final_rub": 33276,
-  "stock_free": 12,
-  "stock_total": 12,
-  "vivino_url": "4.4",
-  "vivino_rating": 96,
-  "supplier": "Altesino",
-  "supplier_ru": "Альтезино",
-  "producer_site": "https://www.altesino.it",
-  "image_url": "http://localhost:18000/static/images/D011194.jpeg",
-  "winery_name_ru": "Altesino",
-  "winery_description_ru": "Винодельня Altesino расположена..."
+---
+
+## 🔄 Синхронизация истории остатков
+
+### Ручной запуск синхронизации
+
+История остатков хранится в таблице `inventory_history` и используется для построения графиков и аналитики. Синхронизация выполняется скриптом:
+
+```bash
+# Из корня проекта
+python scripts/sync_inventory_history.py
+
+# Через Docker
+docker compose exec api python scripts/sync_inventory_history.py
+
+# Dry-run режим (без изменений в БД)
+python scripts/sync_inventory_history.py --dry-run
+
+# Синхронизация на определённую дату
+python scripts/sync_inventory_history.py --as-of 2025-12-05T00:00:00
+```
+
+Через Makefile:
+
+```bash
+# Dry-run
+make sync-inventory-history-dry-run
+
+# Реальная синхронизация
+make sync-inventory-history
+```
+
+### Автоматический запуск
+
+#### Windows Task Scheduler
+
+Для ежедневной синхронизации настройте задачу в Планировщике заданий:
+
+1. Откройте **Task Scheduler** (Планировщик заданий)
+2. Создайте задачу (Create Task...)
+3. **Triggers**: Ежедневно в 03:00
+4. **Actions**:
+   - Program: `powershell.exe`
+   - Arguments:
+     ```
+     -NoProfile -ExecutionPolicy Bypass -Command "cd 'D:\path\to\wine-assistant'; make sync-inventory-history"
+     ```
+
+#### Linux/WSL Cron
+
+```bash
+crontab -e
+```
+
+Добавьте:
+
+```cron
+0 3 * * * cd /opt/wine-assistant && make sync-inventory-history >> /var/log/wine-sync.log 2>&1
+```
+
+### Проверка данных в inventory_history
+
+#### Через SQL
+
+```sql
+-- Последние снимки
+SELECT code, stock_total, stock_free, reserved, as_of
+FROM inventory_history
+ORDER BY as_of DESC
+LIMIT 50;
+
+-- История по конкретному SKU
+SELECT code, stock_total, stock_free, as_of
+FROM inventory_history
+WHERE code = 'D010210'
+ORDER BY as_of DESC;
+```
+
+#### Через API
+
+```powershell
+$code = "D010210"
+curl.exe -H "X-API-Key: $env:API_KEY" `
+  "$baseUrl/api/v1/sku/$code/inventory-history?from=2020-01-01&to=2030-12-31" | jq
+```
+
+---
+
+## 📈 Построение графиков (Chart.js)
+
+Проект включает веб-интерфейс `ui.html` с графиками истории цен и остатков на основе Chart.js.
+
+### Структура графика истории
+
+#### История цен
+
+```javascript
+async function loadPriceHistory(code) {
+  const response = await apiGet(`/sku/${code}/price-history`, {
+    from: '2020-01-01',
+    to: '2030-12-31',
+    limit: 100
+  });
+
+  const ctx = document.getElementById('priceChart').getContext('2d');
+  new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: response.items.map(p => p.effective_from),
+      datasets: [{
+        label: 'Цена, ₽',
+        data: response.items.map(p => p.price_rub),
+        borderColor: 'rgba(75, 192, 192, 1)',
+        backgroundColor: 'rgba(75, 192, 192, 0.15)',
+        tension: 0.2
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        tooltip: {
+          callbacks: {
+            label: (context) => {
+              const value = context.parsed.y;
+              return `Цена: ${value.toLocaleString('ru-RU')} ₽`;
+            }
+          }
+        }
+      }
+    }
+  });
 }
 ```
 
-### Защищенные endpoints (требуют X-API-Key)
+#### История остатков
 
-```http
-GET /api/v1/sku/{code}                          # Карточка SKU с enrichment
-GET /api/v1/sku/{code}/price-history            # История цен
-GET /api/v1/sku/{code}/inventory-history        # История остатков
+```javascript
+async function loadInventoryHistory(code) {
+  const response = await apiGet(`/sku/${code}/inventory-history`, {
+    from: '2020-01-01',
+    to: '2030-12-31',
+    limit: 100
+  });
 
-# Экспорт данных
-GET /api/v1/export/search?format=json|xlsx|pdf                 # Экспорт результатов поиска
-GET /api/v1/export/sku/{code}?format=json|pdf                  # PDF-карточка товара
-GET /api/v1/export/price-history/{code}?format=json|xlsx       # История цен по SKU
+  const ctx = document.getElementById('inventoryChart').getContext('2d');
+  new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: response.items.map(p => p.as_of),
+      datasets: [
+        {
+          label: 'Общий остаток',
+          data: response.items.map(p => p.stock_total),
+          borderColor: 'rgba(54, 162, 235, 1)',
+          backgroundColor: 'rgba(54, 162, 235, 0.15)'
+        },
+        {
+          label: 'Свободный остаток',
+          data: response.items.map(p => p.stock_free),
+          borderColor: 'rgba(75, 192, 192, 1)',
+          backgroundColor: 'rgba(75, 192, 192, 0.15)',
+          borderDash: [4, 4]
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      scales: {
+        y: {
+          beginAtZero: true
+        }
+      }
+    }
+  });
+}
 ```
 
-#### Примеры использования защищённых endpoints
+### HTML разметка
 
-```bash
-# Получение API ключа из .env
-API_KEY=$(grep API_KEY .env | cut -d '=' -f2)
+```html
+<div class="mb-3">
+  <h6>История цен</h6>
+  <canvas id="priceChart" height="120"></canvas>
+</div>
 
-# Карточка SKU с enrichment
-curl -H "X-API-Key: $API_KEY" \
-  "http://localhost:18000/api/v1/sku/D009704"
+<div class="mb-3">
+  <h6>История остатков</h6>
+  <canvas id="inventoryChart" height="120"></canvas>
+</div>
 
-# История цен за период
-curl -H "X-API-Key: $API_KEY" \
-  "http://localhost:18000/api/v1/sku/D000081/price-history?from=2025-01-01&to=2025-12-31"
-
-# Экспорт поиска в Excel
-curl -H "X-API-Key: $API_KEY" \
-  "http://localhost:18000/api/v1/export/search?format=xlsx&limit=100&in_stock=true" \
-  -o wine_catalog.xlsx
-
-# PDF-карточка товара с фото
-curl -H "X-API-Key: $API_KEY" \
-  "http://localhost:18000/api/v1/export/sku/D011402?format=pdf" \
-  -o wine_card.pdf
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 ```
 
-### 🤖 AI Endpoints (Планируются - Sprint 8)
+### Настройка визуализации
 
-> ⚠️ **Эти endpoints ещё не реализованы.** Ниже представлены планируемые API после завершения Issues #128-134.
+Дополнительные опции для улучшения графиков:
 
-```http
-# Будут доступны после реализации Sprint 8:
-POST /api/v1/ai/recommend           # Умные рекомендации от AI-сомелье
-POST /api/v1/ai/search/semantic     # Семантический поиск по описанию
-POST /api/v1/ai/describe/{code}     # Генерация описания вина
-GET  /api/v1/ai/health              # Health check AI-сервисов
-GET  /api/v1/ai/metrics             # Метрики использования AI (токены, расходы)
-```
+```javascript
+// Форматирование дат на оси X
+scales: {
+  x: {
+    ticks: {
+      callback: (value) => {
+        const label = this.getLabelForValue(value);
+        return label ? label.slice(0, 10) : ''; // YYYY-MM-DD
+      }
+    }
+  }
+}
 
----
+// Логарифмическая шкала для больших диапазонов
+scales: {
+  y: {
+    type: 'logarithmic',
+    ticks: {
+      callback: (value) => Number(value).toLocaleString('ru-RU')
+    }
+  }
+}
 
-## 📥 Работа с данными (ETL)
-
-### 1. Импорт прайс-листа с автоматическим извлечением изображений
-
-```bash
-# Активация виртуального окружения
-source .venv/bin/activate  # Linux/macOS
-
-# Настройка подключения к БД
-export DB_HOST=localhost
-export DB_PORT=15432
-export DB_USER=postgres
-export DB_PASSWORD=postgres
-export DB_NAME=wine_db
-
-# Настройка путей для изображений
-export WINE_IMAGE_DIR=./static/images
-export WINE_IMAGE_BASE_URL=http://localhost:18000/static/images
-
-# Загрузка прайс-листа с автоматическим извлечением фото
-python -m scripts.load_csv --excel "data/price_list.xlsx"
-
-# Или через Makefile
-make load-price EXCEL_PATH="./data/price_list.xlsx"
-```
-
-**ETL pipeline автоматически:**
-1. ✅ Извлекает встроенные изображения из Excel (`openpyxl`)
-2. ✅ Сопоставляет изображение со SKU по строке
-3. ✅ Сохраняет в `/app/static/images/<SKU>.<ext>`
-4. ✅ Формирует публичный URL
-5. ✅ Заполняет поле `products.image_url` в БД
-6. ✅ Применяет Data Quality Gates
-7. ✅ Обновляет историю цен и остатков
-8. ✅ Логирует результаты
-
-**Пример логов успешного импорта:**
-```
-[INFO] Effective date detected: 2025-10-27
-[INFO] Reading Excel: data/inbox/2025_10_27 Прайс_Легенда_Виноделия.xlsx
-[images] Extracted images for 247 SKU(s)
-[images] image_url merged, non-null count = 247
-[INFO] Processing 1523 rows...
-[OK] Import completed successfully
-```
-
-### 2. Работа со справочником виноделен
-
-#### Извлечение данных из PDF-каталога
-
-```bash
-# Парсинг PDF-каталога поставщика
-python -m scripts.extract_wineries_from_pdf
-
-# Результат: data/catalog/wineries_enrichment_from_pdf.xlsx
-# Debug версия: data/catalog/wineries_enrichment_from_pdf_debug.xlsx (с номерами страниц)
-```
-
-#### Нормализация названий производителей
-
-```bash
-# Приведение supplier к значениям из БД
-python -m scripts.normalize_wineries_suppliers
-
-# Результат: data/catalog/wineries_enrichment_from_pdf_norm.xlsx
-```
-
-#### Проверка синхронизации
-
-```bash
-# Сравнение справочника с products.supplier
-python -m scripts.check_wineries_vs_products
-
-# Показывает:
-# - каких поставщиков нет в БД
-# - кого нет в каталоге
-# - fuzzy-matching для сопоставления
-```
-
-#### Загрузка справочника в БД
-
-```bash
-# Предварительный просмотр (dry-run)
-python -m scripts.load_wineries \
-  --excel "data/catalog/wineries_enrichment_from_pdf_norm.xlsx"
-
-# Применение изменений
-python -m scripts.load_wineries \
-  --excel "data/catalog/wineries_enrichment_from_pdf_norm.xlsx" \
-  --apply
-```
-
-#### Обогащение продуктов данными виноделен
-
-```bash
-# Обновление products.region и products.producer_site из wineries
-python -m scripts.enrich_producers
-
-# Или через SQL (массовое обновление):
-# UPDATE products p SET region = w.region
-# FROM wineries w
-# WHERE p.supplier = w.supplier AND p.region IS NULL
-```
-
-### Поддерживаемые форматы
-
-- **Excel** (.xlsx, .xls) с встроенными изображениями
-- **CSV** с разделителями (`,`, `;`, `\t`)
-- **PDF-каталоги** для извлечения справочной информации
-- Автоопределение колонок и форматов
-- Извлечение даты из имени файла или ячейки Excel
-
-### Data Quality проверки
-
-- ✅ Валидация обязательных полей
-- ✅ Проверка диапазонов цен и скидок
-- ✅ Контроль дубликатов через SHA-256
-- ✅ Карантин для невалидных записей
-- ✅ Нормализация числовых полей
-- ✅ Верификация форматов изображений
-
----
-
-## 🖼️ Автоматический импорт изображений
-
-### Как это работает
-
-1. **Извлечение из Excel:**
-   - `openpyxl` сканирует `ws._images`
-   - Определяет строку привязки изображения
-   - Извлекает SKU из этой строки
-
-2. **Сохранение файлов:**
-   ```
-   /app/static/images/D011402.jpeg
-   /app/static/images/D009704.png
-   ```
-
-3. **Формирование URL:**
-   ```
-   http://localhost:18000/static/images/D011402.jpeg
-   ```
-
-4. **Заполнение БД:**
-   - `products.image_url` = публичный URL
-   - Merge через `pandas.DataFrame.map()`
-
-### Проверка изображений
-
-```bash
-# Прямой доступ к изображению
-curl http://localhost:18000/static/images/D011402.jpeg -o wine.jpg
-
-# Проверка в API
-curl http://localhost:18000/api/v1/sku/D011402 | jq '.image_url'
-# Вывод: "http://localhost:18000/static/images/D011402.jpeg"
-```
-
-### Поддерживаемые форматы
-
-✅ JPEG, PNG, BMP (через `openpyxl`)
-✅ Автоматическое определение расширения
-✅ Корректная работа внутри Docker
-
-⚠️ **Ограничения:**
-- Формат WMF не поддерживается openpyxl
-- Только встроенные изображения (не ссылки)
-
----
-
-## 📤 Экспорт данных
-
-### Форматы экспорта
-
-| Endpoint | Форматы | Описание |
-|----------|---------|----------|
-| `/export/search` | JSON, XLSX, PDF | Результаты поиска по каталогу |
-| `/export/sku/{code}` | JSON, PDF | Карточка товара с фото |
-| `/export/price-history/{code}` | JSON, XLSX | История цен за период |
-
-### Набор полей в экспортах
-
-#### XLSX экспорт поиска (12 колонок)
-1. Код
-2. Название
-3. Цена прайс
-4. Цена финальная
-5. Цвет
-6. Регион
-7. Производитель
-8. Сортовой состав
-9. Год урожая
-10. Рейтинг Vivino
-11. Экспертный рейтинг
-12. Поставщик
-13. **Фото (URL)** 🆕
-14. **Сайт производителя** 🆕
-
-#### PDF карточка товара
-- Полные данные SKU
-- **Изображение бутылки** (если есть)
-- Цены и остатки
-- Информация о винодельне
-- Unicode поддержка (кириллица, ₽)
-
-### Примеры экспорта
-
-```bash
-API_KEY=$(grep API_KEY .env | cut -d '=' -f2)
-
-# Экспорт поиска в Excel с фотографиями
-curl -H "X-API-Key: $API_KEY" \
-  "http://localhost:18000/export/search?format=xlsx&in_stock=true&limit=500" \
-  -o wines_with_photos.xlsx
-
-# PDF-карточка с изображением
-curl -H "X-API-Key: $API_KEY" \
-  "http://localhost:18000/export/sku/D011402?format=pdf" \
-  -o card_D011402.pdf
-
-# История цен в Excel
-curl -H "X-API-Key: $API_KEY" \
-  "http://localhost:18000/export/price-history/D000081?format=xlsx" \
-  -o price_history.xlsx
+// Ограничение количества точек
+const recentData = allData.slice(-50); // последние 50 точек
 ```
 
 ---
@@ -593,279 +657,412 @@ curl -H "X-API-Key: $API_KEY" \
 ### Запуск всех тестов
 
 ```bash
-# Полный прогон (unit + integration)
-pytest -q -rs
-
-# Только unit-тесты
-pytest tests/unit -q
-
-# Только интеграционные тесты
-pytest tests/integration -q
+# Все тесты
+pytest
 
 # С покрытием
-pytest --cov=api --cov=scripts --cov-report=html
+pytest --cov=. --cov-report=html
+
+# Только интеграционные
+pytest tests/integration/
+
+# Только unit-тесты
+pytest tests/unit/
+
+# Конкретный тест
+pytest tests/integration/test_api_export_sku_and_price_history.py -v
 ```
 
-### Метрики тестирования
-- **164+ тестов** всех уровней ✅
-- **Unit тесты:** валидация, схемы, утилиты
-- **Integration тесты:** API + БД взаимодействие
-- **E2E тесты:** полный цикл загрузки и экспорта
-- **Coverage:** >80% для критического кода
+### Smoke-check скрипты
 
-### Ключевые тесты
+Быстрая проверка работоспособности развернутого стенда:
+
+```powershell
+# Быстрый smoke-check (основные эндпоинты)
+.\scripts\quick_smoke_check.ps1
+
+# Полный smoke-check (все API endpoints)
+.\scripts\manual_smoke_check.ps1
+```
+
+Скрипты проверяют:
+- ✅ Health endpoints (`/live`, `/ready`, `/health`)
+- ✅ Поиск по каталогу (`/api/v1/products/search`)
+- ✅ Карточку SKU (`/api/v1/sku/<code>`)
+- ✅ Историю цен (`/api/v1/sku/<code>/price-history`)
+- ✅ Историю остатков (`/api/v1/sku/<code>/inventory-history`)
+- ✅ Экспортные эндпоинты (JSON/XLSX/PDF)
+- ✅ Проверку типов данных (number vs string)
+
+### Структура тестов
+
+```
+tests/
+├── unit/                    # Unit-тесты бизнес-логики
+│   ├── test_data_quality.py
+│   ├── test_date_extraction.py
+│   ├── test_idempotency.py
+│   ├── test_load_csv.py
+│   ├── test_schemas.py
+│   └── test_validation.py
+├── integration/             # Интеграционные тесты API + БД
+│   ├── test_api_products_search_happy.py
+│   ├── test_api_export_sku_and_price_history.py
+│   ├── test_price_import_etl.py
+│   └── conftest.py
+├── e2e/                     # End-to-end тесты (планируется)
+├── conftest.py              # Общие фикстуры
+└── README.md                # Описание тестовой инфраструктуры
+```
+
+### Coverage
+
+Текущее покрытие: **>80%**
 
 ```bash
-# Проверка согласованности цен между БД и API
-pytest tests/integration/test_price_import_etl.py::test_latest_price_real_skus_db_and_api_consistent
-
-# Проверка enrichment и wineries
-pytest tests/integration/test_api_products_search.py
-
-# Проверка экспортов
-pytest tests/integration/test_api_export_sku_and_price_history.py
+# Генерация отчёта
+pytest --cov=. --cov-report=html
+# Отчёт доступен в htmlcov/index.html
 ```
 
 ---
 
-## 🏗️ Development Setup
+## 🏗️ Работа со справочником виноделен
 
-### Использование Makefile
+### Импорт виноделен из PDF-каталога
+
+Полный цикл работы с PDF-каталогом поставщика:
 
 ```bash
-# Основные команды
-make dev-up          # Поднять окружение
-make dev-down        # Остановить контейнеры
-make db-reset        # Пересоздать БД с нуля
-make test-unit       # Unit-тесты
-make test-int        # Интеграционные тесты
-make check           # Линтер + все тесты
+# 1. Извлечение сырых данных из PDF
+python scripts/extract_wineries_from_pdf.py
+# Результат: data/catalog/wineries_enrichment_from_pdf.xlsx
 
-# Работа с данными
-make load-price EXCEL_PATH="./data/price.xlsx"    # Загрузить прайс
-make load-wineries                                  # Загрузить справочник виноделен
-make enrich-products                                # Обогатить каталог
-make show-quarantine                                # Просмотр карантина
+# 2. Нормализация названий поставщиков
+python scripts/normalize_wineries_suppliers.py
+# Результат: data/catalog/wineries_enrichment_from_pdf_norm.xlsx
 
-# Дополнительные команды
-make lint            # Запуск линтера (ruff)
-make format          # Форматирование кода
-make clean           # Очистка временных файлов
+# 3. Проверка соответствия с products
+python scripts/check_wineries_vs_products.py
+# Вывод: список поставщиков без совпадений, fuzzy-matching подсказки
+
+# 4. Загрузка в БД (dry-run)
+python -m scripts.load_wineries \
+  --excel "data/catalog/wineries_enrichment_from_pdf_norm.xlsx"
+
+# 5. Загрузка в БД (реальная)
+python -m scripts.load_wineries \
+  --excel "data/catalog/wineries_enrichment_from_pdf_norm.xlsx" \
+  --apply
 ```
+
+### Обогащение products данными из wineries
+
+```sql
+-- Обновление региона
+UPDATE products p
+SET region = w.region
+FROM wineries w
+WHERE p.supplier = w.supplier
+  AND p.region IS NULL
+  AND w.region IS NOT NULL;
+
+-- Обновление сайта производителя
+UPDATE products p
+SET producer_site = w.producer_site
+FROM wineries w
+WHERE p.supplier = w.supplier
+  AND p.producer_site IS NULL
+  AND w.producer_site IS NOT NULL;
+```
+
+Или через скрипт:
+
+```bash
+python scripts/enrich_producers.py \
+  --excel "data/catalog/wineries_enrichment_from_pdf_norm.xlsx"
+```
+
+### Использование в API
+
+Данные из `wineries` автоматически включаются в ответы API:
+
+```json
+{
+  "code": "D010210",
+  "name": "Вино продукта",
+  "supplier": "Lake Road - Origin Wine",
+  "supplier_ru": "Лейк Роуд - Ориджин Вайн",
+  "region": "Мальборо",
+  "producer_site": "https://www.lakeroad.co.nz",
+  "winery_name_ru": "Lake Road — Origin Wine",
+  "winery_description_ru": "Полное описание винодельни..."
+}
+```
+
+---
+
+## 🔐 Работа с изображениями
+
+### Автоматическое извлечение из Excel
+
+При импорте прайса скрипт `load_csv.py` автоматически:
+1. Извлекает изображения из Excel
+2. Сохраняет в `/app/static/images/<SKU>.<ext>`
+3. Заполняет `products.image_url`
+
+```bash
+python scripts/load_csv.py \
+  --excel "data/inbox/Прайс.xlsx" \
+  --date 2025-12-01 \
+  --mapping etl/mapping_template.json \
+  --skip-image-extraction=false
+```
+
+### Статическая раздача изображений
+
+Flask автоматически раздаёт файлы из `/static/images`:
+
+```
+GET http://localhost:18000/static/images/D010210.jpg
+```
+
+URL формируется как:
+
+```python
+image_url = f"{WINE_IMAGE_BASE_URL}/{code}.{ext}"
+# http://localhost:18000/static/images/D010210.jpg
+```
+
+### Использование в экспортах
+
+#### Excel экспорт
+
+Колонка "Фото (URL)" содержит полный URL изображения:
+
+```
+http://localhost:18000/static/images/D010210.jpg
+```
+
+#### PDF экспорт
+
+Изображение встраивается в PDF-карточку товара:
+
+```python
+from reportlab.lib.utils import ImageReader
+
+if image_url:
+    img = ImageReader(image_path)
+    pdf.drawImage(img, x, y, width, height)
+```
+
+---
+
+## 🔧 Разработка
 
 ### Pre-commit hooks
 
 ```bash
-# Установка хуков
+# Установка
 pre-commit install
 
 # Ручной запуск
 pre-commit run --all-files
+```
 
-# Обновление хуков
-pre-commit autoupdate
+Проверки:
+- Ruff (линтинг)
+- Black (форматирование)
+- Gitleaks (поиск секретов)
+- Trailing whitespace
+- YAML syntax
+
+### Makefile команды
+
+```bash
+# Установка зависимостей
+make install
+
+# Линтинг
+make lint
+
+# Форматирование
+make format
+
+# Тесты
+make test
+
+# Полная проверка (lint + test)
+make check
+
+# Coverage
+make coverage
+
+# Синхронизация остатков
+make sync-inventory-history
+
+# Сборка Docker образа
+make docker-build
+
+# Очистка кеша
+make clean
+```
+
+### Обновление зависимостей
+
+```bash
+# Обновление requirements.txt
+pip list --outdated
+pip install -U <package>
+pip freeze > requirements.txt
+
+# Проверка уязвимостей
+pip-audit
+
+# Через Makefile
+make audit
 ```
 
 ---
 
-## 🤖 AI Integration Guide (Планируется - Sprint 8)
+## 🎯 AI Integration (Sprint 8) - Детали реализации 🔜
 
-> ⚠️ **Данный раздел описывает планируемую интеграцию AI**, которая будет реализована в Sprint 8.
->
-> Текущий статус: архитектура спроектирована, Issues #128-134 открыты, реализация в очереди.
+> ⚠️ Этот раздел описывает планируемую реализацию. Код ещё не добавлен в репозиторий.
 
-### Подготовка (будущая)
-
-```bash
-# 1. Получить API ключ VseLLM
-# Telegram: @vsellm_bot
-# Оплата в рублях, без VPN
-
-# 2. Добавить в .env
-echo "VSELLM_API_KEY=your-api-key-here" >> .env
-echo "VSELLM_BASE_URL=https://api.vsellm.ru/v1" >> .env
-echo "AI_ENABLED=true" >> .env
-
-# 3. Установить зависимости AI (после реализации)
-pip install openai langchain langgraph
-```
-
-### Генерация embeddings для каталога (пример будущего использования)
-
-```bash
-# Batch-генерация embeddings для всех товаров
-# Будет доступно после реализации Issue #129
-python -m scripts.generate_embeddings --batch-size 100
-
-# Прогресс и cost tracking
-# Processing: 1523/1523 wines
-# Tokens used: 145,230
-# Cost: ₽0.44 (at 3₽/1M tokens)
-```
-
-### Использование AI Sommelier (пример будущего API)
+### Архитектура AI-слоя
 
 ```python
-# Пример кода после реализации Issue #134
-from api.ai.sommelier import WineSommelier
+# api/ai/config.py
+class AIConfig:
+    VSELLM_API_KEY = os.getenv('VSELLM_API_KEY')
+    OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
-# Инициализация с памятью разговора
-sommelier = WineSommelier(session_id="user_123")
+    EMBEDDING_MODEL = 'text-embedding-3-small'
+    EMBEDDING_DIM = 1536
 
-# Запрос рекомендации
-response = sommelier.recommend(
-    user_input="Хочу что-то к стейку из говядины, бюджет до 3000₽"
-)
-
-print(response.recommendations)  # Список SKU с пояснениями
-print(response.reasoning)        # Объяснение выбора
-print(response.cost_rubles)      # Стоимость запроса в рублях
+    LLM_MODELS = {
+        'nano': 'gpt-4.1-nano',
+        'mini': 'gpt-4o-mini',
+        'pro': 'claude-sonnet-4'
+    }
 ```
 
-### Мониторинг расходов AI (пример будущего endpoint)
+### Semantic Search
 
-```bash
-# Просмотр метрик через API
-# Будет доступно после реализации Issue #133
-curl -H "X-API-Key: $API_KEY" \
-  http://localhost:18000/api/v1/ai/metrics
+```python
+# api/ai/semantic_search.py
+from pgvector.psycopg2 import register_vector
 
-# Пример ответа:
+async def search_wines_by_description(query: str, limit: int = 10):
+    """Семантический поиск по векторным embeddings"""
+    embedding = await generate_embedding(query)
+
+    results = db.execute("""
+        SELECT code, name, description_ru,
+               1 - (embedding <=> %s::vector) as similarity
+        FROM products
+        WHERE embedding IS NOT NULL
+        ORDER BY embedding <=> %s::vector
+        LIMIT %s
+    """, (embedding, embedding, limit))
+
+    return results
+```
+
+### AI Sommelier
+
+```python
+# api/ai/sommelier.py
+from langgraph import StateGraph, Node
+
+class SommelierAgent:
+    def __init__(self):
+        self.graph = StateGraph()
+        self.memory = ConversationBufferMemory()
+
+    async def chat(self, user_message: str, context: dict):
+        """Диалог с памятью предыдущих сообщений"""
+        # 1. Retrieve context from memory
+        # 2. Search relevant wines
+        # 3. Generate response with LLM
+        # 4. Update memory
+        pass
+```
+
+### Cost Optimization
+
+```python
+# api/ai/token_optimizer.py
+class CascadeModelSelector:
+    """Выбор модели в зависимости от сложности задачи"""
+
+    def select_model(self, task_complexity: str) -> str:
+        if task_complexity == 'simple':
+            return 'gpt-4.1-nano'  # ₽0.15/1M tokens
+        elif task_complexity == 'medium':
+            return 'gpt-4o-mini'    # ₽1.10/1M tokens
+        else:
+            return 'claude-sonnet-4' # ₽23/1M tokens
+```
+
+### Примеры использования
+
+```python
+# Semantic search
+POST /api/v1/ai/search/semantic
 {
-  "total_tokens_today": 45230,
-  "cost_today_rub": 1.35,
-  "requests_today": 127,
-  "avg_latency_ms": 850,
-  "model_usage": {
-    "gpt-4o-mini": 89,
-    "claude-sonnet-4": 12
+  "query": "легкое белое вино к рыбе",
+  "limit": 10
+}
+
+# AI Sommelier chat
+POST /api/v1/ai/sommelier/chat
+{
+  "message": "Посоветуй вино к стейку",
+  "session_id": "user-123",
+  "context": {
+    "budget": "до 3000 руб",
+    "preferences": ["сухое", "красное"]
   }
 }
-```
 
----
-
-## 📈 Мониторинг и метрики
-
-### Health Checks
-
-```bash
-# Liveness - приложение живо
-curl http://localhost:18000/live
-
-# Readiness - готово принимать запросы
-curl http://localhost:18000/ready
-
-# AI Health - статус AI сервисов (будет доступен после Sprint 8)
-# curl http://localhost:18000/api/v1/ai/health
-```
-
-### Structured Logging
-
-Все логи в JSON формате с контекстом:
-
-```json
+# Generate description
+POST /api/v1/ai/descriptions/generate
 {
-  "timestamp": "2025-11-28T10:30:45.123Z",
-  "level": "INFO",
-  "request_id": "req_20251128_103045_a1b2c3d4",
-  "method": "GET",
-  "path": "/api/v1/products/search",
-  "duration_ms": 45.3,
-  "status_code": 200,
-  "enrichment_applied": true
+  "code": "D010210",
+  "style": "professional",
+  "length": "medium"
 }
 ```
 
----
+### Мониторинг расходов
 
-## 🗺️ Roadmap
+```python
+# api/ai/monitoring.py
+class CostTracker:
+    def __init__(self):
+        self.db = connect_to_db()
 
-### ✅ Реализовано (Sprint 1-7)
+    def log_request(self, model: str, tokens_in: int, tokens_out: int):
+        cost = calculate_cost(model, tokens_in, tokens_out)
+        self.db.execute("""
+            INSERT INTO ai_usage_logs
+            (model, tokens_in, tokens_out, cost_rub, timestamp)
+            VALUES (%s, %s, %s, %s, NOW())
+        """, (model, tokens_in, tokens_out, cost))
+```
 
-#### Sprint 1-3: Базовая инфраструктура
-- [x] REST API с Swagger документацией
-- [x] ETL pipeline для прайс-листов
-- [x] Система версионирования цен
-- [x] Карантин для невалидных данных (Issue #84)
-- [x] Data Quality Gates (Issue #83)
-- [x] Партиционирование таблиц (Issue #85)
+### Roadmap Sprint 8
 
-#### Sprint 4-5: Экспорт и изображения
-- [x] Экспорт в Excel/PDF/JSON (Issue #69)
-- [x] Автоматический импорт изображений из Excel
-- [x] Статическая раздача изображений
-- [x] PDF-карточки с фотографиями
-
-#### Sprint 6-7: Винодельни и Enrichment
-- [x] **Issue #127**: Integrate DW 2025 catalog - справочник виноделен
-- [x] Таблица `wineries` с миграциями
-- [x] Извлечение данных из PDF-каталога
-- [x] Нормализация названий производителей
-- [x] Enrichment продуктов (region, producer_site)
-- [x] SKU API (`/api/v1/sku/<code>`)
-- [x] История цен (`/api/v1/sku/<code>/price-history`)
-- [x] История остатков (`/api/v1/sku/<code>/inventory-history`)
-- [x] Полная синхронизация API схем с БД
-- [x] 164+ тестов (все зелёные)
-
-#### Инфраструктура (Continuous)
-- [x] Structured JSON logging
-- [x] Request tracking с уникальными ID
-- [x] Rate limiting для ключевых эндпоинтов
-- [x] Идемпотентные миграции БД
-- [x] Unit тесты для ETL (Issue #91)
-- [x] CI/CD с GitHub Actions
-
-### 🚧 В разработке (Sprint 8 - AI Integration)
-
-- [ ] **Issue #128**: OpenAI API Integration - базовая интеграция VseLLM
-- [ ] **Issue #129**: Wine Embeddings Infrastructure - генерация векторов
-- [ ] **Issue #130**: Semantic Search Endpoint - семантический поиск
-- [ ] **Issue #131**: AI Wine Description Generator - автогенерация описаний
-- [ ] **Issue #132**: AI Testing Infrastructure - тесты для AI-компонентов
-- [ ] **Issue #134**: AI Wine Sommelier with Memory - умный сомелье (LangGraph)
-
-### 📋 Планируется (Sprint 9+)
-
-- [ ] **Issue #133**: AI Monitoring Dashboard - дашборд расходов AI
-- [ ] **Issue #67**: Telegram-бот для поиска вин
-- [ ] **Issue #68**: Векторный поиск с pgvector (расширенный)
-- [ ] **Issue #66**: Примеры клиентов (Python, JavaScript)
-- [ ] **Issue #63**: Prometheus метрики
-- [ ] **Issue #64**: Sentry для Error Tracking
-- [ ] **Issue #61**: Performance тесты (Load Testing)
-- [ ] **Issue #60**: E2E тесты критических сценариев
-- [ ] **Issue #59**: Integration тесты API endpoints
-
-Подробный roadmap: [`docs/ROADMAP_v3_RU.md`](docs/ROADMAP_v3_RU.md)
-
----
-
-## 💰 AI Cost Optimization (Планируемая стратегия - Sprint 8)
-
-> ⚠️ **Данный раздел описывает планируемую стратегию** оптимизации расходов на AI, которая будет реализована в Sprint 8.
-
-### Стратегия оптимизации расходов
-
-1. **Cascade Model Architecture** (Issue #128)
-   - Simple tasks → `gpt-4.1-nano` (8₽/млн токенов input)
-   - Standard tasks → `gpt-4o-mini` (11₽/млн токенов)
-   - Complex reasoning → `claude-sonnet-4` (230₽/млн токенов)
-
-2. **Token Optimization** (Issue #128)
-   - Минимизация промптов (убрать "пожалуйста", "спасибо")
-   - Резюмирование длинных контекстов
-   - Кэширование частых embeddings в Redis
-
-3. **Batch Processing** (Issue #129)
-   - Генерация embeddings батчами (100 SKU за раз)
-   - Асинхронная обработка через Celery (планируется)
-
-4. **VseLLM vs OpenAI Direct**
-   - Экономия 20-25% vs прямое подключение
-   - Оплата в рублях, НДС, без VPN
-   - Полная совместимость с OpenAI API
+| Issue | Задача | Статус | ETA |
+|-------|--------|--------|-----|
+| #128 | AI Infrastructure Setup | 🔜 Открыт | Неделя 1 |
+| #129 | Embeddings Generation | 🔜 Открыт | Неделя 1-2 |
+| #130 | Semantic Search API | 🔜 Открыт | Неделя 2 |
+| #131 | Description Generator | 🔜 Открыт | Неделя 3 |
+| #132 | AI Testing Infrastructure | 🔜 Открыт | Неделя 2-4 |
+| #134 | AI Sommelier (LangGraph) | 🔜 Открыт | Неделя 4-5 |
+| #133 | Monitoring Dashboard | 🔜 Открыт | Неделя 5 |
 
 ### Пример расходов (1000 запросов/день) - проектная оценка
 
@@ -920,6 +1117,8 @@ curl http://localhost:18000/ready
 ### Специализированная документация
 - [Автоматический импорт изображений](README.auto_images.ru.md)
 - [Справочник виноделен](README.wineries.md)
+- [История остатков и графики](docs/inventory-history-guide.md)
+- [Ручной smoke-check](docs/manual-smoke-check.md)
 - [Экспорт через веб-интерфейс](docs/export-web-ui.md)
 - [Дополнительные поля продуктов](docs/readme_block_new_products_fields_ru.md)
 - [AI Integration Guide](docs/ai-integration.md) - Планируется Sprint 8
@@ -984,6 +1183,7 @@ curl http://localhost:18000/ready
 | **Export** | openpyxl, ReportLab (PDF), JSON |
 | **Image Processing** | openpyxl (extraction), Flask (serving) |
 | **PDF Parsing** | PyPDF2 (catalog extraction) |
+| **Visualization** | Chart.js (frontend graphs) |
 
 ---
 
@@ -1001,6 +1201,9 @@ curl http://localhost:18000/ready
 - ✅ **Reference data management** (справочник виноделен)
 - ✅ **Data enrichment workflows**
 - ✅ **PDF parsing и нормализация данных**
+- ✅ **Time-series data** (история цен и остатков)
+- ✅ **Data visualization** (Chart.js graphs)
+- ✅ **Automated smoke testing** (PowerShell scripts)
 - 🔜 **AI/ML integration** (OpenAI API, LangChain) - *Sprint 8*
 - 🔜 **Vector search** с pgvector + HNSW - *Sprint 8*
 - 🔜 **LangGraph** для stateful AI conversations - *Sprint 8*
@@ -1022,9 +1225,9 @@ MIT License - см. файл [LICENSE](LICENSE)
 
 **Статус проекта:** Активная разработка
 
-**Текущий Sprint:** Sprint 8 - AI Integration
+**Текущий Sprint:** Sprint 8 - AI Integration (планируется)
 
-**Последнее обновление:** Ноябрь 2025
+**Последнее обновление:** Декабрь 2025
 
 **Полезные ссылки:**
 - [GitHub Issues](https://github.com/glinozem/wine-assistant/issues)
@@ -1042,12 +1245,15 @@ Wine Assistant находится в **production-ready** состоянии п�
 2. ✅ **Справочник виноделен** (`wineries`) из PDF-каталога
 3. ✅ **Автоматический импорт изображений** из Excel-прайсов
 4. ✅ **SKU API** с историей цен и остатков
-5. ✅ **Экспорт** в XLSX/PDF/JSON с фотографиями
-6. ✅ **164 автотеста** (все зелёные)
-7. ✅ **Data Quality Gates** с карантином
-8. ✅ **Партиционирование** таблиц
-9. ✅ **Structured logging** с request tracking
-10. ✅ **Docker-инфраструктура** готова к деплою
+5. ✅ **История остатков** (`inventory_history`) с ежедневной синхронизацией
+6. ✅ **Графики** истории цен и остатков (Chart.js)
+7. ✅ **Экспорт** в XLSX/PDF/JSON с фотографиями
+8. ✅ **164 автотеста** (все зелёные)
+9. ✅ **Data Quality Gates** с карантином
+10. ✅ **Партиционирование** таблиц
+11. ✅ **Structured logging** с request tracking
+12. ✅ **Smoke-check скрипты** (PowerShell)
+13. ✅ **Docker-инфраструктура** готова к деплою
 
 ### 🔜 Что в АКТИВНОЙ РАЗРАБОТКЕ (Sprint 8 - AI Integration)
 
@@ -1067,6 +1273,8 @@ Wine Assistant находится в **production-ready** состоянии п�
 - ✅ Docker-окружение готово к деплою
 - ✅ Справочник виноделен полностью интегрирован
 - ✅ Автоимпорт изображений работает из коробки
+- ✅ История остатков синхронизируется автоматически
+- ✅ Графики работают в UI
 
 ### 📋 Что можно делать ПРЯМО СЕЙЧАС
 - ✅ Импортировать прайсы с автоматическим извлечением фото
@@ -1074,7 +1282,9 @@ Wine Assistant находится в **production-ready** состоянии п�
 - ✅ Получать карточки SKU с данными виноделен
 - ✅ Экспортировать каталог в Excel/PDF
 - ✅ Анализировать историю цен и остатков
+- ✅ Строить графики динамики (Chart.js)
 - ✅ Интегрировать с фронтенд-витриной
+- ✅ Настроить автоматическую синхронизацию остатков
 
 ### 🚧 Что будет ПОСЛЕ Sprint 8
 - 🔜 Семантический поиск: "вино к стейку"
@@ -1091,5 +1301,5 @@ Wine Assistant находится в **production-ready** состоянии п�
 </p>
 
 <p align="center">
-  <strong>🍷 Made for Wine Lovers • 🏛️ Powered by Reference Data • 🤖 AI-Ready • 🚀 Built with Python</strong>
+  <strong>🍷 Made for Wine Lovers • 🏛️ Powered by Reference Data • 📈 Analytics Ready • 🤖 AI-Ready • 🚀 Built with Python</strong>
 </p>

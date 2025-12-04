@@ -28,6 +28,7 @@ RUN python -m pip install --upgrade pip && \
 COPY api/ ./api/
 COPY scripts/ ./scripts/
 COPY db/ ./db/
+COPY etl/ ./etl/
 # Если у вас есть .env.example и он нужен внутри контейнера как дефолт:
 # COPY .env.example .env
 

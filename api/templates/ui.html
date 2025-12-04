@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <title>Wine Assistant — Витрина</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Bootstrap для быстрой верстки (через CDN) -->
+  <link
+    rel="stylesheet"
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"
+    integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN"
+    crossorigin="anonymous"
+  />
+
+  <!-- Chart.js для графиков -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+  <style>
+    body {
+      padding: 1rem;
+    }
+    .sku-image {
+      max-width: 100%;
+      border-radius: 0.5rem;
+      box-shadow: 0 0 6px rgba(0,0,0,0.1);
+    }
+    .product-row {
+      cursor: pointer;
+    }
+    .product-row:hover {
+      background-color: #f5f5f5;
+    }
+    .winery-description {
+      max-height: 260px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container-fluid">
+    <h1 class="mb-3">Wine Assistant — витрина</h1>
+
+    <!-- Фильтры / поиск -->
+    <div class="row mb-3">
+      <div class="col-md-4 mb-2">
+        <input id="searchQuery" type="text" class="form-control" placeholder="Поиск по названию, сорту, региону..." />
+      </div>
+      <div class="col-md-3 mb-2">
+        <input id="searchCountry" type="text" class="form-control" placeholder="Страна" />
+      </div>
+      <div class="col-md-3 mb-2">
+        <input id="searchRegion" type="text" class="form-control" placeholder="Регион" />
+      </div>
+      <div class="col-md-2 mb-2 d-grid gap-2">
+        <button id="searchBtn" class="btn btn-primary">Искать</button>
+      </div>
+    </div>
+
+    <div class="row">
+      <!-- Левая колонка: список товаров -->
+      <div class="col-lg-5 mb-3">
+        <h5>Результаты</h5>
+        <table class="table table-sm align-middle" id="productsTable">
+          <thead>
+            <tr>
+              <th>Фото</th>
+              <th>Название</th>
+              <th>Страна</th>
+              <th>Регион</th>
+              <th>Цена</th>
+            </tr>
+          </thead>
+          <tbody id="productsTbody">
+            <!-- строки добавляются JS-ом -->
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Правая колонка: карточка SKU + графики -->
+      <div class="col-lg-7">
+        <div class="row">
+          <div class="col-md-5 mb-3">
+            <img id="skuImage" class="sku-image mb-2" src="" alt="Изображение товара" />
+            <div id="skuBasicInfo" class="small text-muted"></div>
+          </div>
+          <div class="col-md-7 mb-3">
+            <h4 id="skuTitle">Выберите товар слева</h4>
+            <div class="mb-2">
+              <span id="skuMeta"></span>
+            </div>
+            <div class="mb-2">
+              <a id="skuProducerSite" href="#" target="_blank" rel="noopener noreferrer"></a>
+            </div>
+            <div class="winery-description border rounded p-2" id="skuWineryDescription"></div>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="col-md-6 mb-3">
+            <h6>История цен</h6>
+            <canvas id="priceHistoryChart" height="200"></canvas>
+          </div>
+          <div class="col-md-6 mb-3">
+            <h6>История остатков</h6>
+            <canvas id="inventoryHistoryChart" height="200"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Наш скрипт -->
+  <script>
+    const API_BASE = "/api/v1";
+    const API_KEY = "{{ api_key }}";
+
+    let priceChart = null;
+    let inventoryChart = null;
+
+    async function apiGet(path, params = {}) {
+      const url = new URL(API_BASE + path, window.location.origin);
+      Object.entries(params).forEach(([k, v]) => {
+        if (v !== undefined && v !== null && v !== "") {
+          url.searchParams.set(k, v);
+        }
+      });
+
+      const resp = await fetch(url.toString(), {
+        headers: {
+          "X-API-Key": API_KEY
+        }
+      });
+
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error("API error " + resp.status + ": " + text);
+      }
+      return resp.json();
+    }
+
+    function renderProducts(items) {
+      const tbody = document.getElementById("productsTbody");
+      tbody.innerHTML = "";
+      items.forEach((item) => {
+        const tr = document.createElement("tr");
+        tr.classList.add("product-row");
+        tr.dataset.code = item.code;
+
+        const imgTd = document.createElement("td");
+        if (item.image_url) {
+          const img = document.createElement("img");
+          img.src = item.image_url;
+          img.alt = item.name;
+          img.style.maxWidth = "50px";
+          img.style.borderRadius = "4px";
+          imgTd.appendChild(img);
+        }
+
+        const nameTd = document.createElement("td");
+        nameTd.textContent = item.name;
+
+        const countryTd = document.createElement("td");
+        countryTd.textContent = item.country || "";
+
+        const regionTd = document.createElement("td");
+        regionTd.textContent = item.region || "";
+
+        const priceTd = document.createElement("td");
+        priceTd.textContent = item.price_final_rub || item.price_list_rub || "";
+
+        tr.appendChild(imgTd);
+        tr.appendChild(nameTd);
+        tr.appendChild(countryTd);
+        tr.appendChild(regionTd);
+        tr.appendChild(priceTd);
+
+        tr.addEventListener("click", () => {
+          loadSkuDetail(item.code);
+        });
+
+        tbody.appendChild(tr);
+      });
+    }
+
+    function renderSkuCard(sku) {
+      // заголовок
+      document.getElementById("skuTitle").textContent = sku.title_ru || sku.name || sku.code;
+
+      // картинка
+      const imgEl = document.getElementById("skuImage");
+      if (sku.image_url) {
+        imgEl.src = sku.image_url;
+        imgEl.style.display = "block";
+      } else {
+        imgEl.src = "";
+        imgEl.style.display = "none";
+      }
+
+      // базовая инфа
+      const basicInfo = [];
+      if (sku.country) basicInfo.push(sku.country);
+      if (sku.region) basicInfo.push(sku.region);
+      if (sku.color) basicInfo.push(sku.color);
+      if (sku.vintage) basicInfo.push(String(sku.vintage));
+      if (sku.style) basicInfo.push(sku.style);
+      document.getElementById("skuBasicInfo").textContent = basicInfo.join(" · ");
+
+      // meta: поставщик, винодельня
+      const metaParts = [];
+      if (sku.supplier_ru || sku.supplier) {
+        metaParts.push("Поставщик: " + (sku.supplier_ru || sku.supplier));
+      }
+      if (sku.winery_name_ru) {
+        metaParts.push("Винодельня: " + sku.winery_name_ru);
+      }
+      document.getElementById("skuMeta").textContent = metaParts.join(" | ");
+
+      // сайт производителя
+      const siteEl = document.getElementById("skuProducerSite");
+      if (sku.producer_site) {
+        siteEl.href = sku.producer_site;
+        siteEl.textContent = sku.producer_site;
+        siteEl.style.display = "inline";
+      } else {
+        siteEl.href = "#";
+        siteEl.textContent = "";
+        siteEl.style.display = "none";
+      }
+
+      // описание винодельни
+      document.getElementById("skuWineryDescription").textContent =
+        sku.winery_description_ru || "Описание винодельни недоступно.";
+    }
+
+    function renderHistoryChart(ctx, existingChart, label, dataPoints, valueKey) {
+      const labels = dataPoints.map((p) => p.effective_from || p.as_of || "");
+      const values = dataPoints.map((p) => p[valueKey]);
+
+      if (existingChart) {
+        existingChart.destroy();
+      }
+
+      return new Chart(ctx, {
+        type: "line",
+        data: {
+          labels,
+          datasets: [
+            {
+              label,
+              data: values,
+              tension: 0.2,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          scales: {
+            x: {
+              ticks: { maxRotation: 45, minRotation: 0 },
+            },
+          },
+        },
+      });
+    }
+
+    async function loadSkuDetail(code) {
+      try {
+        const sku = await apiGet(`/sku/${code}`);
+        renderSkuCard(sku);
+
+        const [priceHistory, inventoryHistory] = await Promise.all([
+          apiGet(`/sku/${code}/price-history`, {
+            from: "2020-01-01",
+            to: "2030-12-31",
+            limit: 100,
+          }),
+          apiGet(`/sku/${code}/inventory-history`, {
+            from: "2020-01-01",
+            to: "2030-12-31",
+            limit: 100,
+          }),
+        ]);
+
+        const priceCtx = document.getElementById("priceHistoryChart").getContext("2d");
+        const invCtx = document.getElementById("inventoryHistoryChart").getContext("2d");
+
+        priceChart = renderHistoryChart(
+          priceCtx,
+          priceChart,
+          "Цена, ₽",
+          priceHistory.items || [],
+          "price_rub"
+        );
+
+        inventoryChart = renderHistoryChart(
+          invCtx,
+          inventoryChart,
+          "Остаток, шт",
+          inventoryHistory.items || [],
+          "stock_total"
+        );
+      } catch (err) {
+        console.error(err);
+        alert("Ошибка при загрузке SKU или истории: " + err.message);
+      }
+    }
+
+    async function performSearch() {
+      const query = document.getElementById("searchQuery").value.trim();
+      const country = document.getElementById("searchCountry").value.trim();
+      const region = document.getElementById("searchRegion").value.trim();
+
+      const params = { limit: 50, in_stock: "true" };
+      if (query) params.q = query;
+      if (country) params.country = country;
+      if (region) params.region = region;
+
+      try {
+        const res = await apiGet("/products/search", params);
+        renderProducts(res.items || []);
+      } catch (err) {
+        console.error(err);
+        alert("Ошибка поиска: " + err.message);
+      }
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+      document.getElementById("searchBtn").addEventListener("click", performSearch);
+
+      document.getElementById("searchQuery").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") performSearch();
+      });
+
+      performSearch(); // начальная загрузка
+    });
+  </script>
+</body>
+</html>

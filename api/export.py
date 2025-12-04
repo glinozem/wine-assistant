@@ -18,6 +18,7 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Table, TableStyle
 
 SearchItem = Mapping[str, Any]
 PriceHistory = Mapping[str, Any]
+InventoryHistory = Mapping[str, Any]
 
 
 # Имена шрифтов по умолчанию (fallback — встроенные Helvetica)
@@ -413,6 +414,63 @@ class ExportService:
         output = io.BytesIO()
         wb.save(output)
         return output.getvalue()
+
+
+    def export_inventory_history_to_excel(
+        self,
+        history: InventoryHistory,
+    ) -> bytes:
+        """
+        Экспорт истории остатков в Excel.
+
+        Ожидаемый формат history:
+        {
+            "code": "D011283",
+            "items": [
+                {
+                    "as_of": "2025-10-27 12:00:00",
+                    "stock_total": 12502,
+                    "stock_free": 12334,
+                    "reserved": 0,
+                },
+                ...
+            ],
+            "total": 2,
+            "limit": 50,
+            "offset": 0,
+        }
+        """
+        wb = Workbook()
+        ws = wb.active
+
+        code = history.get("code") or ""
+        ws.title = f"Inventory History {code}"
+
+        # Заголовок
+        ws.append(
+            [
+                "Дата (as_of)",
+                "Остаток (всего)",
+                "Зарезервировано",
+                "Свободно",
+            ]
+        )
+
+        for item in history.get("items", []):
+            ws.append(
+                [
+                    item.get("as_of"),
+                    item.get("stock_total"),
+                    item.get("reserved"),
+                    item.get("stock_free"),
+                ]
+            )
+
+        output = io.BytesIO()
+        wb.save(output)
+        return output.getvalue()
+
+
 
     @staticmethod
     def _fmt_price(value: Any) -> str:

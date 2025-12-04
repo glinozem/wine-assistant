@@ -141,3 +141,48 @@ def test_export_price_history_to_excel():
     assert rows[2][1] == "Текущая"
     assert float(rows[2][2]) == 1100.0
     assert float(rows[2][3]) == 950.0
+
+
+def test_export_inventory_history_to_excel():
+    service = ExportService()
+
+    history = {
+        "code": "D000010",
+        "items": [
+            {
+                "as_of": "2025-01-01 10:00:00",
+                "stock_total": 100,
+                "stock_free": 90,
+                "reserved": 10,
+            },
+            {
+                "as_of": "2025-01-02 10:00:00",
+                "stock_total": 80,
+                "stock_free": 70,
+                "reserved": 10,
+            },
+        ],
+    }
+
+    data = service.export_inventory_history_to_excel(history)
+    rows = _load_rows_from_xlsx(data)
+
+    # Заголовки — проверяем по смыслу, а не по точному тексту
+    header = rows[0]
+    assert len(header) == 4
+    assert "дата" in str(header[0]).lower()
+    assert "остат" in str(header[1]).lower()
+    assert "резерв" in str(header[2]).lower()
+    assert "свобод" in str(header[3]).lower()
+
+    # Первая запись
+    assert rows[1][0] == "2025-01-01 10:00:00"
+    assert float(rows[1][1]) == 100.0
+    assert float(rows[1][2]) == 10.0
+    assert float(rows[1][3]) == 90.0
+
+    # Вторая запись
+    assert rows[2][0] == "2025-01-02 10:00:00"
+    assert float(rows[2][1]) == 80.0
+    assert float(rows[2][2]) == 10.0
+    assert float(rows[2][3]) == 70.0
