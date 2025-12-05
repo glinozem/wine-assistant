@@ -133,4 +133,9 @@ def setup_request_logging(app):
         # Теперь клиент может увидеть Request ID в HTTP заголовках!
         response.headers["X-Request-ID"] = request_id
 
+        # Гарантируем корректный Content-Type для JSON-ответов
+        content_type = response.content_type or ""
+        if response.mimetype == "application/json" and "charset=" not in content_type:
+            response.headers["Content-Type"] = "application/json; charset=utf-8"
+
         return response
