@@ -18,6 +18,7 @@ from flask_limiter.util import get_remote_address
 
 from api.export import ExportService
 from api.logging_config import setup_logging
+from api.request_middleware import setup_request_logging
 from api.schemas import (
     CatalogSearchParams,
     CatalogSort,
@@ -127,6 +128,7 @@ else:
     CORS(app, origins=origins_list, expose_headers=[h.strip() for h in expose_headers.split(",")])
 
 setup_logging(app)
+setup_request_logging(app)
 
 app.config.update(
     RATELIMIT_HEADERS_ENABLED=True,
@@ -369,46 +371,6 @@ Swagger(app, template=swagger_template, config=swagger_config)
 # ────────────────────────────────────────────────────────────────────────────────
 # Request/Response logging and error handling
 # ────────────────────────────────────────────────────────────────────────────────
-@app.before_request
-def before_request():
-    g._started = time.perf_counter()
-    g._request_id = f"req_{int(time.time()*1000)%0xFFFFFF:06x}"
-    app.logger.info(
-        "Incoming request",
-        extra={
-            "request_id": g._request_id,
-            "method": request.method,
-            "path": request.path,
-            "query_string": request.query_string.decode("utf-8", errors="ignore"),
-            "client_ip": request.headers.get("X-Forwarded-For", request.remote_addr),
-            "user_agent": request.headers.get("User-Agent"),
-        },
-    )
-
-@app.after_request
-def after_request(resp):
-    dur_ms = round((time.perf_counter() - getattr(g, "_started", time.perf_counter())) * 1000, 2)
-    app.logger.info(
-        "Request completed",
-        extra={
-            "request_id": getattr(g, "_request_id", "unknown"),
-            "method": request.method,
-            "path": request.path,
-            "status_code": resp.status_code,
-            "duration_ms": dur_ms,
-            "response_size_bytes": resp.calculate_content_length() or 0,
-        },
-    )
-    # Trace headers
-    if hasattr(g, "_request_id"):
-        resp.headers["X-Request-ID"] = g._request_id
-
-    # ❗️Ключевая правка: гарантируем Content-Type с charset для JSON
-    if resp.mimetype == "application/json" and "charset=" not in resp.content_type:
-        resp.headers["Content-Type"] = "application/json; charset=utf-8"
-
-    return resp
-
 @app.errorhandler(RateLimitExceeded)
 def handle_ratelimit(e):
     return jsonify({
@@ -421,13 +383,17 @@ def log_exception(exc):
     app.logger.error(
         "Unhandled exception",
         extra={
-            "request_id": getattr(g, "_request_id", "unknown"),
-            "path": request.path,
-            "exception": repr(exc),
+            "event": "unhandled_exception",
+            "service": "wine-assistant-api",
+            "request_id": getattr(g, "request_id", "unknown"),
+            "http_method": request.method,
+            "http_path": request.path,
+            "error_type": type(exc).__name__,
+            "error_message": repr(exc),
         },
         exc_info=True,
     )
-    return jsonify({"error": "internal_error", "request_id": getattr(g, "_request_id", None)}), 500
+    return jsonify({"error": "internal_error", "request_id": getattr(g, "request_id", None)}), 500
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Security
@@ -441,9 +407,14 @@ def require_api_key(fn):
                 app.logger.warning(
                     "Invalid API key attempt",
                     extra={
-                        "request_id": getattr(g, "_request_id", "unknown"),
-                        "path": request.path,
-                        "provided_key_prefix": (provided[:8] + "...") if provided else None,
+                        "event": "invalid_api_key",
+                        "service": "wine-assistant-api",
+                        "request_id": getattr(g, "request_id", "unknown"),
+                        "http_method": request.method,
+                        "http_path": request.path,
+                        "client_ip": request.remote_addr,
+                        "provided_key_prefix": (provided[
+                                                    :8] + "...") if provided else None,
                     },
                 )
                 return jsonify({"error": "forbidden"}), 403
@@ -604,7 +575,17 @@ def readiness():
 
     conn, err = db_connect()
     if err or not conn:
-        app.logger.error("Readiness check failed - DB unavailable", extra={"error": err})
+        app.logger.error(
+            "Readiness check failed - DB unavailable",
+            extra={
+                "event": "readiness_db_unavailable",
+                "service": "wine-assistant-api",
+                "request_id": getattr(g, "request_id", "unknown"),
+                "http_method": request.method,
+                "http_path": request.path,
+                "error_message": err,
+            },
+        )
         return (
             jsonify(
                 {
@@ -678,7 +659,19 @@ def readiness():
             }
         )
     except Exception as e:
-        app.logger.error("Readiness check failed", extra={"error": str(e)}, exc_info=True)
+        app.logger.error(
+            "Readiness check failed",
+            extra={
+                "event": "readiness_check_failed",
+                "service": "wine-assistant-api",
+                "request_id": getattr(g, "request_id", "unknown"),
+                "http_method": request.method,
+                "http_path": request.path,
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+            },
+            exc_info=True,
+        )
         return (
             jsonify(
                 {
@@ -782,7 +775,19 @@ def simple_search():
 
     conn, err = db_connect()
     if err or not conn:
-        app.logger.error("Search failed - database unavailable", extra={"error": err})
+        app.logger.error(
+            "Search failed - database unavailable",
+            extra={
+                "event": "simple_search_db_unavailable",
+                "service": "wine-assistant-api",
+                "request_id": getattr(g, "request_id", "unknown"),
+                "http_method": request.method,
+                "http_path": request.path,
+                "error_message": err,
+                "query": params.q,
+                "limit": params.limit,
+            },
+        )
         return jsonify({"items": [], "total": 0, "query": params.q})
 
     try:
@@ -825,7 +830,17 @@ def simple_search():
     except Exception as e:
         app.logger.error(
             "Search query failed",
-            extra={"error": str(e), "query": params.q, "limit": params.limit},
+            extra={
+                "event": "simple_search_failed",
+                "service": "wine-assistant-api",
+                "request_id": getattr(g, "request_id", "unknown"),
+                "http_method": request.method,
+                "http_path": request.path,
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+                "query": params.q,
+                "limit": params.limit,
+            },
             exc_info=True,
         )
         return jsonify({
@@ -903,7 +918,21 @@ def catalog_search():
 
     conn, err = db_connect()
     if err or not conn:
-        app.logger.error("Catalog search failed - database unavailable", extra={"error": err})
+        app.logger.error(
+            "Catalog search failed - database unavailable",
+            extra={
+                "event": "catalog_search_db_unavailable",
+                "service": "wine-assistant-api",
+                "request_id": getattr(g, "request_id", "unknown"),
+                "http_method": request.method,
+                "http_path": request.path,
+                "error_message": err,
+                "query": params.q,
+                "limit": params.limit,
+                "offset": params.offset,
+                "in_stock": params.in_stock,
+            },
+        )
         # Возвращаем "пустую" выдачу, но с корректными метаданными
         return jsonify(
             {
@@ -1031,7 +1060,13 @@ def catalog_search():
         app.logger.error(
             "Catalog search failed",
             extra={
-                "error": str(e),
+                "event": "catalog_search_failed",
+                "service": "wine-assistant-api",
+                "request_id": getattr(g, "request_id", "unknown"),
+                "http_method": request.method,
+                "http_path": request.path,
+                "error_type": type(e).__name__,
+                "error_message": str(e),
                 "query": params.q,
                 "limit": params.limit,
                 "offset": params.offset,
@@ -1148,7 +1183,16 @@ def export_search():
     if err or not conn:
         app.logger.error(
             "Export search failed - database unavailable",
-            extra={"error": err},
+            extra={
+                "event": "export_search_db_unavailable",
+                "service": "wine-assistant-api",
+                "request_id": getattr(g, "request_id", "unknown"),
+                "http_method": request.method,
+                "http_path": request.path,
+                "error_message": err,
+                "query": params.q,
+                "limit": params.limit,
+            },
         )
         # Для экспорта в случае проблем можно вернуть JSON-ошибку
         return jsonify({"error": "db_unavailable"}), 503
@@ -1259,7 +1303,17 @@ def export_search():
     except Exception as e:
         app.logger.error(
             "Export search failed",
-            extra={"error": str(e)},
+            extra={
+                "event": "export_search_failed",
+                "service": "wine-assistant-api",
+                "request_id": getattr(g, "request_id", "unknown"),
+                "http_method": request.method,
+                "http_path": request.path,
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+                "query": params.q,
+                "limit": params.limit,
+            },
             exc_info=True,
         )
         return jsonify({"error": "export_failed"}), 500
@@ -1314,7 +1368,17 @@ def _fetch_sku_row(conn, code: str) -> dict | None:
     )
 
     if not rows:
-        app.logger.info("SKU not found in _fetch_sku_row", extra={"code": code})
+        app.logger.info(
+            "SKU not found in _fetch_sku_row",
+            extra={
+                "event": "sku_not_found",
+                "service": "wine-assistant-api",
+                "request_id": getattr(g, "request_id", "unknown"),
+                "http_method": request.method,
+                "http_path": request.path,
+                "sku_code": code,
+            },
+        )
         return None
 
     row = dict(rows[0])
@@ -1357,7 +1421,15 @@ def get_sku(code: str):
     if err or not conn:
         app.logger.error(
             "SKU lookup failed - DB unavailable",
-            extra={"error": err, "code": code},
+            extra={
+                "event": "sku_lookup_db_unavailable",
+                "service": "wine-assistant-api",
+                "request_id": getattr(g, "request_id", "unknown"),
+                "http_method": request.method,
+                "http_path": request.path,
+                "error_message": err,
+                "sku_code": code,
+            },
         )
         return jsonify({"error": "not_found"}), 404
 
@@ -1371,7 +1443,16 @@ def get_sku(code: str):
     except Exception as e:  # noqa: BLE001
         app.logger.error(
             "SKU lookup failed",
-            extra={"error": str(e), "code": code},
+            extra={
+                "event": "sku_lookup_failed",
+                "service": "wine-assistant-api",
+                "request_id": getattr(g, "request_id", "unknown"),
+                "http_method": request.method,
+                "http_path": request.path,
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+                "sku_code": code,
+            },
             exc_info=True,
         )
         return jsonify({"error": "internal_error"}), 500
@@ -1409,7 +1490,14 @@ def export_sku(code: str):
     """
     app.logger.info(
         "export_sku called",
-        extra={"code": code, "path": request.path},
+        extra={
+            "event": "export_sku_called",
+            "service": "wine-assistant-api",
+            "request_id": getattr(g, "request_id", "unknown"),
+            "http_method": request.method,
+            "http_path": request.path,
+            "sku_code": code,
+        },
     )
 
     format_type = request.args.get("format", "pdf").lower()
@@ -1428,7 +1516,15 @@ def export_sku(code: str):
     if err or not conn:
         app.logger.error(
             "Export SKU failed - DB unavailable",
-            extra={"error": err, "code": code},
+            extra={
+                "event": "export_sku_db_unavailable",
+                "service": "wine-assistant-api",
+                "request_id": getattr(g, "request_id", "unknown"),
+                "http_method": request.method,
+                "http_path": request.path,
+                "sku_code": code,
+                "error": err,
+            },
         )
         return jsonify({"error": "internal_error"}), 503
 
@@ -1454,7 +1550,15 @@ def export_sku(code: str):
     except Exception as e:  # noqa: BLE001
         app.logger.error(
             "Export SKU failed",
-            extra={"error": str(e), "code": code},
+            extra={
+                "event": "export_sku_failed",
+                "service": "wine-assistant-api",
+                "request_id": getattr(g, "request_id", "unknown"),
+                "http_method": request.method,
+                "http_path": request.path,
+                "sku_code": code,
+                "error": str(e),
+            },
             exc_info=True,
         )
         return jsonify({"error": "export_failed"}), 500
@@ -1524,7 +1628,18 @@ def price_history(code: str):
     if err or not conn:
         app.logger.error(
             f"Price history failed - database unavailable: {code}",
-            extra={"error": err})
+            extra={
+                "event": "price_history_db_unavailable",
+                "service": "wine-assistant-api",
+                "request_id": getattr(g, "request_id", "unknown"),
+                "http_method": request.method,
+                "http_path": request.path,
+                "sku_code": code,
+                "dt_from": params.dt_from,
+                "dt_to": params.dt_to,
+                "error": err,
+            },
+        )
         return jsonify({"items": [], "total": 0, "code": code})
 
     try:
@@ -1565,8 +1680,17 @@ def price_history(code: str):
     except Exception as e:
         app.logger.error(
             f"Price history lookup failed: {code}",
-            extra={"error": str(e), "from": params.dt_from,
-                   "to": params.dt_to},
+            extra={
+                "event": "price_history_lookup_failed",
+                "service": "wine-assistant-api",
+                "request_id": getattr(g, "request_id", "unknown"),
+                "http_method": request.method,
+                "http_path": request.path,
+                "sku_code": code,
+                "dt_from": params.dt_from,
+                "dt_to": params.dt_to,
+                "error": str(e),
+            },
             exc_info=True,
         )
         return jsonify({
@@ -1641,7 +1765,17 @@ def export_price_history(code: str):
     if err or not conn:
         app.logger.error(
             "Export price history failed - database unavailable",
-            extra={"error": err, "code": code},
+            extra={
+                "event": "export_price_history_db_unavailable",
+                "service": "wine-assistant-api",
+                "request_id": getattr(g, "request_id", "unknown"),
+                "http_method": request.method,
+                "http_path": request.path,
+                "sku_code": code,
+                "dt_from": params.dt_from,
+                "dt_to": params.dt_to,
+                "error": err,
+            },
         )
         return jsonify({"error": "db_unavailable"}), 503
 
@@ -1708,7 +1842,17 @@ def export_price_history(code: str):
     except Exception as e:
         app.logger.error(
             "Export price history failed",
-            extra={"error": str(e), "code": code},
+            extra={
+                "event": "export_price_history_failed",
+                "service": "wine-assistant-api",
+                "request_id": getattr(g, "request_id", "unknown"),
+                "http_method": request.method,
+                "http_path": request.path,
+                "sku_code": code,
+                "dt_from": params.dt_from,
+                "dt_to": params.dt_to,
+                "error": str(e),
+            },
             exc_info=True,
         )
         return jsonify({"error": "export_failed"}), 500
@@ -1784,7 +1928,17 @@ def export_inventory_history(code: str):
     if err or not conn:
         app.logger.error(
             "Export inventory history failed - database unavailable",
-            extra={"error": err, "code": code},
+            extra={
+                "event": "export_inventory_history_db_unavailable",
+                "service": "wine-assistant-api",
+                "request_id": getattr(g, "request_id", "unknown"),
+                "http_method": request.method,
+                "http_path": request.path,
+                "sku_code": code,
+                "dt_from": params.dt_from,
+                "dt_to": params.dt_to,
+                "error": err,
+            },
         )
         return jsonify({"error": "db_unavailable"}), 503
 
@@ -1853,7 +2007,17 @@ def export_inventory_history(code: str):
     except Exception as e:  # noqa: BLE001
         app.logger.error(
             "Export inventory history failed",
-            extra={"error": str(e), "code": code},
+            extra={
+                "event": "export_inventory_history_failed",
+                "service": "wine-assistant-api",
+                "request_id": getattr(g, "request_id", "unknown"),
+                "http_method": request.method,
+                "http_path": request.path,
+                "sku_code": code,
+                "dt_from": params.dt_from,
+                "dt_to": params.dt_to,
+                "error": str(e),
+            },
             exc_info=True,
         )
         return jsonify({"error": "export_failed"}), 500
@@ -1923,7 +2087,18 @@ def inventory_history(code: str):
     if err or not conn:
         app.logger.error(
             f"Inventory history failed - database unavailable: {code}",
-            extra={"error": err})
+            extra={
+                "event": "inventory_history_db_unavailable",
+                "service": "wine-assistant-api",
+                "request_id": getattr(g, "request_id", "unknown"),
+                "http_method": request.method,
+                "http_path": request.path,
+                "sku_code": code,
+                "dt_from": params.dt_from,
+                "dt_to": params.dt_to,
+                "error": err,
+            },
+        )
         return jsonify({"items": [], "total": 0, "code": code})
 
     try:
@@ -1964,8 +2139,17 @@ def inventory_history(code: str):
     except Exception as e:
         app.logger.error(
             f"Inventory history lookup failed: {code}",
-            extra={"error": str(e), "from": params.dt_from,
-                   "to": params.dt_to},
+            extra={
+                "event": "inventory_history_lookup_failed",
+                "service": "wine-assistant-api",
+                "request_id": getattr(g, "request_id", "unknown"),
+                "http_method": request.method,
+                "http_path": request.path,
+                "sku_code": code,
+                "dt_from": params.dt_from,
+                "dt_to": params.dt_to,
+                "error": str(e),
+            },
             exc_info=True,
         )
         return jsonify({

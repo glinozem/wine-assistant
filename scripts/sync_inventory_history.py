@@ -60,9 +60,11 @@ def sync_inventory_history(as_of: datetime, dry_run: bool = False) -> int:
     Копирует текущие остатки из public.inventory в public.inventory_history.
 
     - Берём только SKU, где stock_total или stock_free != 0.
+    - reserved вычисляем как (stock_total - stock_free, минимум 0).
     - Для каждого code вставляем строку только если
       в inventory_history ещё нет записи с таким code и as_of::date.
     """
+
     conn, err = db_connect()
     if err or not conn:
         raise SystemExit(f"❌ Не удалось подключиться к БД: {err}")
@@ -117,7 +119,10 @@ def sync_inventory_history(as_of: datetime, dry_run: bool = False) -> int:
             SELECT
                 i.code,
                 COALESCE(i.stock_total, 0) AS stock_total,
-                0                           AS reserved,
+                GREATEST(
+                    COALESCE(i.stock_total, 0) - COALESCE(i.stock_free, 0),
+                    0
+                )                           AS reserved,
                 COALESCE(i.stock_free, 0)   AS stock_free,
                 %(as_of)s                   AS as_of
             FROM public.inventory i
