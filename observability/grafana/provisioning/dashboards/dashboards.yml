@@ -1,0 +1,16 @@
+# observability/grafana/provisioning/dashboards/dashboards.yml
+# Автоматическая загрузка дашбордов при старте Grafana
+
+apiVersion: 1
+
+providers:
+  - name: 'Wine Assistant Dashboards'
+    orgId: 1
+    folder: 'Wine Assistant'
+    folderUid: 'wine-assistant'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards

@@ -1,0 +1,67 @@
+# observability/loki-config.yml
+# Конфигурация Loki для Wine Assistant
+#
+# Оптимизировано для:
+# - Работы с большим количеством запросов от Grafana
+# - Избежания ошибки "too many outstanding requests"
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  log_level: warn
+
+common:
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2020-10-24
+      store: boltdb-shipper
+      object_store: filesystem
+      schema: v11
+      index:
+        prefix: index_
+        period: 24h
+
+storage_config:
+  boltdb_shipper:
+    active_index_directory: /loki/boltdb-shipper-active
+    cache_location: /loki/boltdb-shipper-cache
+    shared_store: filesystem
+
+# Лимиты для избежания перегрузки
+limits_config:
+  # Увеличиваем лимит параллельных запросов
+  max_query_parallelism: 4
+  # Увеличиваем очередь запросов (решает "too many outstanding requests")
+  max_outstanding_per_tenant: 4096
+  # Лимит streams на пользователя
+  max_global_streams_per_user: 10000
+  # Размер ingestion
+  ingestion_rate_mb: 16
+  ingestion_burst_size_mb: 32
+  # Retention (хранение 7 дней)
+  retention_period: 168h
+
+# Оптимизация запросов
+query_range:
+  parallelise_shardable_queries: false
+
+# Compactor для retention
+compactor:
+  working_directory: /loki/compactor
+  shared_store: filesystem
+  retention_enabled: true
+  retention_delete_delay: 2h
+  compaction_interval: 10m

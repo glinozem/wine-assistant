@@ -1,0 +1,46 @@
+# observability/promtail-config.yml
+# Конфигурация Promtail для сбора Docker логов и отправки в Loki
+#
+# ВАЖНО: Только low-cardinality поля используются как labels.
+# High-cardinality поля (request_id, http_path, sku_code) доступны через | json в запросах.
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker-logs
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: docker-logs
+          __path__: /var/lib/docker/containers/*/*.log
+
+    pipeline_stages:
+      # 1) Парсим Docker JSON wrapper
+      - docker: {}
+
+      # 2) Парсим наш JSON лог (только low-cardinality поля)
+      - json:
+          expressions:
+            level: level
+            event: event
+            service: service
+            http_method: http_method
+            # НЕ извлекаем high-cardinality поля как labels:
+            # request_id, http_path, sku_code, dt_from, dt_to
+            # Эти поля доступны через | json в LogQL запросах
+
+      # 3) Только LOW-cardinality поля как labels для быстрой фильтрации
+      - labels:
+          level:
+          event:
+          service:
+          http_method:
