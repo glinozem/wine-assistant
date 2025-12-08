@@ -118,11 +118,20 @@ def setup_request_logging(app):
         # Логируем результат выполнения запроса
         app.logger.log(
             log_level,
-            "Request completed",
+            "HTTP request completed",
             extra={
+                "event": "http_request_completed",
+                "service": "wine-assistant-api",
                 "request_id": request_id,
-                "method": request.method,
-                "path": request.path,
+                "http_method": request.method,
+                "http_path": request.path,
+                "http_route": getattr(getattr(request, "url_rule", None),
+                                      "rule", None),
+                "client_ip": request.headers.get("X-Real-IP",
+                                                 request.remote_addr),
+                "user_agent": request.user_agent.string if request.user_agent else None,
+                "query_string": request.query_string.decode("utf-8",
+                                                            errors="ignore"),
                 "status_code": response.status_code,
                 "duration_ms": round(duration_ms, 2),
                 "response_size_bytes": response.content_length or 0,

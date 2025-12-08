@@ -388,12 +388,18 @@ def log_exception(exc):
             "request_id": getattr(g, "request_id", "unknown"),
             "http_method": request.method,
             "http_path": request.path,
-            "error_type": type(exc).__name__,
-            "error_message": repr(exc),
+            "sku_code": getattr(g, "sku_code", None),
+            "exception_type": type(exc).__name__,
+            "exception_message": str(exc),
         },
         exc_info=True,
     )
-    return jsonify({"error": "internal_error", "request_id": getattr(g, "request_id", None)}), 500
+    return jsonify(
+        {
+            "error": "internal_error",
+            "request_id": getattr(g, "request_id", None)
+        }
+    ), 500
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Security
@@ -1417,6 +1423,7 @@ def get_sku(code: str):
       404:
         description: SKU not found
     """
+    g.sku_code = code
     conn, err = db_connect()
     if err or not conn:
         app.logger.error(
@@ -1488,6 +1495,7 @@ def export_sku(code: str):
       404:
         description: SKU not found
     """
+    g.sku_code = code
     app.logger.info(
         "export_sku called",
         extra={
@@ -1619,7 +1627,7 @@ def price_history(code: str):
       500:
         description: Internal error during price history lookup
     """
-
+    g.sku_code = code
     params, error = validate_query_params(PriceHistoryParams)
     if error:
         return error
@@ -1745,6 +1753,8 @@ def export_price_history(code: str):
       400:
         description: Unsupported format or validation error
     """
+    g.sku_code = code  # чтобы sku_code попадал в middleware-логи
+
     fmt = request.args.get("format", "xlsx").lower()
     if fmt not in ("xlsx", "json"):
         return (
@@ -1768,7 +1778,9 @@ def export_price_history(code: str):
             extra={
                 "event": "export_price_history_db_unavailable",
                 "service": "wine-assistant-api",
-                "request_id": getattr(g, "request_id", "unknown"),
+                "request_id": getattr(
+                    g, "request_id", getattr(g, "_request_id", "unknown")
+                ),
                 "http_method": request.method,
                 "http_path": request.path,
                 "sku_code": code,
@@ -1823,29 +1835,57 @@ def export_price_history(code: str):
             "offset": params.offset,
         }
 
+        # ✅ метрика успешного экспорта для Grafana
+        app.logger.info(
+            "Export price history succeeded",
+            extra={
+                "event": "export_price_history_succeeded",
+                "service": "wine-assistant-api",
+                "request_id": getattr(
+                    g, "request_id", getattr(g, "_request_id", "unknown")
+                ),
+                "http_method": request.method,
+                "http_path": request.path,
+                "sku_code": code,
+                "dt_from": params.dt_from,
+                "dt_to": params.dt_to,
+                "items_returned": history["total"],
+                "format": fmt,
+            },
+        )
+
         if fmt == "json":
             # Нормализуем числа в JSON
             for item in history["items"]:
-                item["price_list_rub"] = _convert_decimal_to_number(item["price_list_rub"])
-                item["price_final_rub"] = _convert_decimal_to_number(item["price_final_rub"])
+                item["price_list_rub"] = _convert_decimal_to_number(
+                    item["price_list_rub"]
+                )
+                item["price_final_rub"] = _convert_decimal_to_number(
+                    item["price_final_rub"]
+                )
             return jsonify(history)
 
-        # fmt == "xlsx"
-        content = export_service.export_price_history_to_excel(history)
+        # Excel-экспорт через ExportService
+        xlsx_bytes = export_service.export_price_history_to_excel(history)
+
         return send_file(
-            io.BytesIO(content),
-            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            io.BytesIO(xlsx_bytes),
+            mimetype=(
+                "application/vnd.openxmlformats-"
+                "officedocument.spreadsheetml.sheet"
+            ),
             as_attachment=True,
             download_name=f"price_history_{code}.xlsx",
         )
-
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         app.logger.error(
             "Export price history failed",
             extra={
                 "event": "export_price_history_failed",
                 "service": "wine-assistant-api",
-                "request_id": getattr(g, "request_id", "unknown"),
+                "request_id": getattr(
+                    g, "request_id", getattr(g, "_request_id", "unknown")
+                ),
                 "http_method": request.method,
                 "http_path": request.path,
                 "sku_code": code,
@@ -1858,6 +1898,7 @@ def export_price_history(code: str):
         return jsonify({"error": "export_failed"}), 500
     finally:
         _close_conn_safely(conn)
+
 
 @app.route("/export/inventory-history/<code>", methods=["GET"])
 @app.route("/api/v1/export/inventory-history/<code>", methods=["GET"])
@@ -1907,6 +1948,7 @@ def export_inventory_history(code: str):
       400:
         description: Unsupported format or validation error
     """
+    g.sku_code = code
     fmt = request.args.get("format", "xlsx").lower()
     if fmt not in ("xlsx", "json"):
         return (
@@ -1995,6 +2037,23 @@ def export_inventory_history(code: str):
 
         # fmt == "xlsx"
         content = export_service.export_inventory_history_to_excel(history)
+
+        app.logger.info(
+            "Export inventory history succeeded",
+            extra={
+                "event": "export_inventory_history_succeeded",
+                "service": "wine-assistant-api",
+                "request_id": getattr(g, "request_id", getattr(g, "_request_id", "unknown")),
+                "http_method": request.method,
+                "http_path": request.path,
+                "sku_code": code,
+                "dt_from": params.dt_from,
+                "dt_to": params.dt_to,
+                "items_returned": len(history["items"]),
+                "format": fmt,
+            },
+        )
+
         return send_file(
             io.BytesIO(content),
             mimetype=(
@@ -2010,7 +2069,9 @@ def export_inventory_history(code: str):
             extra={
                 "event": "export_inventory_history_failed",
                 "service": "wine-assistant-api",
-                "request_id": getattr(g, "request_id", "unknown"),
+                "request_id": getattr(
+                    g, "request_id", getattr(g, "_request_id", "unknown")
+                ),
                 "http_method": request.method,
                 "http_path": request.path,
                 "sku_code": code,
@@ -2078,7 +2139,7 @@ def inventory_history(code: str):
       500:
         description: Internal error during inventory history lookup
     """
-
+    g.sku_code = code
     params, error = validate_query_params(InventoryHistoryParams)
     if error:
         return error
