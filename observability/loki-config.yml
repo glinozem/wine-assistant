@@ -44,8 +44,6 @@ storage_config:
 limits_config:
   # Увеличиваем лимит параллельных запросов
   max_query_parallelism: 4
-  # Увеличиваем очередь запросов (решает "too many outstanding requests")
-  max_outstanding_per_tenant: 4096
   # Лимит streams на пользователя
   max_global_streams_per_user: 10000
   # Размер ingestion

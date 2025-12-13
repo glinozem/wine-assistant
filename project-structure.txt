@@ -1,30 +1,37 @@
 wine-assistant/
 
-# Легенда:
-# [PUBLIC API]    — то, на что опираются внешние пользователи/интеграции (HTTP API, официальная дока, dev-entrypoints).
-# [INTERNAL]      — внутренняя реализация, инфраструктура, тесты, служебные скрипты.
-# [EXPERIMENTAL]  — экспериментальные части, структура и контракты могут меняться.
+# Назначение
+# project-structure.txt — “ручной” справочник по структуре репозитория и роли каталогов/файлов.
+# project-structure-auto.txt — автоматически сгенерированный снимок файловой структуры (tree /F /A).
 
-├── api/                              # Flask-приложение и HTTP-эндпоинты [PUBLIC API]
-│   ├── app.py                        # Точка входа Flask-приложения, регистрация роутов [PUBLIC API]
-│   ├── export.py                     # Эндпоинты экспорта: поисковый XLSX/PDF, SKU-карточки и т.п. [PUBLIC API]
-│   ├── logging_config.py             # Конфигурация логирования для API [INTERNAL]
-│   ├── request_middleware.py         # Общая обработка запросов/ответов (middleware) [INTERNAL]
-│   ├── schemas.py                    # Схемы запросов/ответов (REST-контракты) [PUBLIC API]
-│   ├── validation.py                 # Бизнес-валидация входящих данных [INTERNAL]
-│   └── wsgi.py                       # WSGI-обёртка для деплоя (gunicorn/uwsgi и т.п.) [PUBLIC API]
+# Легенда
+# [PUBLIC]   — то, на что опираются пользователи репозитория: запуск, API, официальная документация, контракты.
+# [INTERNAL] — внутренняя реализация, эксплуатационные скрипты, миграции, тестовые утилиты.
+# [OPTIONAL] — компоненты, которые можно не поднимать для минимального демо (например, observability).
 
-├── data/                             # Рабочие данные прайса поставщика [INTERNAL]
-│   ├── inbox/                        # Входящие Excel-файлы прайсов (ручная выкладка) [INTERNAL]
-│   ├── archive/                      # Архив обработанных файлов/прайсов [INTERNAL]
+wine-assistant/
+├── api/                                        # Flask-приложение и HTTP-эндпоинты [PUBLIC]
+│   ├── app.py                                  # Роутинг /ui и /api/v1/* [PUBLIC]
+│   ├── export.py                               # Экспорт XLSX/PDF (поиск, SKU, истории) [PUBLIC]
+│   ├── schemas.py                              # Контракты запросов/ответов [PUBLIC]
+│   ├── validation.py                           # Бизнес-валидация [INTERNAL]
+│   ├── request_middleware.py                   # Middleware: логирование/лимиты/ошибки [INTERNAL]
+│   ├── logging_config.py                       # Настройки логирования API [INTERNAL]
+│   ├── wsgi.py                                 # WSGI-entrypoint (gunicorn) [PUBLIC]
+│   └── templates/
+│       └── ui.html                             # Витрина UI (один HTML без SPA) [PUBLIC]
+│
+├── data/                                       # Данные для разработки/импорта [INTERNAL]
 │   └── sample/
-│       └── dw_sample_products.csv    # Пример входных данных для разработки и тестов [INTERNAL]
-
-├── db/                               # Схема БД и миграции [INTERNAL]
-│   ├── init.sql                      # Инициализация схемы БД “с нуля” [INTERNAL]
-│   ├── migrate.ps1                   # PowerShell-обёртка вокруг миграций [INTERNAL]
-│   ├── migrate.sh                    # Bash-обёртка вокруг миграций [INTERNAL]
-│   └── migrations/                   # SQL-миграции для эволюции схемы [INTERNAL]
+│       └── dw_sample_products.csv              # Пример входных данных для dev/CI [PUBLIC]
+│   # Примечание: каталоги data/inbox и data/archive используются в практике импорта,
+│   # но могут быть локальными (не обязаны быть закоммичены).
+│
+├── db/                                         # База данных и миграции [PUBLIC/INTERNAL]
+│   ├── init.sql                                # Инициализация схемы “с нуля” [INTERNAL]
+│   ├── migrate.sh                              # Раннер SQL-миграций (используется migrator в compose) [PUBLIC]
+│   ├── migrate.ps1                             # PowerShell-обёртка (Windows) [INTERNAL]
+│   └── migrations/                             # SQL-миграции (эволюция схемы) [INTERNAL]
 │       ├── 0000_schema_migrations.sql
 │       ├── 0001_prices-and-search.sql
 │       ├── 0002_price-history-guardrails.sql
@@ -35,112 +42,120 @@ wine-assistant/
 │       ├── 0007_schema-migrations-view.sql
 │       ├── 0008_schema-migrations-view.sql
 │       ├── 0009_schema-migrations-view-fix.sql
-│       ├── 0010_price-list-quarantine.sql           # Карантин “грязных” строк прайса [INTERNAL]
-│       ├── 0011_product_prices_partitioning.sql     # Партиционирование product_prices [INTERNAL]
-│       ├── 2025-10-14-*.sql                         # Зафиксированные миграции старого формата [INTERNAL]
-│       └── ...                                      # Новые миграции по мере развития схемы
-
-├── docs/                             # Проектная документация [PUBLIC API]
-│   ├── dev/                          # История README и тех. заметки по разработке [INTERNAL]
-│   │   ├── cheatsheet-from-clean-clone-to-green-tests.md
-│   │   ├── dev-setup-windows.md
-│   │   ├── issue-83-84-notes.md
-│   │   ├── issue-85-partitioning-notes.md
-│   │   ├── issue-91-summary.md
-│   │   ├── README-before*.md         # Снапшоты README во времени
-│   │   └── ...                       # Прочие рабочие заметки
-│   ├── dev-checklist.ps1             # Скрипт/чеклист для ежедневной dev-рутины [INTERNAL]
-│   ├── manual-smoke-check.md         # Пошаговая инструкция для ручного smoke-теста API [INTERNAL]
-│   ├── pr-93-summary.md              # Конспект по PR #93 (для истории) [INTERNAL]
-│   ├── requirements.md               # Функциональные/тех. требования к системе [PUBLIC API]
-│   ├── roadmap_sprint7+.md           # Ранняя дорожная карта [INTERNAL][EXPERIMENTAL]
-│   ├── roadmap_sprint7+_v2.md        # Обновлённая карта [INTERNAL][EXPERIMENTAL]
-│   └── ROADMAP_v3_RU.md              # Актуальная дорожная карта (основной источник) [PUBLIC API]
-
-├── etl/                              # Локальные ETL-утилиты для прайса [INTERNAL]
-│   ├── mapping_template.json         # Шаблон маппинга колонок поставщика → внутренний формат [PUBLIC API]
-│   ├── run_daily.py                  # Скрипт ежедневного прогона ETL (entrypoint под планировщик) [INTERNAL]
-│   ├── utils.py                      # Общие помощники ETL (чтение файлов, SHA и т.п.) [INTERNAL]
-│   └── image_extractor.py            # Извлечение картинок из Excel и сохранение в static/images [INTERNAL]
-
-├── jobs/                             # Фоновые джобы для DWH/обслуживания [INTERNAL][EXPERIMENTAL]
-│   ├── ingest_dw_price.py            # Загрузка прайса в DWH/целевую БД [INTERNAL][EXPERIMENTAL]
-│   └── cleanup_old_partitions.py     # Очистка устаревших партиций цен [INTERNAL][EXPERIMENTAL]
-
-├── scripts/                          # Вспомогательные скрипты для разработчиков/ops [INTERNAL]
-│   ├── data_quality.py               # Проверки качества данных (качественные гейты) [INTERNAL]
-│   ├── date_extraction.py            # Извлечение дат из текстов/имен файлов [INTERNAL]
-│   ├── idempotency.py                # Помощники по идемпотентности операций [INTERNAL]
-│   ├── load_csv.py                   # CLI для загрузки Excel/CSV, включая авто-импорт фото [INTERNAL]
-│   ├── load_utils.py                 # Общие утилиты для сценариев загрузки [INTERNAL]
-│   ├── migrate.ps1                   # Удобный запуск миграций под Windows [INTERNAL]
-│   ├── run_integration_tests.ps1     # Скрипт запуска интеграционных тестов [INTERNAL]
-│   ├── setup_scheduler.ps1           # Настройка планировщика задач (Windows) [INTERNAL]
-│   └── manual_smoke_check.ps1        # Автоматический smoke-check API (PowerShell, health/search/SKU/export) [INTERNAL]
-
-├── tests/                            # Автотесты (API, ETL, утилиты) [INTERNAL]
-│   ├── README.md                     # Пояснения к структуре и уровням тестирования [INTERNAL]
-│   ├── __init__.py
-│   ├── conftest.py                   # Общие фикстуры (приложение, БД, данные) [INTERNAL]
-│   ├── cors-test.html                # Ручная проверка CORS из браузера [INTERNAL]
-│   ├── fixtures/                     # SQL-фикстуры для тестовых БД [INTERNAL]
+│       ├── 0010_price-list-quarantine.sql
+│       ├── 0011_product_prices_partitioning.sql
+│       ├── 0011_products_extra_fields.sql
+│       ├── 0012_wineries.sql
+│       ├── 2025-10-14-diagnostics.sql
+│       ├── 2025-10-14-price-check.sql
+│       ├── 2025-10-14-price-history-guardrails.sql
+│       └── 2025-10-14-prices-and-search.sql
+│
+├── etl/                                        # ETL-утилиты прайса [INTERNAL]
+│   ├── mapping_template.json                   # Маппинг колонок поставщика → внутренние поля [PUBLIC]
+│   ├── run_daily.py                            # Ежедневный прогон ETL (entrypoint) [INTERNAL]
+│   └── utils.py                                # Общие ETL-помощники [INTERNAL]
+│
+├── jobs/                                       # Фоновые джобы обслуживания/данных [INTERNAL]
+│   ├── ingest_dw_price.py                      # Загрузка прайса в DWH/целевую БД [INTERNAL]
+│   └── cleanup_old_partitions.py               # Очистка старых партиций цен [INTERNAL]
+│
+├── scripts/                                    # CLI и операционные скрипты [INTERNAL]
+│   ├── load_csv.py                             # Импорт Excel/CSV (основной CLI) [INTERNAL]
+│   ├── load_utils.py                           # Утилиты импорта (DB, upsert, нормализация) [INTERNAL]
+│   ├── data_quality.py                         # Гейты качества/карантин [INTERNAL]
+│   ├── idempotency.py                          # Идемпотентность импорта [INTERNAL]
+│   ├── date_extraction.py                      # Извлечение дат/ASOF [INTERNAL]
+│   ├── sync_inventory_history.py               # Синхронизация истории остатков [INTERNAL]
+│   ├── load_wineries.py                        # Загрузка справочника wineries [INTERNAL]
+│   ├── load_wineries_enrichment.py             # Обогащение wineries [INTERNAL]
+│   ├── normalize_wineries_suppliers.py         # Нормализация wineries/suppliers [INTERNAL]
+│   ├── check_wineries_vs_products.py           # Сверки wineries vs products [INTERNAL]
+│   ├── extract_wineries_from_pdf.py            # Извлечение wineries из PDF [INTERNAL]
+│   ├── enrich_producers.py                     # Обогащение данных по производителям [INTERNAL]
+│   ├── migrate.ps1                             # Удобный запуск миграций (Windows) [INTERNAL]
+│   ├── quick_smoke_check.ps1                   # Быстрый smoke-check (Windows) [INTERNAL]
+│   ├── manual_smoke_check.ps1                  # Расширенный smoke-check (Windows) [INTERNAL]
+│   ├── run_integration_tests.ps1               # Запуск интеграционных тестов (Windows) [INTERNAL]
+│   └── setup_scheduler.ps1                     # Планировщик задач (Windows) [INTERNAL]
+│
+├── docs/                                       # Документация [PUBLIC]
+│   ├── requirements.md                         # Требования [PUBLIC]
+│   ├── manual-smoke-check.md                   # Канонический manual smoke-check [PUBLIC]
+│   ├── ROADMAP_v3_RU.md                        # Актуальная дорожная карта [PUBLIC]
+│   ├── README_UPDATE_SUMMARY.md                # Сводка изменений README/доков [PUBLIC]
+│   ├── pr-93-summary.md                        # Конспект по PR #93 [INTERNAL]
+│   ├── roadmap_sprint7+.md                     # Ранние roadmap-версии [INTERNAL]
+│   ├── roadmap_sprint7+_v2.md                  # Ранние roadmap-версии [INTERNAL]
+│   ├── BEFORE_AFTER_COMPARISON.md              # Сравнения/история изменений [INTERNAL]
+│   └── dev/                                    # Снапшоты и заметки разработки [INTERNAL]
+│       ├── dev-setup-windows.md
+│       ├── cheatsheet-from-clean-clone-to-green-tests.md
+│       ├── export-web-ui.md
+│       ├── issue-83-84-notes.md
+│       ├── issue-85-partitioning-notes.md
+│       ├── issue-91-summary.md
+│       ├── README-before*.md
+│       ├── README.auto_images*.md
+│       ├── README.*dd*.md
+│       ├── PR_body_*.md
+│       └── logging-events*.md
+│
+├── observability/                              # Loki/Promtail/Grafana (опционально) [OPTIONAL]
+│   ├── README.md
+│   ├── loki-config.yml
+│   ├── promtail-config.yml
+│   └── grafana/
+│       ├── dashboards/
+│       │   └── wine-assistant-api.json
+│       └── provisioning/
+│           ├── datasources/datasources.yml
+│           └── dashboards/dashboards.yml
+│
+├── tests/                                      # Автотесты [INTERNAL]
+│   ├── README.md
+│   ├── conftest.py
+│   ├── cors-test.html
+│   ├── fixtures/
 │   │   ├── schema.sql
 │   │   └── schema_prices.sql
-│   ├── e2e/                          # E2E-слой (заготовка пакета) [INTERNAL][EXPERIMENTAL]
-│   │   └── __init__.py
-│   ├── integration/                  # Интеграционные тесты (API + БД + ETL) [INTERNAL]
-│   │   ├── __init__.py
-│   │   ├── api_test_utils.py         # Общие утилиты для интеграционных API-тестов [INTERNAL]
-│   │   ├── conftest.py               # Специфичные фикстуры для интеграции [INTERNAL]
-│   │   ├── test_api_products_search_happy.py
-│   │   ├── test_api_export_search.py                 # Экспорт списка товаров [INTERNAL]
-│   │   ├── test_api_export_sku_and_price_history.py  # Экспорт карточек SKU и истории цен [INTERNAL]
-│   │   └── test_price_import_etl.py                  # E2E: импорт прайса и проверка истории цен [INTERNAL]
-│   ├── unit/                         # Юнит-тесты бизнес-логики и утилит [INTERNAL]
-│   │   ├── __init__.py
-│   │   ├── test_data_quality.py
-│   │   ├── test_date_extraction.py
-│   │   ├── test_health.py
-│   │   ├── test_idempotency.py
-│   │   ├── test_load_csv.py
-│   │   ├── test_load_utils.py
-│   │   ├── test_schemas.py
-│   │   └── test_validation.py
-│   ├── test_api_health.py
-│   ├── test_api_limits_and_security.py
-│   ├── test_api_products_happy.py
-│   ├── test_api_products_validation.py
-│   └── test_api_search_validation.py
-
-├── .github/                          # CI/CD-конфигурация GitHub Actions [INTERNAL]
-│   ├── changelog-config.json         # Настройки генерации changelog [INTERNAL]
-│   ├── release-drafter.yml           # Общий конфиг release-drafter [INTERNAL]
-│   └── workflows/                    # Workflows GitHub Actions [INTERNAL]
+│   ├── unit/
+│   ├── integration/
+│   └── e2e/                                    # Заготовка пакета [OPTIONAL]
+│
+├── .github/                                    # GitHub Actions / релизы [INTERNAL]
+│   ├── changelog-config.json
+│   ├── release-drafter.yml
+│   └── workflows/
 │       ├── changelog-on-release.yml
 │       ├── ci.yml
 │       ├── release-drafter.yml
 │       ├── secrets.yml
 │       └── semgrep.yml
-
+│
 ├── .hooks/
-│   └── block_keys.py                 # Локальный pre-commit hook: блокировка ключей/секретов [INTERNAL]
-
-├── .dockerignore                     # Исключения для docker build context [INTERNAL]
-├── .coveragerc                       # Конфигурация coverage.py [INTERNAL]
-├── .env.example                      # Пример переменных окружения (.env) [PUBLIC API]
-├── .gitattributes                    # Атрибуты Git (текст/бинарные и т.п.) [INTERNAL]
-├── .gitignore                        # Игнорируемые файлы/директории Git [INTERNAL]
-├── .gitleaks.toml                    # Конфиг gitleaks (поиск секретов) [INTERNAL]
-├── .pre-commit-config.yaml           # Настройка pre-commit-хуков [INTERNAL]
-
-├── CHANGELOG.md                      # История изменений проекта [PUBLIC API]
-├── Dockerfile                        # Официальный образ приложения [PUBLIC API]
-├── docker-compose.yml                # Docker-компоуз для локального стенда [PUBLIC API]
-├── Makefile                          # Удобные make-цели для разработки и CI [INTERNAL]
-├── PROTECTION_CHECK.txt              # Служебный маркер/проверка защитных механизмов [INTERNAL]
-├── project-structure.txt             # Описание структуры проекта (этот файл) [PUBLIC API]
-├── project-structure-auto.txt        # Автоматический снимок файловой структуры (service) [INTERNAL]
-├── pyproject.toml                    # Основной конфиг проекта и зависимостей [PUBLIC API]
-├── pytest.ini                        # Конфигурация pytest (маркеры/опции) [INTERNAL]
-├── README.md                         # Главный README: обзор и быстрый старт [PUBLIC API]
-└── requirements.txt                  # Файл зависимостей (при необходимости вне pyproject) [INTERNAL]
+│   └── block_keys.py                           # Локальная защита от утечек секретов [INTERNAL]
+│
+├── .coveragerc                                 # Coverage config [INTERNAL]
+├── .dockerignore                               # Docker build context ignores [INTERNAL]
+├── .env.example                                # Пример переменных окружения (без секретов) [PUBLIC]
+├── .gitattributes                              # Git attributes [INTERNAL]
+├── .gitignore                                  # Git ignore rules [INTERNAL]
+├── .gitleaks.toml                              # Gitleaks config [INTERNAL]
+├── .pre-commit-config.yaml                     # Pre-commit hooks [INTERNAL]
+│
+├── Dockerfile                                  # Образ API [PUBLIC]
+├── docker-compose.yml                          # Локальный стенд (db + migrator + api + adminer) [PUBLIC]
+├── docker-compose.observability.yml            # Стенд observability (Grafana/Loki/Promtail) [PUBLIC][OPTIONAL]
+├── Makefile                                    # Команды разработки/CI [PUBLIC]
+├── pyproject.toml                              # Конфиг проекта (инструменты/настройки) [PUBLIC]
+├── pytest.ini                                  # Настройки pytest [INTERNAL]
+├── requirements.txt                            # Python зависимости [PUBLIC]
+│
+├── README.md                                   # Главный README [PUBLIC]
+├── CHANGELOG.md                                # История изменений [PUBLIC]
+├── INDEX.md                                    # Навигация по проекту/докам [PUBLIC]
+├── QUICK_REFERENCE.md                          # Шпаргалка команд/сценариев [PUBLIC]
+├── PROTECTION_CHECK.txt                        # Служебный маркер/проверка [INTERNAL]
+├── project-structure.txt                       # Этот файл [PUBLIC]
+└── project-structure-auto.txt                  # Автоснимок структуры (генерируется) [INTERNAL]
