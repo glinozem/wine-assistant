@@ -15,6 +15,7 @@ from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.errors import RateLimitExceeded
 from flask_limiter.util import get_remote_address
+from werkzeug.exceptions import HTTPException
 
 from api.export import ExportService
 from api.logging_config import setup_logging
@@ -377,6 +378,23 @@ def handle_ratelimit(e):
         "error": "rate_limited",
         "message": "Too many requests. Please retry later."
     }), 429
+
+@app.errorhandler(HTTPException)
+def handle_http_exception(e: HTTPException):
+    """
+    Не превращаем HTTP-ошибки (404/400/405/...) в 500.
+    Для /api/* возвращаем JSON, для остальных путей — стандартный ответ Flask (404 страница/текст).
+    """
+    if request.path.startswith("/api/"):
+        return jsonify(
+            {
+                "error": e.name.lower().replace(" ", "_"),
+                "message": e.description,
+                "request_id": getattr(g, "request_id", None),
+            }
+        ), e.code
+
+    return e
 
 @app.errorhandler(Exception)
 def log_exception(exc):
