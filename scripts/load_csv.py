@@ -45,7 +45,6 @@ from scripts.idempotency import (
 )
 from scripts.load_utils import (
     _get_discount_from_cell,
-    _to_float,
     enrich_site_from_photo_column,
     get_conn,
     read_any,
@@ -123,9 +122,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--prefer-discount-cell",
         action="store_true",
         help=(
-            "Если указан флаг — приоритет за скидкой из фиксированной ячейки "
-            "(--discount-cell) даже при наличии колонки 'Цена со скидкой'. "
-            "Флаг имеет приоритет над переменной окружения PREFER_S5."
+            "Prefer discount pct from cell (e.g. S5) over header pct when setting discount_pct (used only for optional computed discount). Does NOT override per-row discounted price column."
         ),
     )
     return p
@@ -265,8 +262,10 @@ def main(argv: Optional[list] = None) -> None:
 
     if prefer_s5:
         discount = disc_cell if disc_cell is not None else disc_hdr
+        discount_source = "cell" if disc_cell is not None else "header"
     else:
         discount = disc_hdr if disc_hdr is not None else disc_cell
+        discount_source = "header" if disc_hdr is not None else "cell"
 
     # сохраняем все варианты в attrs, чтобы upsert_records()
     # мог опираться на них при расчёте цен
@@ -278,7 +277,8 @@ def main(argv: Optional[list] = None) -> None:
     print(
         "[discount] "
         f"header={disc_hdr}  cell({args.discount_cell})={disc_cell}  "
-        f"prefer_s5_cli={prefer_s5_cli} prefer_s5_env={prefer_s5_env}  -> used={discount}"
+        f"prefer_s5_cli={prefer_s5_cli} prefer_s5_env={prefer_s5_env}  "
+        f"-> used={discount} source={discount_source}"
     )
 
     # Обогатим df: протащим producer_site из строк-шапок в товарные строки.
@@ -385,6 +385,9 @@ def main(argv: Optional[list] = None) -> None:
     # Data quality gates (Issue #83)
     # ==========================
     good_df, bad_df = apply_quality_gates(df)
+
+    good_df.attrs.update(df.attrs)
+    bad_df.attrs.update(df.attrs)
 
     if not bad_df.empty:
         total_bad = len(bad_df)

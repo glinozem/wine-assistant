@@ -3,18 +3,22 @@
 
 import io
 import os
+import re
 import time
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from functools import wraps
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urljoin
 
 from flasgger import Swagger
-from flask import Flask, g, jsonify, render_template, request, send_file
+from flask import Flask, abort, g, jsonify, redirect, render_template, request, send_file, url_for
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.errors import RateLimitExceeded
 from flask_limiter.util import get_remote_address
+from werkzeug.exceptions import HTTPException
 
 from api.export import ExportService
 from api.logging_config import setup_logging
@@ -28,6 +32,9 @@ from api.schemas import (
     SkuResponse,
 )
 from api.validation import validate_query_params
+
+PRICE_EFFECTIVE_SQL = "COALESCE(p.price_final_rub, p.price_list_rub)"
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # DB setup (psycopg3 → psycopg2 fallback)
@@ -110,6 +117,84 @@ app = Flask(
 APP_VERSION = os.getenv("APP_VERSION", "0.4.0")
 STARTED_AT = datetime.now(timezone.utc)
 API_KEY = os.getenv("API_KEY")  # if set → protect certain endpoints
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Image resolver (local static/images) -> stable URL
+# ────────────────────────────────────────────────────────────────────────────────
+
+_IMAGE_EXT_PRIORITY = (".jpeg", ".jpg", ".png", ".webp")
+_IMAGE_INDEX: dict[str, str] | None = None
+
+
+def _get_image_dir() -> Path:
+    env_dir = os.getenv("WINE_IMAGE_DIR")
+    if env_dir:
+        return Path(env_dir)
+    # app.static_folder у нас = ../static, значит картинки = ../static/images
+    return Path(app.static_folder) / "images"
+
+
+def _build_image_index() -> dict[str, str]:
+    image_dir = _get_image_dir()
+    idx: dict[str, str] = {}
+    if not image_dir.exists():
+        return idx
+
+    priority = {ext: i for i, ext in enumerate(_IMAGE_EXT_PRIORITY)}
+
+    for p in image_dir.iterdir():
+        if not p.is_file():
+            continue
+
+        stem = p.stem
+        if not re.fullmatch(r"D\d+", stem):
+            continue
+
+        ext = p.suffix.lower()
+        if ext not in priority:
+            continue
+
+        prev = idx.get(stem)
+        if prev is None:
+            idx[stem] = p.name
+            continue
+
+        prev_ext = Path(prev).suffix.lower()
+        if priority[ext] < priority.get(prev_ext, 999):
+            idx[stem] = p.name
+
+    return idx
+
+
+def _get_best_image_filename(code: str) -> str | None:
+    global _IMAGE_INDEX
+    if _IMAGE_INDEX is None:
+        _IMAGE_INDEX = _build_image_index()
+    return _IMAGE_INDEX.get(code)
+
+
+def _public_url(path: str) -> str:
+    base = os.getenv("API_BASE_URL") or os.getenv("PUBLIC_BASE_URL")
+    if not base:
+        return path  # относительный URL, безопасно
+    return urljoin(base.rstrip("/") + "/", path.lstrip("/"))
+
+
+def _resolve_image_url(code: str, existing_url: Any = None) -> str | None:
+    """
+    Возвращает стабильный URL на /sku/<code>/image если локальный файл существует.
+    Если локального файла нет, но existing_url внешний (http/https) — оставляем его.
+    Иначе возвращаем None.
+    """
+    filename = _get_best_image_filename(code)
+    if filename:
+        return _public_url(url_for("sku_image", code=code))
+
+    if isinstance(existing_url, str) and existing_url.startswith(("http://", "https://")):
+        return existing_url
+
+    return None
+
 
 @app.route("/ui")
 def ui_index():
@@ -378,6 +463,23 @@ def handle_ratelimit(e):
         "message": "Too many requests. Please retry later."
     }), 429
 
+@app.errorhandler(HTTPException)
+def handle_http_exception(e: HTTPException):
+    """
+    Не превращаем HTTP-ошибки (404/400/405/...) в 500.
+    Для /api/* возвращаем JSON, для остальных путей — стандартный ответ Flask (404 страница/текст).
+    """
+    if request.path.startswith("/api/"):
+        return jsonify(
+            {
+                "error": e.name.lower().replace(" ", "_"),
+                "message": e.description,
+                "request_id": getattr(g, "request_id", None),
+            }
+        ), e.code
+
+    return e
+
 @app.errorhandler(Exception)
 def log_exception(exc):
     app.logger.error(
@@ -388,12 +490,18 @@ def log_exception(exc):
             "request_id": getattr(g, "request_id", "unknown"),
             "http_method": request.method,
             "http_path": request.path,
-            "error_type": type(exc).__name__,
-            "error_message": repr(exc),
+            "sku_code": getattr(g, "sku_code", None),
+            "exception_type": type(exc).__name__,
+            "exception_message": str(exc),
         },
         exc_info=True,
     )
-    return jsonify({"error": "internal_error", "request_id": getattr(g, "request_id", None)}), 500
+    return jsonify(
+        {
+            "error": "internal_error",
+            "request_id": getattr(g, "request_id", None)
+        }
+    ), 500
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Security
@@ -487,6 +595,9 @@ def _normalize_product_row(row: dict) -> dict:
     ):
         if key in row:
             row[key] = _convert_decimal_to_number(row[key])
+    code = row.get("code")
+    if isinstance(code, str) and code:
+        row["image_url"] = _resolve_image_url(code, row.get("image_url"))
     return row
 
 
@@ -800,7 +911,7 @@ def simple_search():
             qparams.extend([like, like, like])
 
         if params.max_price is not None:
-            clauses.append("p.price_final_rub <= %s")
+            clauses.append(f"{PRICE_EFFECTIVE_SQL} <= %s")
             qparams.append(params.max_price)
 
         if params.color:
@@ -815,7 +926,7 @@ def simple_search():
 
         sql = f"""
             SELECT p.code, p.title_ru as name, p.producer, p.region, p.color,
-                   p.price_list_rub, p.price_final_rub
+                   p.price_list_rub, COALESCE(p.price_final_rub, p.price_list_rub) AS price_final_rub
             FROM public.products p
             {where}
             ORDER BY p.title_ru
@@ -916,6 +1027,9 @@ def catalog_search():
     if error:
         return error
 
+    is_api = request.path.startswith("/api/")
+    effective_offset = params.offset if is_api else 0
+
     conn, err = db_connect()
     if err or not conn:
         app.logger.error(
@@ -929,7 +1043,7 @@ def catalog_search():
                 "error_message": err,
                 "query": params.q,
                 "limit": params.limit,
-                "offset": params.offset,
+                "offset": effective_offset,
                 "in_stock": params.in_stock,
             },
         )
@@ -938,7 +1052,7 @@ def catalog_search():
             {
                 "items": [],
                 "total": 0,
-                "offset": params.offset,
+                "offset": effective_offset,
                 "limit": params.limit,
                 "query": params.q,
             }
@@ -975,11 +1089,11 @@ def catalog_search():
 
         # Диапазон цен
         if params.min_price is not None:
-            clauses.append("p.price_final_rub >= %s")
+            clauses.append(f"{PRICE_EFFECTIVE_SQL} >= %s")
             qparams.append(params.min_price)
 
         if params.max_price is not None:
-            clauses.append("p.price_final_rub <= %s")
+            clauses.append(f"{PRICE_EFFECTIVE_SQL} <= %s")
             qparams.append(params.max_price)
 
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
@@ -988,9 +1102,9 @@ def catalog_search():
         order_by = "COALESCE(i.stock_free, 0) DESC, p.title_ru"
 
         if params.sort == CatalogSort.PRICE_ASC:
-            order_by = "p.price_final_rub ASC NULLS LAST"
+            order_by = f"{PRICE_EFFECTIVE_SQL} ASC NULLS LAST, p.title_ru ASC, p.code ASC"
         elif params.sort == CatalogSort.PRICE_DESC:
-            order_by = "p.price_final_rub DESC NULLS LAST"
+            order_by = f"{PRICE_EFFECTIVE_SQL} DESC NULLS LAST, p.title_ru ASC, p.code ASC"
         elif params.sort == CatalogSort.NAME_ASC:
             order_by = "p.title_ru ASC"
         elif params.sort == CatalogSort.NAME_DESC:
@@ -1008,9 +1122,9 @@ def catalog_search():
         # Для нового API поддерживаем OFFSET в SQL,
         # а для legacy /catalog/search сохраняем старое поведение
         # (без OFFSET), чтобы не ломать тесты и клиентов.
-        if request.path.startswith("/api/"):
+        if is_api:
             limit_clause += "\n            OFFSET %s"
-            qparams.append(params.offset)
+            qparams.append(effective_offset)
 
         sql = f"""
             SELECT
@@ -1028,8 +1142,8 @@ def catalog_search():
                 p.supplier,
                 COALESCE(p.producer_site, w.producer_site) AS producer_site,
                 p.image_url,
-                p.price_list_rub,
-                p.price_final_rub,
+                p.price_list_rub AS price_list_rub,
+                COALESCE(p.price_final_rub, p.price_list_rub) AS price_final_rub,
                 i.stock_total,
                 i.stock_free,
                 w.supplier_ru     AS winery_name_ru,
@@ -1050,7 +1164,7 @@ def catalog_search():
             {
                 "items": items,
                 "total": len(items),
-                "offset": params.offset,
+                "offset": effective_offset,
                 "limit": params.limit,
                 "query": params.q,
             }
@@ -1069,7 +1183,7 @@ def catalog_search():
                 "error_message": str(e),
                 "query": params.q,
                 "limit": params.limit,
-                "offset": params.offset,
+                "offset": effective_offset,
                 "in_stock": params.in_stock,
             },
             exc_info=True,
@@ -1081,7 +1195,7 @@ def catalog_search():
                     "message": "Failed to execute catalog search",
                     "items": [],
                     "total": 0,
-                    "offset": params.offset,
+                    "offset": effective_offset,
                     "limit": params.limit,
                     "query": params.q,
                 }
@@ -1226,11 +1340,11 @@ def export_search():
             clauses.append("i.stock_free > 0")
 
         if params.min_price is not None:
-            clauses.append("p.price_final_rub >= %s")
+            clauses.append(f"{PRICE_EFFECTIVE_SQL} >= %s")
             qparams.append(params.min_price)
 
         if params.max_price is not None:
-            clauses.append("p.price_final_rub <= %s")
+            clauses.append(f"{PRICE_EFFECTIVE_SQL} <= %s")
             qparams.append(params.max_price)
 
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
@@ -1254,8 +1368,8 @@ def export_search():
                 p.supplier,
                 p.producer_site,
                 p.image_url,
-                p.price_list_rub,
-                p.price_final_rub,
+                p.price_list_rub AS price_list_rub,
+                COALESCE(p.price_final_rub, p.price_list_rub) as price_final_rub,
                 COALESCE(i.stock_total, 0) AS stock_total,
                 COALESCE(i.stock_free, 0)  AS stock_free
             FROM public.products p
@@ -1349,8 +1463,8 @@ def _fetch_sku_row(conn, code: str) -> dict | None:
             p.supplier,
             p.producer_site,
             p.image_url,
-            p.price_list_rub,
-            p.price_final_rub,
+            p.price_list_rub AS price_list_rub,
+            COALESCE(p.price_final_rub, p.price_list_rub) as price_final_rub,
             COALESCE(i.stock_total, 0) AS stock_total,
             COALESCE(i.stock_free, 0)  AS stock_free,
             -- данные из справочника виноделен
@@ -1394,6 +1508,19 @@ def _fetch_sku_row(conn, code: str) -> dict | None:
     return row
 
 
+@app.route("/sku/<code>/image", methods=["GET"])
+def sku_image(code: str):
+    # Не даём использовать endpoint как “файловый прокси” для произвольных имён
+    if not re.fullmatch(r"D\d+", code or ""):
+        abort(404)
+
+    filename = _get_best_image_filename(code)
+    if not filename:
+        abort(404)
+
+    return redirect(url_for("static", filename=f"images/{filename}"), code=302)
+
+
 @app.route("/sku/<code>", methods=["GET"])
 @app.route("/api/v1/sku/<code>", methods=["GET"])
 @require_api_key
@@ -1417,6 +1544,7 @@ def get_sku(code: str):
       404:
         description: SKU not found
     """
+    g.sku_code = code
     conn, err = db_connect()
     if err or not conn:
         app.logger.error(
@@ -1488,6 +1616,7 @@ def export_sku(code: str):
       404:
         description: SKU not found
     """
+    g.sku_code = code
     app.logger.info(
         "export_sku called",
         extra={
@@ -1619,7 +1748,7 @@ def price_history(code: str):
       500:
         description: Internal error during price history lookup
     """
-
+    g.sku_code = code
     params, error = validate_query_params(PriceHistoryParams)
     if error:
         return error
@@ -1745,6 +1874,8 @@ def export_price_history(code: str):
       400:
         description: Unsupported format or validation error
     """
+    g.sku_code = code  # чтобы sku_code попадал в middleware-логи
+
     fmt = request.args.get("format", "xlsx").lower()
     if fmt not in ("xlsx", "json"):
         return (
@@ -1768,7 +1899,9 @@ def export_price_history(code: str):
             extra={
                 "event": "export_price_history_db_unavailable",
                 "service": "wine-assistant-api",
-                "request_id": getattr(g, "request_id", "unknown"),
+                "request_id": getattr(
+                    g, "request_id", getattr(g, "_request_id", "unknown")
+                ),
                 "http_method": request.method,
                 "http_path": request.path,
                 "sku_code": code,
@@ -1823,29 +1956,57 @@ def export_price_history(code: str):
             "offset": params.offset,
         }
 
+        # ✅ метрика успешного экспорта для Grafana
+        app.logger.info(
+            "Export price history succeeded",
+            extra={
+                "event": "export_price_history_succeeded",
+                "service": "wine-assistant-api",
+                "request_id": getattr(
+                    g, "request_id", getattr(g, "_request_id", "unknown")
+                ),
+                "http_method": request.method,
+                "http_path": request.path,
+                "sku_code": code,
+                "dt_from": params.dt_from,
+                "dt_to": params.dt_to,
+                "items_returned": history["total"],
+                "format": fmt,
+            },
+        )
+
         if fmt == "json":
             # Нормализуем числа в JSON
             for item in history["items"]:
-                item["price_list_rub"] = _convert_decimal_to_number(item["price_list_rub"])
-                item["price_final_rub"] = _convert_decimal_to_number(item["price_final_rub"])
+                item["price_list_rub"] = _convert_decimal_to_number(
+                    item["price_list_rub"]
+                )
+                item["price_final_rub"] = _convert_decimal_to_number(
+                    item["price_final_rub"]
+                )
             return jsonify(history)
 
-        # fmt == "xlsx"
-        content = export_service.export_price_history_to_excel(history)
+        # Excel-экспорт через ExportService
+        xlsx_bytes = export_service.export_price_history_to_excel(history)
+
         return send_file(
-            io.BytesIO(content),
-            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            io.BytesIO(xlsx_bytes),
+            mimetype=(
+                "application/vnd.openxmlformats-"
+                "officedocument.spreadsheetml.sheet"
+            ),
             as_attachment=True,
             download_name=f"price_history_{code}.xlsx",
         )
-
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         app.logger.error(
             "Export price history failed",
             extra={
                 "event": "export_price_history_failed",
                 "service": "wine-assistant-api",
-                "request_id": getattr(g, "request_id", "unknown"),
+                "request_id": getattr(
+                    g, "request_id", getattr(g, "_request_id", "unknown")
+                ),
                 "http_method": request.method,
                 "http_path": request.path,
                 "sku_code": code,
@@ -1858,6 +2019,7 @@ def export_price_history(code: str):
         return jsonify({"error": "export_failed"}), 500
     finally:
         _close_conn_safely(conn)
+
 
 @app.route("/export/inventory-history/<code>", methods=["GET"])
 @app.route("/api/v1/export/inventory-history/<code>", methods=["GET"])
@@ -1907,6 +2069,7 @@ def export_inventory_history(code: str):
       400:
         description: Unsupported format or validation error
     """
+    g.sku_code = code
     fmt = request.args.get("format", "xlsx").lower()
     if fmt not in ("xlsx", "json"):
         return (
@@ -1995,6 +2158,23 @@ def export_inventory_history(code: str):
 
         # fmt == "xlsx"
         content = export_service.export_inventory_history_to_excel(history)
+
+        app.logger.info(
+            "Export inventory history succeeded",
+            extra={
+                "event": "export_inventory_history_succeeded",
+                "service": "wine-assistant-api",
+                "request_id": getattr(g, "request_id", getattr(g, "_request_id", "unknown")),
+                "http_method": request.method,
+                "http_path": request.path,
+                "sku_code": code,
+                "dt_from": params.dt_from,
+                "dt_to": params.dt_to,
+                "items_returned": len(history["items"]),
+                "format": fmt,
+            },
+        )
+
         return send_file(
             io.BytesIO(content),
             mimetype=(
@@ -2010,7 +2190,9 @@ def export_inventory_history(code: str):
             extra={
                 "event": "export_inventory_history_failed",
                 "service": "wine-assistant-api",
-                "request_id": getattr(g, "request_id", "unknown"),
+                "request_id": getattr(
+                    g, "request_id", getattr(g, "_request_id", "unknown")
+                ),
                 "http_method": request.method,
                 "http_path": request.path,
                 "sku_code": code,
@@ -2078,7 +2260,7 @@ def inventory_history(code: str):
       500:
         description: Internal error during inventory history lookup
     """
-
+    g.sku_code = code
     params, error = validate_query_params(InventoryHistoryParams)
     if error:
         return error

@@ -484,15 +484,9 @@ def test_upsert_records_prefers_attr_over_env(monkeypatch):
     # Патчим get_conn внутри scripts.load_utils, чтобы не ходить в реальную БД
     monkeypatch.setattr(load_utils, "get_conn", lambda: dummy_conn)
 
-    df = pd.DataFrame(
-        [
-            {
-                "code": "TEST_ATTR_TRUE",
-                "price_rub": 100.0,
-                "price_discount": 90.0,
-            }
-        ]
-    )
+    # Важно: не задаём price_discount. Если price_discount присутствует,
+    # он имеет приоритет над рассчитанной скидкой даже при prefer_s5=True.
+    df = pd.DataFrame([{"code": "TEST_ATTR_TRUE", "price_rub": 100.0}])
     df.attrs["discount_pct"] = 0.20           # 20% скидка → 80.0
     df.attrs["prefer_discount_cell"] = True   # явно просим использовать S5/discount_calc
 

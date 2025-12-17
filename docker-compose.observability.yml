@@ -1,0 +1,59 @@
+# docker-compose.observability.yml
+# Стек наблюдаемости: Loki + Promtail + Grafana
+#
+# Использование:
+#   docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d
+#
+# Grafana будет доступна на http://localhost:15000 (admin/admin)
+# Datasource Loki и дашборд загружаются автоматически через provisioning
+
+services:
+  loki:
+    image: grafana/loki:2.9.0
+    container_name: wine-assistant-loki
+    command: -config.file=/etc/loki/loki-config.yml
+    volumes:
+      - loki_data:/loki
+      - ./observability/loki-config.yml:/etc/loki/loki-config.yml:ro
+    restart: unless-stopped
+    # Loki доступен только внутри Docker network, не expose наружу
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: wine-assistant-grafana
+    ports:
+      - "15000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: "admin"
+      GF_SECURITY_ADMIN_PASSWORD: "admin"
+      GF_SERVER_ROOT_URL: "http://localhost:15000"
+      # Отключаем анонимный доступ
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      # Разрешаем редактирование provisioned дашбордов
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: "/var/lib/grafana/dashboards/wine-assistant-api.json"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      # Provisioning конфиги
+      - ./observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./observability/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      # Дашборды
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:2.9.0
+    container_name: wine-assistant-promtail
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./observability/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+volumes:
+  loki_data:
+  grafana_data:

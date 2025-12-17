@@ -33,7 +33,7 @@ def app() -> Iterator[Flask]:
     os.environ.setdefault("RATE_LIMIT_ENABLED", "0")  # disable limiter by default in unit tests
 
     # Lazy import to avoid side effects at module import time
-    from api.app import app as flask_app  # noqa: WPS433 (import inside function is intentional)
+    from api.app import app as flask_app
 
     # Make sure testing flags are on
     flask_app.config.update(
@@ -111,7 +111,7 @@ def _pg_connect_or_skip(
     h = host or os.getenv("PGHOST", "127.0.0.1")
     p = int(port or os.getenv("PGPORT", "15432"))  # prefer local mapped port in dev/tests
     u = user or os.getenv("PGUSER", "postgres")
-    pw = password or os.getenv("PGPASSWORD", "dev_local_pw")
+    pw = password or os.getenv("PGPASSWORD", "postgres")
     db = dbname or os.getenv("PGDATABASE", "wine_db")
 
     try:
@@ -125,10 +125,7 @@ def _pg_connect_or_skip(
         )
     except psycopg2.OperationalError as exc:
         # If database isn't up, skip DB-bound tests instead of failing the whole suite.
-        pytest.skip(
-            f"PostgreSQL is not available at {h}:{p} (db='{db}'). "
-            f"Reason: {exc}"
-        )
+        pytest.skip(f"PostgreSQL is not available at {h}:{p} (db='{db}'). Reason: {exc}")
 
 
 @pytest.fixture(scope="function")
@@ -165,6 +162,75 @@ def db_cursor(db_connection):
     finally:
         db_connection.rollback()
         cur.close()
+
+
+# -----------------------------------------------------------------------------
+# Test data cleanup (integration tests)
+# -----------------------------------------------------------------------------
+@pytest.fixture(scope="session", autouse=True)
+def cleanup_integration_test_data():
+    """
+    Automatically cleanup test data after ALL integration tests complete.
+
+    This fixture runs once per test session (after all tests finish).
+    It removes all products with codes starting with 'INTTEST_' prefix.
+
+    Only runs when RUN_DB_TESTS=1 (i.e., when integration tests are enabled).
+    """
+    # Setup: nothing to do before tests
+    yield
+
+    # Teardown: cleanup after all tests
+    if os.getenv("RUN_DB_TESTS") != "1":
+        # Integration tests were skipped, no cleanup needed
+        return
+
+    try:
+        # Connect to database
+        conn = _pg_connect_or_skip(connect_timeout=5)
+        conn.autocommit = False
+
+        cursor = conn.cursor()
+
+        # Count test records before deletion
+        cursor.execute("SELECT COUNT(*) FROM products WHERE code LIKE 'INTTEST_%'")
+        count_before = cursor.fetchone()[0]
+
+        if count_before == 0:
+            print("\n✅ No test data to cleanup (INTTEST_* records)")
+            conn.close()
+            return
+
+        print(f"\n🧹 Cleaning up {count_before} test records (INTTEST_* prefix)...")
+
+        # Delete in correct order (respecting FK constraints)
+        # ВАЖНО: Используем колонку 'code' (не 'sku_code')
+
+        # 1. inventory_history (child table)
+        cursor.execute("DELETE FROM inventory_history WHERE code LIKE 'INTTEST_%'")
+        deleted_inv = cursor.rowcount
+
+        # 2. product_prices (child table)
+        cursor.execute("DELETE FROM product_prices WHERE code LIKE 'INTTEST_%'")
+        deleted_prices = cursor.rowcount
+
+        # 3. products (parent table)
+        cursor.execute("DELETE FROM products WHERE code LIKE 'INTTEST_%'")
+        deleted_products = cursor.rowcount
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        print(f"✅ Test data cleaned up:")
+        print(f"   - products: {deleted_products}")
+        print(f"   - product_prices: {deleted_prices}")
+        print(f"   - inventory_history: {deleted_inv}")
+
+    except Exception as e:
+        print(f"\n⚠️  Warning: Could not cleanup test data: {e}")
+        print("   This is non-fatal. You can manually cleanup with:")
+        print("   python scripts/cleanup_test_data.py --apply")
 
 
 # -----------------------------------------------------------------------------

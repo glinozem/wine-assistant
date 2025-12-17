@@ -233,7 +233,14 @@ class ExportService:
 
         for wine in wines:
             title_ru = (wine.get("title_ru") or "")[:max_title_len]
-            price_final = wine.get("price_final_rub") or 0
+
+            price_list = wine.get("price_list_rub")
+            price_final = wine.get("price_final_rub")
+            if price_final is None:
+                price_final = price_list
+            if price_final is None:
+                price_final = 0
+
             grapes = wine.get("grapes") or ""
             vintage = wine.get("vintage") or ""
 
@@ -457,12 +464,30 @@ class ExportService:
         )
 
         for item in history.get("items", []):
+            stock_total = item.get("stock_total")
+            stock_free = item.get("stock_free")
+            reserved = item.get("reserved")
+
+            # Пытаемся аккуратно пересчитать reserved = stock_total - stock_free
+            try:
+                if stock_total is not None and stock_free is not None:
+                    reserved_calc = float(stock_total) - float(stock_free)
+
+                    # Если результат целый — выводим как int, чтобы в Excel было красиво
+                    if reserved_calc.is_integer():
+                        reserved = int(reserved_calc)
+                    else:
+                        reserved = reserved_calc
+            except Exception:
+                # Если расчёт не удался, оставляем reserved как есть
+                pass
+
             ws.append(
                 [
                     item.get("as_of"),
-                    item.get("stock_total"),
-                    item.get("reserved"),
-                    item.get("stock_free"),
+                    stock_total,
+                    reserved,
+                    stock_free,
                 ]
             )
 
