@@ -117,7 +117,6 @@ data/**/*.xlsx
 pgdata_*.tgz
 *.dump
 *.sql.gz
-*.zip
 *.7z
 *.rar
 *.sqlite
@@ -138,5 +137,3 @@ scripts/*manual_smoke_check*.ps1
 docs/dev/README.snippet*.md
 
 /_bundles/
-wine-assistant_analysis_bundle_*.zip
-/_analysis_bundle_staging/
