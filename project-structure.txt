@@ -1,6 +1,6 @@
 Wine Assistant — project-structure.txt (auto-generated)
 
-Generated: 2025-12-16 12:00:00 (local)
+Generated: 2025-12-17 11:42:53 (local)
 Sources:
   - git ls-files (canonical list of tracked files)
   - tree /F /A (full working directory snapshot, incl. non-tracked artifacts)
@@ -61,16 +61,7 @@ wine-assistant/
 |   \---migrate.sh
 +---docs
 |   +---dev
-|   |   +---cheatsheet-from-clean-clone-to-green-tests.md
-|   |   +---dev-setup-windows.md
-|   |   +---export-web-ui.md
-|   |   +---issue-83-84-notes.md
-|   |   +---issue-85-partitioning-notes.md
-|   |   +---issue-91-summary.md
-|   |   +---logging-eventsdd05122025.md
-|   |   +---manual-smoke-checkdd03122025.md
 |   |   +---PR_body_ru_extended_wineries_sku_20251130dd30112025.md
-|   |   +---producer_site_image_url_readme_ru.md
 |   |   +---README-before06112025.md
 |   |   +---README-before07112025-01.md
 |   |   +---README-before07112025.md
@@ -86,24 +77,39 @@ wine-assistant/
 |   |   +---README-before24112025.md
 |   |   +---README-before28112025.md
 |   |   +---README-before30112025.md
-|   |   +---readme-inventory-and-chartsdd03122025.md
 |   |   +---README.auto_images.ru-28112025.md
 |   |   +---README.auto_images.ru.extended-28112025.md
 |   |   +---README.extradd04122025.md
 |   |   +---README.ru-additiondd28112025.md
 |   |   +---README.wineriesdd30112025.md
+|   |   +---READMEdd04122025.md
+|   |   +---cheatsheet-from-clean-clone-to-green-tests.md
+|   |   +---cleanup-test-data.md
+|   |   +---dev-setup-windows.md
+|   |   +---export-web-ui.md
+|   |   +---gitignore.md
+|   |   +---issue-83-84-notes.md
+|   |   +---issue-85-partitioning-notes.md
+|   |   +---issue-91-summary.md
+|   |   +---logging-eventsdd05122025.md
+|   |   +---manual-smoke-checkdd03122025.md
+|   |   +---pricing-rules.md
+|   |   +---producer_site_image_url_readme_ru.md
+|   |   +---readme-inventory-and-chartsdd03122025.md
 |   |   +---readme_block_new_products_fields_ru.md
 |   |   +---readme_wine_fields_export.md
-|   |   \---READMEdd04122025.md
+|   |   +---release-notes-2025-12-16.md
+|   |   +---web-ui.md
+|   |   \---windows-powershell-http.md
 |   +---BEFORE_AFTER_COMPARISON.md
+|   +---README_UPDATE_SUMMARY.md
+|   +---ROADMAP_v3_RU.md
 |   +---dev-checklist.ps1
 |   +---manual-smoke-check.md
 |   +---pr-93-summary.md
-|   +---README_UPDATE_SUMMARY.md
 |   +---requirements.md
 |   +---roadmap_sprint7+.md
-|   +---roadmap_sprint7+_v2.md
-|   \---ROADMAP_v3_RU.md
+|   \---roadmap_sprint7+_v2.md
 +---etl
 |   +---image_extractor.py
 |   +---mapping_template.json
@@ -121,11 +127,13 @@ wine-assistant/
 |   |       |   \---dashboards.yml
 |   |       \---datasources
 |   |           \---datasources.yml
+|   +---README.md
 |   +---loki-config.yml
-|   +---promtail-config.yml
-|   \---README.md
+|   \---promtail-config.yml
 +---scripts
+|   +---backfill_current_prices.py
 |   +---check_wineries_vs_products.py
+|   +---cleanup_test_data.py
 |   +---data_quality.py
 |   +---date_extraction.py
 |   +---enrich_producers.py
@@ -167,10 +175,10 @@ wine-assistant/
 |   |   +---test_load_utils.py
 |   |   +---test_schemas.py
 |   |   \---test_validation.py
+|   +---README.md
 |   +---__init__.py
 |   +---conftest.py
 |   +---cors-test.html
-|   +---README.md
 |   +---test_api_health.py
 |   +---test_api_limits_and_security.py
 |   +---test_api_products_happy.py
@@ -184,29 +192,28 @@ wine-assistant/
 +---.gitleaks.toml
 +---.pre-commit-config.yaml
 +---CHANGELOG.md
-+---docker-compose.observability.yml
-+---docker-compose.yml
 +---Dockerfile
 +---INDEX.md
 +---Makefile
-+---project-structure-auto.txt
-+---project-structure.txt
 +---PROTECTION_CHECK.txt
-+---pyproject.toml
-+---pytest.ini
 +---QUICK_REFERENCE.md
 +---README.md
++---docker-compose.observability.yml
++---docker-compose.yml
++---project-structure.txt
++---pyproject.toml
++---pytest.ini
 \---requirements.txt
 
 ================================================================================
 2) Working directory overlay (from: tree + Dump-Dir)
 ================================================================================
 2.1 Drift summary
-  - Tracked files total: 160
+  - Tracked files total: 167
   - Tracked but missing on disk [M]: 0
-  - Untracked files present [U]: 16542
-    - Untracked at repo root: 21
-    - Untracked under directories: 16521
+  - Untracked files present [U]: 16544
+    - Untracked at repo root: 22
+    - Untracked under directories: 16522
 
   Top-level breakdown of untracked files by directory (count of files):
     - .venv/: 16094
@@ -214,14 +221,15 @@ wine-assistant/
     - tests/: 26
     - data/: 23
     - htmlcov/: 21
-    - scripts/: 16
+    - scripts/: 15
     - .ruff_cache/: 14
+    - api/: 9
     - .idea/: 8
-    - api/: 8
     - .pytest_cache/: 5
     - backups/: 4
     - etl/: 3
     - smoke_artifacts/: 3
+    - docs/: 1
 
 2.2 Untracked items at repository root [U]
   [U] .coverage
@@ -243,20 +251,20 @@ wine-assistant/
   [U] ls_tests.txt
   [U] must-have-check.txt
   [U] project-files.tracked.txt
+  [U] project-structure-auto.txt
   [U] structure_dump.zip
-  [U] wine-assistant_analysis_bundle_20251213_203417.zip
+  [U] wine-assistant_analysis_bundle_20251217_114253.zip
 
 2.3 Untracked root directories [U]
+  [U] .venv/ (16094 files)
+  [U] static/ (296 files)
+  [U] htmlcov/ (21 files)
+  [U] .ruff_cache/ (14 files)
   [U] .idea/ (8 files)
   [U] .pytest_cache/ (5 files)
-  [U] .ruff_cache/ (14 files)
-  [U] .venv/ (16094 files)
   [U] backups/ (4 files)
-  [U] htmlcov/ (21 files)
-  [U] init.sql/ (0 files)
-  [U] logs/ (0 files)
   [U] smoke_artifacts/ (3 files)
-  [U] static/ (296 files)
+  [U] logs/ (0 files)
 
 2.4 Untracked files inside tracked top-level directories [U]
   api/
@@ -268,30 +276,33 @@ wine-assistant/
     [U] __pycache__/validation.cpython-311.pyc
     [U] __pycache__/wsgi.cpython-311.pyc
     [U] templates/ui.html.backup
+    [U] templates/ui.html.backup1
   data/
     [U] catalog/wineries_enrichment.xlsx
     [U] catalog/wineries_enrichment_from_pdf.xlsx
     [U] catalog/wineries_enrichment_from_pdf_debug.xlsx
     [U] catalog/wineries_enrichment_from_pdf_norm.xlsx
-    [U] catalog/пїЅпїЅпїЅпїЅпїЅпїЅпїЅ DW 2025.pdf
-    [U] inbox/2025_02_26 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
-    [U] inbox/2025_03_24 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
-    [U] inbox/2025_04_22 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
-    [U] inbox/2025_05_21 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
-    [U] inbox/2025_06_03 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
-    [U] inbox/2025_06_23 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
-    [U] inbox/2025_06_25 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
-    [U] inbox/2025_07_21 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
-    [U] inbox/2025_08_06 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
-    [U] inbox/2025_08_13 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
-    [U] inbox/2025_08_19 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
-    [U] inbox/2025_09_19 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
-    [U] inbox/2025_09_29 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
-    [U] inbox/2025_10_13 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
-    [U] inbox/2025_10_22 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
-    [U] inbox/2025_10_27 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
-    [U] inbox/2025_12_03 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
-    [U] inbox/пїЅпїЅпїЅпїЅпїЅ 2025_01_20 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
+    [U] catalog/������� DW 2025.pdf
+    [U] inbox/2025_02_26 �����_�������_���������.xlsx
+    [U] inbox/2025_03_24 �����_�������_���������.xlsx
+    [U] inbox/2025_04_22 �����_�������_���������.xlsx
+    [U] inbox/2025_05_21 �����_�������_���������.xlsx
+    [U] inbox/2025_06_03 �����_�������_���������.xlsx
+    [U] inbox/2025_06_23 �����_�������_���������.xlsx
+    [U] inbox/2025_06_25 �����_�������_���������.xlsx
+    [U] inbox/2025_07_21 �����_�������_���������.xlsx
+    [U] inbox/2025_08_06 �����_�������_���������.xlsx
+    [U] inbox/2025_08_13 �����_�������_���������.xlsx
+    [U] inbox/2025_08_19 �����_�������_���������.xlsx
+    [U] inbox/2025_09_19 �����_�������_���������.xlsx
+    [U] inbox/2025_09_29 �����_�������_���������.xlsx
+    [U] inbox/2025_10_13 �����_�������_���������.xlsx
+    [U] inbox/2025_10_22 �����_�������_���������.xlsx
+    [U] inbox/2025_10_27 �����_�������_���������.xlsx
+    [U] inbox/2025_12_03 �����_�������_���������.xlsx
+    [U] inbox/����� 2025_01_20 �����_�������_���������.xlsx
+  docs/
+    [U] dev/README.snippetdd17122025.md
   etl/
     [U] __pycache__/image_extractor.cpython-311.pyc
     [U] image_extractor.py.backup
@@ -308,7 +319,6 @@ wine-assistant/
     [U] __pycache__/load_wineries.cpython-311.pyc
     [U] __pycache__/load_wineries_enrichment.cpython-311.pyc
     [U] __pycache__/normalize_wineries_suppliers.cpython-311.pyc
-    [U] backfill_current_prices.py
     [U] load_utils.py.backup
     [U] load_utils.py.backup1
     [U] manual_smoke_check.fixed.v4.ps1
@@ -341,9 +351,28 @@ wine-assistant/
     [U] unit/__pycache__/test_schemas.cpython-311-pytest-8.4.2.pyc
     [U] unit/__pycache__/test_validation.cpython-311-pytest-8.4.2.pyc
 
+2.5 Must-have sanity check (selected paths)
+  Result: All present
+  - README.md : True
+  - CHANGELOG.md : True
+  - Dockerfile : True
+  - docker-compose.yml : True
+  - docker-compose.observability.yml : True
+  - requirements.txt : True
+  - Makefile : True
+  - project-structure.txt : True
+  - db\migrate.sh : True
+  - db\init.sql : True
+  - api\app.py : True
+  - api\export.py : True
+  - api\wsgi.py : True
+  - api\templates\ui.html : True
+
 ================================================================================
 3) Notes
 ================================================================================
 • Large local artifacts (e.g., .venv/, htmlcov/, caches) are present in the working directory snapshot.
   They should normally remain untracked and be covered by .gitignore.
 • If static/ is intended to be versioned (assets checked into git), review what should be committed vs generated.
+• Some filenames under data/ appear with replacement characters (�/�/����). This usually indicates an encoding issue
+  in the local filesystem or in how the filenames were produced; consider normalizing them if they are meant to be portable.
