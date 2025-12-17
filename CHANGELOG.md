@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.4.2
+## v0.4.3
 
 * docs: update documentation for Sprint 4a (v0.5.0) (#89) (67f36fe) by glinozem
 * feat(etl): implement automated daily import scheduler (#88) (7e32e9c) by glinozem
