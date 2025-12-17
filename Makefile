@@ -1,6 +1,7 @@
 .PHONY: help dev-up dev-down dev-logs db-shell db-migrate         test test-unit test-int test-int-noslow lint fmt         check test-all test-db db-reset load-price show-quarantine
 .PHONY: sync-inventory-history sync-inventory-history-dry-run
 .PHONY: backfill-current-prices backfill-current-prices-dry-run
+.PHONY: bundle bundle-static bundle-full
 
 # Значения по умолчанию для окружения, можно переопределить при вызове:
 # например: make test-int DB_HOST=127.0.0.1
@@ -17,6 +18,18 @@ else
 endif
 
 DOCKER_COMPOSE ?= docker compose
+
+# --- Analysis bundle (архив для ревью/диагностики) ---
+BUNDLE_OUT_DIR ?= ./_bundles
+
+ifeq ($(OS),Windows_NT)
+  POWERSHELL ?= powershell
+  POWERSHELL_ARGS ?= -NoProfile -ExecutionPolicy Bypass -File
+else
+  POWERSHELL ?= pwsh
+  POWERSHELL_ARGS ?= -NoProfile -File
+endif
+
 
 # Путь к прайс-листу по умолчанию (можно переопределять при вызове)
 EXCEL_PATH ?= ./data/price-list.xlsx
@@ -48,8 +61,9 @@ help:
 	@echo "  make sync-inventory-history-dry-run - показать, сколько записей будет добавлено в inventory_history (без изменений БД)"
 	@echo "  make backfill-current-prices        - привести цены к контракту и дозаполнить current price rows в product_prices (apply)"
 	@echo "  make backfill-current-prices-dry-run - показать, что будет исправлено/вставлено (dry-run)"
-
-
+	@echo "  make bundle           - собрать analysis bundle (без static/)"
+	@echo "  make bundle-static    - собрать analysis bundle (включая static/)"
+	@echo "  make bundle-full      - bundle + static/ + pip freeze"
 
 dev-up:
 	$(DOCKER_COMPOSE) up -d db api
@@ -114,3 +128,12 @@ backfill-current-prices:
 
 sync-inventory-history-dry-run:
 	$(DOCKER_COMPOSE) exec api python -m scripts.sync_inventory_history --dry-run
+
+bundle:
+	$(POWERSHELL) $(POWERSHELL_ARGS) scripts/bundle.ps1 -OutDir "$(BUNDLE_OUT_DIR)"
+
+bundle-static:
+	$(POWERSHELL) $(POWERSHELL_ARGS) scripts/bundle.ps1 -OutDir "$(BUNDLE_OUT_DIR)" -IncludeStatic
+
+bundle-full:
+	$(POWERSHELL) $(POWERSHELL_ARGS) scripts/bundle.ps1 -OutDir "$(BUNDLE_OUT_DIR)" -IncludeStatic -IncludePipFreeze
