@@ -85,22 +85,31 @@ def _norm_key(s: Any) -> str:
 
 
 # Ищем «домен.tld» как подстроку, а не как всю строку
-SITE_RE = re.compile(r"(https?://)?([\w\-]+\.)+[a-z]{2,}(/[^\s]*)?", re.IGNORECASE)
+SITE_RE = re.compile(r"(https?://)?([\w\-]+\.)+[a-z]{2,15}(/[^\s]*)?", re.IGNORECASE)
 
 
 def _looks_like_site(value: Any) -> bool:
     """
     Грубая проверка, что в строке есть что-то похожее на URL сайта.
-    Например: 'www.vins-perrier.com', 'https://casepaolin.it',
-    'Maison Perrier www.vins-perrier.com' и т.п.
     """
     if value is None:
         return False
     s = _norm(value)
     if not s:
         return False
-    # убираем пробелы, чтобы 'www. vins-perrier.com' тоже поймался
+
     s_compact = s.replace(" ", "")
+    s_lc = s_compact.lower()
+
+    # 1) отсекаем внутренние URL картинок/эндпоинтов сервиса
+    # (если формат изменится на домен с точкой, это предотвратит запись в producer_site)
+    if "/sku/" in s_lc and "/image" in s_lc:
+        return False
+
+    # 2) опционально: отсекаем localhost/127.0.0.1 и подобное
+    if "localhost" in s_lc or "127.0.0.1" in s_lc:
+        return False
+
     return bool(SITE_RE.search(s_compact))
 
 
@@ -114,9 +123,16 @@ def _normalize_site(value: Any) -> Optional[str]:
     s = _norm(value)
     if not s:
         return None
-    if not s.startswith("http://") and not s.startswith("https://"):
-        s = "https://" + s
-    return s
+
+    s_compact = s.replace(" ", "")
+    m = SITE_RE.search(s_compact)
+    if not m:
+        return None
+
+    site = m.group(0)  # берём только совпадение, без “лишнего текста”
+    if not site.lower().startswith(("http://", "https://")):
+        site = "https://" + site
+    return site
 
 
 def _to_float(x: Any) -> Optional[float]:
@@ -128,7 +144,8 @@ def _to_float(x: Any) -> Optional[float]:
         return None
     num = m.group(0).replace(" ", "").replace(",", ".")
     try:
-        return float(num)
+        v = float(num)
+        return v if math.isfinite(v) else None
     except Exception:
         return None
 
@@ -483,7 +500,7 @@ def enrich_site_from_photo_column(df: pd.DataFrame) -> pd.DataFrame:
     Заполняет колонку producer_site по данным из строк прайса.
 
     Логика:
-      * В КАЖДОЙ строке ищем что-то похожее на URL сайта (во всех колонках).
+      * В КАЖДОЙ строке ищем сайт только в колонках producer_site и image_url.
       * Если код пустой (code == '') и сайт найден -> считаем строку «шапкой производителя»
         и запоминаем current_site.
       * Если код есть и сайт найден -> пишем его в producer_site для этой строки
@@ -502,7 +519,8 @@ def enrich_site_from_photo_column(df: pd.DataFrame) -> pd.DataFrame:
 
         # 1. Ищем сайт в текущей строке (в любых колонках)
         site_in_row: Optional[str] = None
-        for val in row.values:
+        for col in ("producer_site", "image_url"):
+            val = row.get(col)
             if _looks_like_site(val):
                 site_in_row = _normalize_site(val)
                 break
@@ -560,7 +578,15 @@ def upsert_records(df: pd.DataFrame, asof: date | datetime):
     if "vintage" in df.columns:
         df["vintage"] = df["vintage"].map(_parse_vintage)
 
-    disc: Optional[float] = df.attrs.get("discount_pct")
+    disc_raw = df.attrs.get("discount_pct")
+    disc: Optional[float] = None
+    if disc_raw is not None:
+        try:
+            _disc = float(disc_raw)
+            if math.isfinite(_disc) and 0.0 <= _disc <= 1.0:
+                disc = _disc
+        except (TypeError, ValueError):
+            disc = None
     # Явный выбор источника скидки (CLI/окружение) может быть передан
     # через df.attrs["prefer_discount_cell"] в load_csv.main().
     # Если атрибут не задан, ниже упадём обратно на PREFER_S5 из env.
@@ -675,20 +701,27 @@ def upsert_records(df: pd.DataFrame, asof: date | datetime):
             else:
                 prefer_s5 = os.environ.get("PREFER_S5") in ("1", "true", "True")
 
-            eff = price_calc_disc if prefer_s5 else price_file_disc
-            if eff is None:
-                eff = price_file_disc if prefer_s5 else price_calc_disc
-            if eff is None:
+            # Contract precedence:
+            # 1) explicit discounted price from file
+            # 2) computed discount_pct (only if prefer_s5 enabled)
+            # 3) list price
+            if price_file_disc is not None:
+                eff = price_file_disc
+            elif prefer_s5 and price_calc_disc is not None:
+                eff = price_calc_disc
+            else:
+                eff = price_list
+
+            if eff is None and price_list is not None:
                 eff = price_list
 
             if (
-                price_file_disc is not None
+                prefer_s5
+                and price_file_disc is not None
                 and price_calc_disc is not None
                 and abs(price_file_disc - price_calc_disc) > 0.01
             ):
-                print(
-                    f"[warn] {code}: price_discount mismatch -> file={price_file_disc} vs S5={price_calc_disc}"
-                )
+                print(f"[warn] {code}: price_discount mismatch -> file={price_file_disc} vs S5={price_calc_disc}")
 
             payload = dict(
                 code=code,

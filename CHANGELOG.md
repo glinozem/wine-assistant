@@ -19,3 +19,16 @@
 *  feat(testing): Setup pytest infrastructure (Issue #57) (#70) (d0a646c) by glinozem
 * Feature/structured logging (#55) (73c8480) by glinozem
 * docs(changelog): add CHANGELOG for v0.4.1 (#54) (d26e421) by glinozem
+
+
+## [Unreleased]
+
+### Added
+- `scripts/cleanup_test_data.py` — утилита очистки тестовых/интеграционных данных в Postgres (dry-run по умолчанию, `--apply` для выполнения).
+
+### Changed
+- UI `/ui`: бесконечная прокрутка и корректная загрузка всех позиций поверх пагинации (`limit/offset`), а не только первой страницы.
+- Документация: обновлены команды PowerShell для вызовов API (`Invoke-RestMethod` / `curl.exe`), добавлены примеры очистки тестовых данных.
+
+### Fixed
+- Тесты: скорректирован unit-тест, который проверяет приоритет `df.attrs['prefer_discount_cell']` над `PREFER_S5` (в `scripts/load_utils.py` логика уже корректна).

@@ -233,7 +233,14 @@ class ExportService:
 
         for wine in wines:
             title_ru = (wine.get("title_ru") or "")[:max_title_len]
-            price_final = wine.get("price_final_rub") or 0
+
+            price_list = wine.get("price_list_rub")
+            price_final = wine.get("price_final_rub")
+            if price_final is None:
+                price_final = price_list
+            if price_final is None:
+                price_final = 0
+
             grapes = wine.get("grapes") or ""
             vintage = wine.get("vintage") or ""
 

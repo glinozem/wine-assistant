@@ -1,161 +1,349 @@
+Wine Assistant — project-structure.txt (auto-generated)
+
+Generated: 2025-12-16 12:00:00 (local)
+Sources:
+  - git ls-files (canonical list of tracked files)
+  - tree /F /A (full working directory snapshot, incl. non-tracked artifacts)
+  - PowerShell Dump-Dir (directory inventories for selected folders)
+
+Legend: [T]=tracked, [U]=untracked, [M]=missing
+
+================================================================================
+1) Tracked repository layout [T] (from: git ls-files)
+================================================================================
 wine-assistant/
++---.github
+|   +---workflows
+|   |   +---changelog-on-release.yml
+|   |   +---ci.yml
+|   |   +---release-drafter.yml
+|   |   +---secrets.yml
+|   |   \---semgrep.yml
+|   +---changelog-config.json
+|   \---release-drafter.yml
++---.hooks
+|   \---block_keys.py
++---api
+|   +---templates
+|   |   \---ui.html
+|   +---app.py
+|   +---export.py
+|   +---logging_config.py
+|   +---request_middleware.py
+|   +---schemas.py
+|   +---validation.py
+|   \---wsgi.py
++---data
+|   \---sample
+|       \---dw_sample_products.csv
++---db
+|   +---migrations
+|   |   +---0000_schema_migrations.sql
+|   |   +---0001_prices-and-search.sql
+|   |   +---0002_price-history-guardrails.sql
+|   |   +---0003_inventory-columns-and-asof.sql
+|   |   +---0004_diagnostics.sql
+|   |   +---0005_price-check.sql
+|   |   +---0006_add-idempotency-tables.sql
+|   |   +---0007_schema-migrations-view.sql
+|   |   +---0008_schema-migrations-view.sql
+|   |   +---0009_schema-migrations-view-fix.sql
+|   |   +---0010_price-list-quarantine.sql
+|   |   +---0011_product_prices_partitioning.sql
+|   |   +---0011_products_extra_fields.sql
+|   |   +---0012_wineries.sql
+|   |   +---2025-10-14-diagnostics.sql
+|   |   +---2025-10-14-price-check.sql
+|   |   +---2025-10-14-price-history-guardrails.sql
+|   |   \---2025-10-14-prices-and-search.sql
+|   +---init.sql
+|   +---migrate.ps1
+|   \---migrate.sh
++---docs
+|   +---dev
+|   |   +---cheatsheet-from-clean-clone-to-green-tests.md
+|   |   +---dev-setup-windows.md
+|   |   +---export-web-ui.md
+|   |   +---issue-83-84-notes.md
+|   |   +---issue-85-partitioning-notes.md
+|   |   +---issue-91-summary.md
+|   |   +---logging-eventsdd05122025.md
+|   |   +---manual-smoke-checkdd03122025.md
+|   |   +---PR_body_ru_extended_wineries_sku_20251130dd30112025.md
+|   |   +---producer_site_image_url_readme_ru.md
+|   |   +---README-before06112025.md
+|   |   +---README-before07112025-01.md
+|   |   +---README-before07112025.md
+|   |   +---README-before15112025.md
+|   |   +---README-before17112025-01.md
+|   |   +---README-before17112025.md
+|   |   +---README-before18112025-01.md
+|   |   +---README-before18112025.md
+|   |   +---README-before19112025-01.md
+|   |   +---README-before19112025.md
+|   |   +---README-before21112025.md
+|   |   +---README-before22112025.md
+|   |   +---README-before24112025.md
+|   |   +---README-before28112025.md
+|   |   +---README-before30112025.md
+|   |   +---readme-inventory-and-chartsdd03122025.md
+|   |   +---README.auto_images.ru-28112025.md
+|   |   +---README.auto_images.ru.extended-28112025.md
+|   |   +---README.extradd04122025.md
+|   |   +---README.ru-additiondd28112025.md
+|   |   +---README.wineriesdd30112025.md
+|   |   +---readme_block_new_products_fields_ru.md
+|   |   +---readme_wine_fields_export.md
+|   |   \---READMEdd04122025.md
+|   +---BEFORE_AFTER_COMPARISON.md
+|   +---dev-checklist.ps1
+|   +---manual-smoke-check.md
+|   +---pr-93-summary.md
+|   +---README_UPDATE_SUMMARY.md
+|   +---requirements.md
+|   +---roadmap_sprint7+.md
+|   +---roadmap_sprint7+_v2.md
+|   \---ROADMAP_v3_RU.md
++---etl
+|   +---image_extractor.py
+|   +---mapping_template.json
+|   +---run_daily.py
+|   \---utils.py
++---jobs
+|   +---cleanup_old_partitions.py
+|   \---ingest_dw_price.py
++---observability
+|   +---grafana
+|   |   +---dashboards
+|   |   |   \---wine-assistant-api.json
+|   |   \---provisioning
+|   |       +---dashboards
+|   |       |   \---dashboards.yml
+|   |       \---datasources
+|   |           \---datasources.yml
+|   +---loki-config.yml
+|   +---promtail-config.yml
+|   \---README.md
++---scripts
+|   +---check_wineries_vs_products.py
+|   +---data_quality.py
+|   +---date_extraction.py
+|   +---enrich_producers.py
+|   +---extract_wineries_from_pdf.py
+|   +---idempotency.py
+|   +---load_csv.py
+|   +---load_utils.py
+|   +---load_wineries.py
+|   +---load_wineries_enrichment.py
+|   +---manual_smoke_check.ps1
+|   +---migrate.ps1
+|   +---normalize_wineries_suppliers.py
+|   +---quick_smoke_check.ps1
+|   +---run_integration_tests.ps1
+|   +---setup_scheduler.ps1
+|   \---sync_inventory_history.py
++---tests
+|   +---e2e
+|   |   \---__init__.py
+|   +---fixtures
+|   |   +---schema.sql
+|   |   \---schema_prices.sql
+|   +---integration
+|   |   +---__init__.py
+|   |   +---api_test_utils.py
+|   |   +---conftest.py
+|   |   +---test_api_export_search.py
+|   |   +---test_api_export_sku_and_price_history.py
+|   |   +---test_api_products_search_happy.py
+|   |   \---test_price_import_etl.py
+|   +---unit
+|   |   +---__init__.py
+|   |   +---test_data_quality.py
+|   |   +---test_date_extraction.py
+|   |   +---test_export_service.py
+|   |   +---test_health.py
+|   |   +---test_idempotency.py
+|   |   +---test_load_csv.py
+|   |   +---test_load_utils.py
+|   |   +---test_schemas.py
+|   |   \---test_validation.py
+|   +---__init__.py
+|   +---conftest.py
+|   +---cors-test.html
+|   +---README.md
+|   +---test_api_health.py
+|   +---test_api_limits_and_security.py
+|   +---test_api_products_happy.py
+|   +---test_api_products_validation.py
+|   \---test_api_search_validation.py
++---.coveragerc
++---.dockerignore
++---.env.example
++---.gitattributes
++---.gitignore
++---.gitleaks.toml
++---.pre-commit-config.yaml
++---CHANGELOG.md
++---docker-compose.observability.yml
++---docker-compose.yml
++---Dockerfile
++---INDEX.md
++---Makefile
++---project-structure-auto.txt
++---project-structure.txt
++---PROTECTION_CHECK.txt
++---pyproject.toml
++---pytest.ini
++---QUICK_REFERENCE.md
++---README.md
+\---requirements.txt
 
-# Назначение
-# project-structure.txt — “ручной” справочник по структуре репозитория и роли каталогов/файлов.
-# project-structure-auto.txt — автоматически сгенерированный снимок файловой структуры (tree /F /A).
+================================================================================
+2) Working directory overlay (from: tree + Dump-Dir)
+================================================================================
+2.1 Drift summary
+  - Tracked files total: 160
+  - Tracked but missing on disk [M]: 0
+  - Untracked files present [U]: 16542
+    - Untracked at repo root: 21
+    - Untracked under directories: 16521
 
-# Легенда
-# [PUBLIC]   — то, на что опираются пользователи репозитория: запуск, API, официальная документация, контракты.
-# [INTERNAL] — внутренняя реализация, эксплуатационные скрипты, миграции, тестовые утилиты.
-# [OPTIONAL] — компоненты, которые можно не поднимать для минимального демо (например, observability).
+  Top-level breakdown of untracked files by directory (count of files):
+    - .venv/: 16094
+    - static/: 296
+    - tests/: 26
+    - data/: 23
+    - htmlcov/: 21
+    - scripts/: 16
+    - .ruff_cache/: 14
+    - .idea/: 8
+    - api/: 8
+    - .pytest_cache/: 5
+    - backups/: 4
+    - etl/: 3
+    - smoke_artifacts/: 3
 
-wine-assistant/
-├── api/                                        # Flask-приложение и HTTP-эндпоинты [PUBLIC]
-│   ├── app.py                                  # Роутинг /ui и /api/v1/* [PUBLIC]
-│   ├── export.py                               # Экспорт XLSX/PDF (поиск, SKU, истории) [PUBLIC]
-│   ├── schemas.py                              # Контракты запросов/ответов [PUBLIC]
-│   ├── validation.py                           # Бизнес-валидация [INTERNAL]
-│   ├── request_middleware.py                   # Middleware: логирование/лимиты/ошибки [INTERNAL]
-│   ├── logging_config.py                       # Настройки логирования API [INTERNAL]
-│   ├── wsgi.py                                 # WSGI-entrypoint (gunicorn) [PUBLIC]
-│   └── templates/
-│       └── ui.html                             # Витрина UI (один HTML без SPA) [PUBLIC]
-│
-├── data/                                       # Данные для разработки/импорта [INTERNAL]
-│   └── sample/
-│       └── dw_sample_products.csv              # Пример входных данных для dev/CI [PUBLIC]
-│   # Примечание: каталоги data/inbox и data/archive используются в практике импорта,
-│   # но могут быть локальными (не обязаны быть закоммичены).
-│
-├── db/                                         # База данных и миграции [PUBLIC/INTERNAL]
-│   ├── init.sql                                # Инициализация схемы “с нуля” [INTERNAL]
-│   ├── migrate.sh                              # Раннер SQL-миграций (используется migrator в compose) [PUBLIC]
-│   ├── migrate.ps1                             # PowerShell-обёртка (Windows) [INTERNAL]
-│   └── migrations/                             # SQL-миграции (эволюция схемы) [INTERNAL]
-│       ├── 0000_schema_migrations.sql
-│       ├── 0001_prices-and-search.sql
-│       ├── 0002_price-history-guardrails.sql
-│       ├── 0003_inventory-columns-and-asof.sql
-│       ├── 0004_diagnostics.sql
-│       ├── 0005_price-check.sql
-│       ├── 0006_add-idempotency-tables.sql
-│       ├── 0007_schema-migrations-view.sql
-│       ├── 0008_schema-migrations-view.sql
-│       ├── 0009_schema-migrations-view-fix.sql
-│       ├── 0010_price-list-quarantine.sql
-│       ├── 0011_product_prices_partitioning.sql
-│       ├── 0011_products_extra_fields.sql
-│       ├── 0012_wineries.sql
-│       ├── 2025-10-14-diagnostics.sql
-│       ├── 2025-10-14-price-check.sql
-│       ├── 2025-10-14-price-history-guardrails.sql
-│       └── 2025-10-14-prices-and-search.sql
-│
-├── etl/                                        # ETL-утилиты прайса [INTERNAL]
-│   ├── mapping_template.json                   # Маппинг колонок поставщика → внутренние поля [PUBLIC]
-│   ├── run_daily.py                            # Ежедневный прогон ETL (entrypoint) [INTERNAL]
-│   └── utils.py                                # Общие ETL-помощники [INTERNAL]
-│
-├── jobs/                                       # Фоновые джобы обслуживания/данных [INTERNAL]
-│   ├── ingest_dw_price.py                      # Загрузка прайса в DWH/целевую БД [INTERNAL]
-│   └── cleanup_old_partitions.py               # Очистка старых партиций цен [INTERNAL]
-│
-├── scripts/                                    # CLI и операционные скрипты [INTERNAL]
-│   ├── load_csv.py                             # Импорт Excel/CSV (основной CLI) [INTERNAL]
-│   ├── load_utils.py                           # Утилиты импорта (DB, upsert, нормализация) [INTERNAL]
-│   ├── data_quality.py                         # Гейты качества/карантин [INTERNAL]
-│   ├── idempotency.py                          # Идемпотентность импорта [INTERNAL]
-│   ├── date_extraction.py                      # Извлечение дат/ASOF [INTERNAL]
-│   ├── sync_inventory_history.py               # Синхронизация истории остатков [INTERNAL]
-│   ├── load_wineries.py                        # Загрузка справочника wineries [INTERNAL]
-│   ├── load_wineries_enrichment.py             # Обогащение wineries [INTERNAL]
-│   ├── normalize_wineries_suppliers.py         # Нормализация wineries/suppliers [INTERNAL]
-│   ├── check_wineries_vs_products.py           # Сверки wineries vs products [INTERNAL]
-│   ├── extract_wineries_from_pdf.py            # Извлечение wineries из PDF [INTERNAL]
-│   ├── enrich_producers.py                     # Обогащение данных по производителям [INTERNAL]
-│   ├── migrate.ps1                             # Удобный запуск миграций (Windows) [INTERNAL]
-│   ├── quick_smoke_check.ps1                   # Быстрый smoke-check (Windows) [INTERNAL]
-│   ├── manual_smoke_check.ps1                  # Расширенный smoke-check (Windows) [INTERNAL]
-│   ├── run_integration_tests.ps1               # Запуск интеграционных тестов (Windows) [INTERNAL]
-│   └── setup_scheduler.ps1                     # Планировщик задач (Windows) [INTERNAL]
-│
-├── docs/                                       # Документация [PUBLIC]
-│   ├── requirements.md                         # Требования [PUBLIC]
-│   ├── manual-smoke-check.md                   # Канонический manual smoke-check [PUBLIC]
-│   ├── ROADMAP_v3_RU.md                        # Актуальная дорожная карта [PUBLIC]
-│   ├── README_UPDATE_SUMMARY.md                # Сводка изменений README/доков [PUBLIC]
-│   ├── pr-93-summary.md                        # Конспект по PR #93 [INTERNAL]
-│   ├── roadmap_sprint7+.md                     # Ранние roadmap-версии [INTERNAL]
-│   ├── roadmap_sprint7+_v2.md                  # Ранние roadmap-версии [INTERNAL]
-│   ├── BEFORE_AFTER_COMPARISON.md              # Сравнения/история изменений [INTERNAL]
-│   └── dev/                                    # Снапшоты и заметки разработки [INTERNAL]
-│       ├── dev-setup-windows.md
-│       ├── cheatsheet-from-clean-clone-to-green-tests.md
-│       ├── export-web-ui.md
-│       ├── issue-83-84-notes.md
-│       ├── issue-85-partitioning-notes.md
-│       ├── issue-91-summary.md
-│       ├── README-before*.md
-│       ├── README.auto_images*.md
-│       ├── README.*dd*.md
-│       ├── PR_body_*.md
-│       └── logging-events*.md
-│
-├── observability/                              # Loki/Promtail/Grafana (опционально) [OPTIONAL]
-│   ├── README.md
-│   ├── loki-config.yml
-│   ├── promtail-config.yml
-│   └── grafana/
-│       ├── dashboards/
-│       │   └── wine-assistant-api.json
-│       └── provisioning/
-│           ├── datasources/datasources.yml
-│           └── dashboards/dashboards.yml
-│
-├── tests/                                      # Автотесты [INTERNAL]
-│   ├── README.md
-│   ├── conftest.py
-│   ├── cors-test.html
-│   ├── fixtures/
-│   │   ├── schema.sql
-│   │   └── schema_prices.sql
-│   ├── unit/
-│   ├── integration/
-│   └── e2e/                                    # Заготовка пакета [OPTIONAL]
-│
-├── .github/                                    # GitHub Actions / релизы [INTERNAL]
-│   ├── changelog-config.json
-│   ├── release-drafter.yml
-│   └── workflows/
-│       ├── changelog-on-release.yml
-│       ├── ci.yml
-│       ├── release-drafter.yml
-│       ├── secrets.yml
-│       └── semgrep.yml
-│
-├── .hooks/
-│   └── block_keys.py                           # Локальная защита от утечек секретов [INTERNAL]
-│
-├── .coveragerc                                 # Coverage config [INTERNAL]
-├── .dockerignore                               # Docker build context ignores [INTERNAL]
-├── .env.example                                # Пример переменных окружения (без секретов) [PUBLIC]
-├── .gitattributes                              # Git attributes [INTERNAL]
-├── .gitignore                                  # Git ignore rules [INTERNAL]
-├── .gitleaks.toml                              # Gitleaks config [INTERNAL]
-├── .pre-commit-config.yaml                     # Pre-commit hooks [INTERNAL]
-│
-├── Dockerfile                                  # Образ API [PUBLIC]
-├── docker-compose.yml                          # Локальный стенд (db + migrator + api + adminer) [PUBLIC]
-├── docker-compose.observability.yml            # Стенд observability (Grafana/Loki/Promtail) [PUBLIC][OPTIONAL]
-├── Makefile                                    # Команды разработки/CI [PUBLIC]
-├── pyproject.toml                              # Конфиг проекта (инструменты/настройки) [PUBLIC]
-├── pytest.ini                                  # Настройки pytest [INTERNAL]
-├── requirements.txt                            # Python зависимости [PUBLIC]
-│
-├── README.md                                   # Главный README [PUBLIC]
-├── CHANGELOG.md                                # История изменений [PUBLIC]
-├── INDEX.md                                    # Навигация по проекту/докам [PUBLIC]
-├── QUICK_REFERENCE.md                          # Шпаргалка команд/сценариев [PUBLIC]
-├── PROTECTION_CHECK.txt                        # Служебный маркер/проверка [INTERNAL]
-├── project-structure.txt                       # Этот файл [PUBLIC]
-└── project-structure-auto.txt                  # Автоснимок структуры (генерируется) [INTERNAL]
+2.2 Untracked items at repository root [U]
+  [U] .coverage
+  [U] .env
+  [U] Makefile-backup
+  [U] ls_api.txt
+  [U] ls_api_templates.txt
+  [U] ls_db.txt
+  [U] ls_db_migrations.txt
+  [U] ls_docs.txt
+  [U] ls_docs_dev.txt
+  [U] ls_etl.txt
+  [U] ls_github.txt
+  [U] ls_hooks.txt
+  [U] ls_observability.txt
+  [U] ls_root.txt
+  [U] ls_scripts.txt
+  [U] ls_static.txt
+  [U] ls_tests.txt
+  [U] must-have-check.txt
+  [U] project-files.tracked.txt
+  [U] structure_dump.zip
+  [U] wine-assistant_analysis_bundle_20251213_203417.zip
+
+2.3 Untracked root directories [U]
+  [U] .idea/ (8 files)
+  [U] .pytest_cache/ (5 files)
+  [U] .ruff_cache/ (14 files)
+  [U] .venv/ (16094 files)
+  [U] backups/ (4 files)
+  [U] htmlcov/ (21 files)
+  [U] init.sql/ (0 files)
+  [U] logs/ (0 files)
+  [U] smoke_artifacts/ (3 files)
+  [U] static/ (296 files)
+
+2.4 Untracked files inside tracked top-level directories [U]
+  api/
+    [U] __pycache__/app.cpython-311.pyc
+    [U] __pycache__/export.cpython-311.pyc
+    [U] __pycache__/logging_config.cpython-311.pyc
+    [U] __pycache__/request_middleware.cpython-311.pyc
+    [U] __pycache__/schemas.cpython-311.pyc
+    [U] __pycache__/validation.cpython-311.pyc
+    [U] __pycache__/wsgi.cpython-311.pyc
+    [U] templates/ui.html.backup
+  data/
+    [U] catalog/wineries_enrichment.xlsx
+    [U] catalog/wineries_enrichment_from_pdf.xlsx
+    [U] catalog/wineries_enrichment_from_pdf_debug.xlsx
+    [U] catalog/wineries_enrichment_from_pdf_norm.xlsx
+    [U] catalog/пїЅпїЅпїЅпїЅпїЅпїЅпїЅ DW 2025.pdf
+    [U] inbox/2025_02_26 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
+    [U] inbox/2025_03_24 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
+    [U] inbox/2025_04_22 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
+    [U] inbox/2025_05_21 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
+    [U] inbox/2025_06_03 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
+    [U] inbox/2025_06_23 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
+    [U] inbox/2025_06_25 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
+    [U] inbox/2025_07_21 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
+    [U] inbox/2025_08_06 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
+    [U] inbox/2025_08_13 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
+    [U] inbox/2025_08_19 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
+    [U] inbox/2025_09_19 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
+    [U] inbox/2025_09_29 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
+    [U] inbox/2025_10_13 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
+    [U] inbox/2025_10_22 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
+    [U] inbox/2025_10_27 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
+    [U] inbox/2025_12_03 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
+    [U] inbox/пїЅпїЅпїЅпїЅпїЅ 2025_01_20 пїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ.xlsx
+  etl/
+    [U] __pycache__/image_extractor.cpython-311.pyc
+    [U] image_extractor.py.backup
+    [U] image_extractor.py.backup1
+  scripts/
+    [U] __pycache__/check_wineries_vs_products.cpython-311.pyc
+    [U] __pycache__/data_quality.cpython-311.pyc
+    [U] __pycache__/date_extraction.cpython-311.pyc
+    [U] __pycache__/enrich_producers.cpython-311.pyc
+    [U] __pycache__/extract_wineries_from_pdf.cpython-311.pyc
+    [U] __pycache__/idempotency.cpython-311.pyc
+    [U] __pycache__/load_csv.cpython-311.pyc
+    [U] __pycache__/load_utils.cpython-311.pyc
+    [U] __pycache__/load_wineries.cpython-311.pyc
+    [U] __pycache__/load_wineries_enrichment.cpython-311.pyc
+    [U] __pycache__/normalize_wineries_suppliers.cpython-311.pyc
+    [U] backfill_current_prices.py
+    [U] load_utils.py.backup
+    [U] load_utils.py.backup1
+    [U] manual_smoke_check.fixed.v4.ps1
+    [U] quick_smoke_check.fixed.v4.ps1
+  tests/
+    [U] __pycache__/__init__.cpython-311.pyc
+    [U] __pycache__/conftest.cpython-311-pytest-8.4.2.pyc
+    [U] __pycache__/test_api.cpython-311-pytest-8.4.2.pyc
+    [U] __pycache__/test_api_health.cpython-311-pytest-8.4.2.pyc
+    [U] __pycache__/test_api_limits_and_security.cpython-311-pytest-8.4.2.pyc
+    [U] __pycache__/test_api_products_happy.cpython-311-pytest-8.4.2.pyc
+    [U] __pycache__/test_api_products_validation.cpython-311-pytest-8.4.2.pyc
+    [U] __pycache__/test_api_search_validation.cpython-311-pytest-8.4.2.pyc
+    [U] integration/__pycache__/__init__.cpython-311.pyc
+    [U] integration/__pycache__/api_test_utils.cpython-311.pyc
+    [U] integration/__pycache__/conftest.cpython-311-pytest-8.4.2.pyc
+    [U] integration/__pycache__/test_api_export_search.cpython-311-pytest-8.4.2.pyc
+    [U] integration/__pycache__/test_api_export_sku_and_price_history.cpython-311-pytest-8.4.2.pyc
+    [U] integration/__pycache__/test_api_products_search_happy.cpython-311-pytest-8.4.2.pyc
+    [U] integration/__pycache__/test_price_import_etl.cpython-311-pytest-8.4.2.pyc
+    [U] integration/__pycache__/test_prices_search.cpython-311-pytest-8.4.2.pyc
+    [U] unit/__pycache__/__init__.cpython-311.pyc
+    [U] unit/__pycache__/test_data_quality.cpython-311-pytest-8.4.2.pyc
+    [U] unit/__pycache__/test_date_extraction.cpython-311-pytest-8.4.2.pyc
+    [U] unit/__pycache__/test_export_service.cpython-311-pytest-8.4.2.pyc
+    [U] unit/__pycache__/test_health.cpython-311-pytest-8.4.2.pyc
+    [U] unit/__pycache__/test_idempotency.cpython-311-pytest-8.4.2.pyc
+    [U] unit/__pycache__/test_load_csv.cpython-311-pytest-8.4.2.pyc
+    [U] unit/__pycache__/test_load_utils.cpython-311-pytest-8.4.2.pyc
+    [U] unit/__pycache__/test_schemas.cpython-311-pytest-8.4.2.pyc
+    [U] unit/__pycache__/test_validation.cpython-311-pytest-8.4.2.pyc
+
+================================================================================
+3) Notes
+================================================================================
+• Large local artifacts (e.g., .venv/, htmlcov/, caches) are present in the working directory snapshot.
+  They should normally remain untracked and be covered by .gitignore.
+• If static/ is intended to be versioned (assets checked into git), review what should be committed vs generated.

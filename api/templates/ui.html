@@ -1,341 +1,1249 @@
 <!doctype html>
 <html lang="ru">
 <head>
-  <meta charset="utf-8" />
-  <title>Wine Assistant — Витрина</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-
-  <!-- Bootstrap для быстрой верстки (через CDN) -->
-  <link
-    rel="stylesheet"
-    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"
-    integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN"
-    crossorigin="anonymous"
-  />
-
-  <!-- Chart.js для графиков -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Wine Assistant — витрина</title>
   <style>
-    body {
-      padding: 1rem;
+    :root{
+      --bg:#ffffff;
+      --panel:#ffffff;
+      --muted:#6b7280;
+      --text:#0f172a;
+      --line:#e5e7eb;
+      --line2:#f1f5f9;
+      --accent:#2563eb;
+      --accent2:#1d4ed8;
+      --danger:#b91c1c;
+      --shadow: 0 1px 2px rgba(0,0,0,.06);
+      --radius: 10px;
+      --font: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
     }
-    .sku-image {
-      max-width: 100%;
-      border-radius: 0.5rem;
-      box-shadow: 0 0 6px rgba(0,0,0,0.1);
+    html,body{height:100%; background:var(--bg); color:var(--text); font-family:var(--font); margin:0;}
+    a{color:var(--accent); text-decoration:none;}
+    a:hover{text-decoration:underline;}
+    .page{
+      height:100%;
+      display:flex;
+      flex-direction:column;
     }
-    .product-row {
-      cursor: pointer;
+
+    /* Header */
+    .topbar{
+      background:var(--panel);
+      border-bottom:1px solid var(--line);
+      box-shadow: var(--shadow);
+      padding:14px 18px;
     }
-    .product-row:hover {
-      background-color: #f5f5f5;
+    .topbar-row{
+      display:flex;
+      align-items:center;
+      gap:14px;
+      flex-wrap:wrap;
     }
-    .winery-description {
-      max-height: 260px;
-      overflow-y: auto;
-      white-space: pre-wrap;
-      font-size: 0.9rem;
+    .brand{
+      font-size:20px;
+      font-weight:700;
+      letter-spacing:.2px;
+      margin-right:8px;
+    }
+    .chip{
+      font-size:12px;
+      padding:4px 8px;
+      border:1px solid var(--line);
+      border-radius:999px;
+      color:var(--muted);
+      background:#fff;
+    }
+    .controls{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      flex:1;
+      min-width: 320px;
+      flex-wrap:wrap;
+    }
+    .field{
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+      min-width: 160px;
+    }
+    .field label{
+      font-size:12px;
+      color:var(--muted);
+    }
+    .input, .select{
+      height:36px;
+      border-radius:10px;
+      border:1px solid var(--line);
+      padding:0 12px;
+      outline:none;
+      background:#fff;
+      color:var(--text);
+      min-width: 180px;
+    }
+    .input:focus, .select:focus{
+      border-color:#93c5fd;
+      box-shadow: 0 0 0 3px rgba(37,99,235,.12);
+    }
+    .btn{
+      height:36px;
+      padding:0 14px;
+      border-radius:10px;
+      border:1px solid var(--line);
+      background:#fff;
+      cursor:pointer;
+      color:var(--text);
+      font-weight:600;
+    }
+    .btn.primary{
+      background: var(--accent);
+      border-color: var(--accent);
+      color:#fff;
+    }
+    .btn.primary:hover{ background: var(--accent2); border-color: var(--accent2); }
+    .btn:disabled{
+      opacity:.55;
+      cursor:not-allowed;
+    }
+    .toggle{
+      display:flex;
+      align-items:center;
+      gap:8px;
+      padding:0 10px;
+      height:36px;
+      border:1px solid var(--line);
+      border-radius:10px;
+      background:#fff;
+      user-select:none;
+    }
+    .toggle input{ margin:0; }
+    .hint{
+      font-size:12px;
+      color:var(--muted);
+      margin-left:auto;
+      white-space:nowrap;
+    }
+    .apiKeyWrap{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      flex-wrap:wrap;
+    }
+    .apiKeyWrap .input{ min-width: 260px; }
+    .apiKeyActions{
+      display:flex;
+      gap:8px;
+      align-items:center;
+    }
+    .status{
+      font-size:12px;
+      color:var(--muted);
+    }
+    .status.error{ color: var(--danger); }
+    .status.ok{ color: #166534; }
+
+    /* Main layout */
+    .main{
+      flex:1;
+      display:grid;
+      grid-template-columns: 520px 1fr;
+      gap:16px;
+      padding:16px;
+      min-height:0;
+    }
+    @media (max-width: 1100px){
+      .main{ grid-template-columns: 1fr; }
+    }
+
+    .card{
+      background:var(--panel);
+      border:1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      min-height:0;
+    }
+
+    /* Left list */
+    .listCard{
+      display:flex;
+      flex-direction:column;
+      min-height:0;
+      overflow:hidden;
+    }
+    .listHead{
+      padding:12px 14px;
+      border-bottom:1px solid var(--line);
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+    }
+    .listHead .title{
+      font-weight:700;
+    }
+    .listHead .meta{
+      font-size:12px;
+      color:var(--muted);
+      white-space:nowrap;
+    }
+    .listTableHead{
+      display:grid;
+      grid-template-columns: 54px 1fr 92px;
+      gap:12px;
+      padding:10px 14px;
+      border-bottom:1px solid var(--line2);
+      font-size:12px;
+      color:var(--muted);
+      background:#fff;
+    }
+    .rows{
+      overflow:auto;
+      min-height:0;
+    }
+    .row{
+      display:grid;
+      grid-template-columns: 54px 1fr 92px;
+      gap:12px;
+      padding:10px 14px;
+      border-bottom:1px solid var(--line2);
+      cursor:pointer;
+      align-items:center;
+      background:#fff;
+    }
+    .row:hover{ background:#f8fafc; }
+    .row.selected{
+      background: rgba(37,99,235,.08);
+      outline: 2px solid rgba(37,99,235,.18);
+      outline-offset:-2px;
+    }
+    .thumb{
+      width:54px;
+      height:54px;
+      border-radius:12px;
+      border:1px solid var(--line);
+      background:#fff;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      overflow:hidden;
+    }
+    .thumb img{
+      width:100%;
+      height:100%;
+      object-fit:contain;
+      display:block;
+    }
+    .name{
+      font-weight:650;
+      line-height:1.2;
+      margin-bottom:4px;
+    }
+    .sub{
+      font-size:12px;
+      color:var(--muted);
+      line-height:1.25;
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+    }
+    .price{
+      text-align:right;
+      font-weight:700;
+    }
+    .price small{
+      display:block;
+      font-weight:600;
+      color:var(--muted);
+      margin-top:3px;
+    }
+    .listFooter{
+      padding:10px 14px;
+      border-top:1px solid var(--line);
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      font-size:12px;
+      color:var(--muted);
+      background:#fff;
+    }
+    .loader{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      color:var(--muted);
+    }
+    .spinner{
+      width:14px;
+      height:14px;
+      border:2px solid var(--line);
+      border-top-color: var(--accent);
+      border-radius:50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin{ to { transform: rotate(360deg); } }
+
+    /* Right details */
+    .detailCard{
+      display:flex;
+      flex-direction:column;
+      min-height:0;
+      overflow:hidden;
+    }
+    .detailBody{
+      padding:14px;
+      overflow:auto;
+      min-height:0;
+    }
+    .detailTop{
+      display:grid;
+      grid-template-columns: 160px 1fr;
+      gap:16px;
+      align-items:start;
+    }
+    @media (max-width: 640px){
+      .detailTop{ grid-template-columns: 1fr; }
+    }
+    .heroImg{
+      width:160px;
+      height:160px;
+      border-radius:16px;
+      border:1px solid var(--line);
+      background:#fff;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      overflow:hidden;
+    }
+    .heroImg img{
+      width:100%;
+      height:100%;
+      object-fit:contain;
+      display:block;
+    }
+    .h1{
+      font-size:22px;
+      font-weight:800;
+      line-height:1.2;
+      margin:0 0 6px 0;
+    }
+    .kvs{
+      margin-top:8px;
+      display:flex;
+      flex-wrap:wrap;
+      gap:8px;
+    }
+    .kv{
+      border:1px solid var(--line);
+      background:#fff;
+      border-radius:999px;
+      padding:6px 10px;
+      font-size:12px;
+      color:var(--muted);
+    }
+    .kv b{ color: var(--text); font-weight:700; }
+    .section{
+      margin-top:16px;
+      padding-top:14px;
+      border-top:1px solid var(--line2);
+    }
+    .sectionTitle{
+      font-weight:800;
+      margin:0 0 10px 0;
+    }
+    .desc{
+      font-size:13px;
+      color:#111827;
+      line-height:1.45;
+      white-space:pre-wrap;
+    }
+    .grid2{
+      display:grid;
+      grid-template-columns: 1fr 1fr;
+      gap:16px;
+    }
+    @media (max-width: 900px){
+      .grid2{ grid-template-columns: 1fr; }
+    }
+    .chartBox{
+      border:1px solid var(--line);
+      border-radius: 12px;
+      padding:12px;
+      background:#fff;
+    }
+    .chartHead{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      margin-bottom:8px;
+    }
+    .chartHead h3{
+      margin:0;
+      font-size:13px;
+      font-weight:800;
+    }
+    .chartPlaceholder{
+      font-size:12px;
+      color:var(--muted);
+      padding:8px 0;
+    }
+    canvas{ width:100% !important; height:220px !important; }
+
+    /* Toast */
+    .toast{
+      position:fixed;
+      right:16px;
+      bottom:16px;
+      max-width: 520px;
+      padding:12px 14px;
+      border-radius: 12px;
+      border:1px solid var(--line);
+      background:#fff;
+      box-shadow: var(--shadow);
+      display:none;
+      font-size:13px;
+      line-height:1.35;
+    }
+    .toast.show{ display:block; }
+    .toast .tTitle{ font-weight:800; margin-bottom:4px; }
+    .toast.error{ border-color: rgba(185,28,28,.35); }
+    .toast.ok{ border-color: rgba(22,101,52,.25); }
+    .toast code{ background:#f8fafc; padding:2px 6px; border-radius:8px; }
+
+    /* Sentinel */
+    #sentinel{
+      height: 1px;
     }
   </style>
+
+  <!-- Chart.js (optional; если CDN недоступен, графики просто покажут подсказку) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
-  <div class="container-fluid">
-    <h1 class="mb-3">Wine Assistant — витрина</h1>
+<div class="page">
+  <header class="topbar">
+    <div class="topbar-row">
+      <div class="brand">Wine Assistant — витрина</div>
+      <span class="chip">static ui.html</span>
 
-    <!-- Фильтры / поиск -->
-    <div class="row mb-3">
-      <div class="col-md-4 mb-2">
-        <input id="searchQuery" type="text" class="form-control" placeholder="Поиск по названию, сорту, региону..." />
-      </div>
-      <div class="col-md-3 mb-2">
-        <input id="searchCountry" type="text" class="form-control" placeholder="Страна" />
-      </div>
-      <div class="col-md-3 mb-2">
-        <input id="searchRegion" type="text" class="form-control" placeholder="Регион" />
-      </div>
-      <div class="col-md-2 mb-2 d-grid gap-2">
-        <button id="searchBtn" class="btn btn-primary">Искать</button>
-      </div>
-    </div>
-
-    <div class="row">
-      <!-- Левая колонка: список товаров -->
-      <div class="col-lg-5 mb-3">
-        <h5>Результаты</h5>
-        <table class="table table-sm align-middle" id="productsTable">
-          <thead>
-            <tr>
-              <th>Фото</th>
-              <th>Название</th>
-              <th>Страна</th>
-              <th>Регион</th>
-              <th>Цена</th>
-            </tr>
-          </thead>
-          <tbody id="productsTbody">
-            <!-- строки добавляются JS-ом -->
-          </tbody>
-        </table>
-      </div>
-
-      <!-- Правая колонка: карточка SKU + графики -->
-      <div class="col-lg-7">
-        <div class="row">
-          <div class="col-md-5 mb-3">
-            <img id="skuImage" class="sku-image mb-2" src="" alt="Изображение товара" />
-            <div id="skuBasicInfo" class="small text-muted"></div>
-          </div>
-          <div class="col-md-7 mb-3">
-            <h4 id="skuTitle">Выберите товар слева</h4>
-            <div class="mb-2">
-              <span id="skuMeta"></span>
-            </div>
-            <div class="mb-2">
-              <a id="skuProducerSite" href="#" target="_blank" rel="noopener noreferrer"></a>
-            </div>
-            <div class="winery-description border rounded p-2" id="skuWineryDescription"></div>
-          </div>
+      <div class="controls">
+        <div class="field" style="min-width:300px; flex: 1;">
+          <label for="q">Поиск</label>
+          <input id="q" class="input" placeholder="По названию, сорту, региону..." />
         </div>
 
-        <div class="row">
-          <div class="col-md-6 mb-3">
-            <h6>История цен</h6>
-            <canvas id="priceHistoryChart" height="200"></canvas>
-          </div>
-          <div class="col-md-6 mb-3">
-            <h6>История остатков</h6>
-            <canvas id="inventoryHistoryChart" height="200"></canvas>
-          </div>
+        <div class="field">
+          <label for="country">Страна</label>
+          <input id="country" class="input" placeholder="Напр. Испания" />
+        </div>
+
+        <div class="field">
+          <label for="region">Регион</label>
+          <input id="region" class="input" placeholder="Напр. Хумилия" />
+        </div>
+
+        <div class="toggle" title="Показывать только позиции, где stock_free &gt; 0">
+          <input id="inStock" type="checkbox" checked />
+          <label for="inStock" style="font-size:13px; color:var(--text); cursor:pointer;">Только в наличии</label>
+        </div>
+
+        <button id="searchBtn" class="btn primary">Искать</button>
+        <button id="resetBtn" class="btn" title="Сбросить фильтры и перезагрузить список">Сброс</button>
+      </div>
+
+      <div class="apiKeyWrap">
+        <div class="field" style="min-width:320px;">
+          <label for="apiKey">X-API-Key</label>
+          <input id="apiKey" class="input" placeholder="вставьте API ключ (сохранится локально)" />
+        </div>
+        <div class="apiKeyActions">
+          <button id="saveKeyBtn" class="btn">Сохранить</button>
+          <button id="clearKeyBtn" class="btn">Очистить</button>
+        </div>
+        <div id="apiStatus" class="status">Ключ не проверен</div>
+      </div>
+
+      <div class="hint">Совет: Enter в поле поиска запускает запрос</div>
+    </div>
+  </header>
+
+  <main class="main">
+    <!-- Left: list -->
+    <section class="card listCard">
+      <div class="listHead">
+        <div class="title">Результаты</div>
+        <div class="meta" id="listMeta">—</div>
+      </div>
+      <div class="listTableHead">
+        <div>Фото</div>
+        <div>Название</div>
+        <div style="text-align:right;">Цена</div>
+      </div>
+      <div class="rows" id="rows">
+        <div id="sentinel"></div>
+      </div>
+      <div class="listFooter">
+        <div id="footerLeft">Готово</div>
+        <div id="footerRight" class="loader" style="display:none;">
+          <span class="spinner"></span>
+          <span>Загрузка…</span>
         </div>
       </div>
-    </div>
+    </section>
+
+    <!-- Right: details -->
+    <section class="card detailCard">
+      <div class="listHead">
+        <div class="title">Карточка</div>
+        <div class="meta" id="detailMeta">Выберите позицию слева</div>
+      </div>
+      <div class="detailBody" id="detail">
+        <div class="desc" style="color:var(--muted);">Нажмите на строку в списке, чтобы открыть карточку SKU.</div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast">
+    <div class="tTitle" id="toastTitle"></div>
+    <div id="toastBody"></div>
   </div>
+</div>
 
-  <!-- Наш скрипт -->
-  <script>
-    const API_BASE = "/api/v1";
-    const API_KEY = "{{ api_key }}";
+<script>
+(function(){
+  "use strict";
 
-    let priceChart = null;
-    let inventoryChart = null;
+  /* ========= Config ========= */
+  // UI обслуживается самим API на том же хосте => используем относительные пути.
+  const API_PREFIX = "/api/v1";
+  const DEFAULT_LIMIT = 30;
 
-    async function apiGet(path, params = {}) {
-      const url = new URL(API_BASE + path, window.location.origin);
-      Object.entries(params).forEach(([k, v]) => {
-        if (v !== undefined && v !== null && v !== "") {
-          url.searchParams.set(k, v);
-        }
-      });
+  /* ========= DOM ========= */
+  const elQ = document.getElementById("q");
+  const elCountry = document.getElementById("country");
+  const elRegion = document.getElementById("region");
+  const elInStock = document.getElementById("inStock");
+  const elSearchBtn = document.getElementById("searchBtn");
+  const elResetBtn = document.getElementById("resetBtn");
 
-      const resp = await fetch(url.toString(), {
-        headers: {
-          "X-API-Key": API_KEY
-        }
-      });
+  const elApiKey = document.getElementById("apiKey");
+  const elSaveKeyBtn = document.getElementById("saveKeyBtn");
+  const elClearKeyBtn = document.getElementById("clearKeyBtn");
+  const elApiStatus = document.getElementById("apiStatus");
 
-      if (!resp.ok) {
-        const text = await resp.text();
-        throw new Error("API error " + resp.status + ": " + text);
-      }
-      return resp.json();
+  const elRows = document.getElementById("rows");
+  let elSentinel = document.getElementById("sentinel");
+  const elListMeta = document.getElementById("listMeta");
+  const elFooterLeft = document.getElementById("footerLeft");
+  const elFooterRight = document.getElementById("footerRight");
+
+  const elDetail = document.getElementById("detail");
+  const elDetailMeta = document.getElementById("detailMeta");
+
+  const elToast = document.getElementById("toast");
+  const elToastTitle = document.getElementById("toastTitle");
+  const elToastBody = document.getElementById("toastBody");
+
+  /* ========= State ========= */
+  let state = {
+    query: {
+      q: "",
+      country: "",
+      region: "",
+      in_stock: true,
+      limit: DEFAULT_LIMIT,
+      offset: 0,
+    },
+    loading: false,
+    hasMore: true,
+    loaded: 0,
+    total: null,         // если API отдаёт total
+    selectedCode: null,
+    reqSeq: 0,
+    skuCache: new Map(),
+    chartPrice: null,
+    chartStock: null,
+  };
+
+  /* ========= Helpers ========= */
+  function showToast(title, html, kind){
+    elToastTitle.textContent = title || "";
+    elToastBody.innerHTML = html || "";
+    elToast.className = "toast show " + (kind || "");
+    window.clearTimeout(showToast._t);
+    showToast._t = window.setTimeout(()=>{ elToast.className="toast"; }, 5500);
+  }
+
+  function rub(n){
+    if (n === null || n === undefined || n === "") return "—";
+    const num = Number(n);
+    if (Number.isNaN(num)) return String(n);
+    return num.toLocaleString("ru-RU");
+  }
+
+  function safeText(v){
+    return (v === null || v === undefined) ? "" : String(v);
+  }
+
+  function normalizeUrl(u){
+    if (!u) return null;
+    let s = String(u).trim();
+    if (!s) return null;
+    if (!/^https?:\/\//i.test(s)) s = "https://" + s;
+    return s;
+  }
+
+  function extractUrls(raw){
+    if (!raw) return [];
+    const s = String(raw);
+    // 1) вытащим явные http(s)
+    const urls = [];
+    const re1 = /https?:\/\/[^\s<>"']+/ig;
+    let m;
+    while ((m = re1.exec(s)) !== null) urls.push(m[0]);
+
+    // 2) если нет http(s), попробуем домены вида www.xxx или xxx.tld (очень грубо)
+    if (urls.length === 0) {
+      const re2 = /\b(?:www\.)?[a-z0-9][a-z0-9.-]+\.[a-z]{2,}\b/ig;
+      while ((m = re2.exec(s)) !== null) urls.push(normalizeUrl(m[0]));
     }
 
-    function renderProducts(items) {
-      const tbody = document.getElementById("productsTbody");
-      tbody.innerHTML = "";
-      items.forEach((item) => {
-        const tr = document.createElement("tr");
-        tr.classList.add("product-row");
-        tr.dataset.code = item.code;
+    // почистим мусорные хвосты
+    return Array.from(new Set(urls.map(x => String(x).replace(/[),.;]+$/,"")))).filter(Boolean);
+  }
 
-        const imgTd = document.createElement("td");
-        if (item.image_url) {
-          const img = document.createElement("img");
-          img.src = item.image_url;
-          img.alt = item.name;
-          img.style.maxWidth = "50px";
-          img.style.borderRadius = "4px";
-          imgTd.appendChild(img);
-        }
+  function getApiKey(){
+    const v = elApiKey.value.trim();
+    if (v) return v;
+    const stored = localStorage.getItem("wine_assistant_api_key");
+    return stored ? stored.trim() : "";
+  }
 
-        const nameTd = document.createElement("td");
-        nameTd.textContent = item.name;
+  function setApiStatus(text, kind){
+    elApiStatus.textContent = text;
+    elApiStatus.className = "status " + (kind || "");
+  }
 
-        const countryTd = document.createElement("td");
-        countryTd.textContent = item.country || "";
-
-        const regionTd = document.createElement("td");
-        regionTd.textContent = item.region || "";
-
-        const priceTd = document.createElement("td");
-        priceTd.textContent = item.price_final_rub || item.price_list_rub || "";
-
-        tr.appendChild(imgTd);
-        tr.appendChild(nameTd);
-        tr.appendChild(countryTd);
-        tr.appendChild(regionTd);
-        tr.appendChild(priceTd);
-
-        tr.addEventListener("click", () => {
-          loadSkuDetail(item.code);
-        });
-
-        tbody.appendChild(tr);
+  function buildUrl(path, params){
+    const url = new URL(path, window.location.origin);
+    if (params) {
+      Object.entries(params).forEach(([k,v])=>{
+        if (v === null || v === undefined) return;
+        const s = String(v).trim();
+        if (!s) return;
+        url.searchParams.set(k, s);
       });
     }
+    return url.toString();
+  }
 
-    function renderSkuCard(sku) {
-      // заголовок
-      document.getElementById("skuTitle").textContent = sku.title_ru || sku.name || sku.code;
 
-      // картинка
-      const imgEl = document.getElementById("skuImage");
-      if (sku.image_url) {
-        imgEl.src = sku.image_url;
-        imgEl.style.display = "block";
+  function normalizeTotal(rawTotal, itemsLen, offset, limit){
+    if (rawTotal === null || rawTotal === undefined) return null;
+    const t = Number(rawTotal);
+    if (!Number.isFinite(t)) return null;
+
+    // Если API на первой странице вернул total == limit (полная страница),
+    // это часто означает "вернули N" вместо "всего N" — не доверяем.
+    if (offset === 0 && itemsLen === limit && t === itemsLen) return null;
+
+    // Неконсистентный total (меньше, чем уже вернули для данного offset) — игнорируем.
+    if (t < offset + itemsLen) return null;
+
+    return t;
+  }
+
+  function ensureSentinel(){
+    // Sentinel должен быть ВНУТРИ скролл-контейнера #rows и последним элементом,
+    // иначе IntersectionObserver не срабатывает корректно при прокрутке.
+    if (!elSentinel) elSentinel = document.getElementById("sentinel");
+    if (!elSentinel){
+      elSentinel = document.createElement("div");
+      elSentinel.id = "sentinel";
+      elSentinel.style.height = "1px";
+      elRows.appendChild(elSentinel);
+    } else if (elSentinel.parentElement !== elRows){
+      elRows.appendChild(elSentinel);
+    }
+    if (elRows.lastElementChild !== elSentinel){
+      elRows.appendChild(elSentinel);
+    }
+    return elSentinel;
+  }
+
+  function clearRowsKeepSentinel(){
+    ensureSentinel();
+    // Удаляем только строки, оставляя sentinel (нужен для infinite scroll).
+    elRows.querySelectorAll(".row").forEach(n => n.remove());
+    if (elRows.lastElementChild !== elSentinel) elRows.appendChild(elSentinel);
+  }
+
+  async function apiFetchJson(path, params){
+    const apiKey = getApiKey();
+    const url = buildUrl(path, params);
+
+    const headers = {};
+    if (apiKey) headers["X-API-Key"] = apiKey;
+
+    const res = await fetch(url, { headers });
+
+    // Попробуем прочитать body и как JSON, и как текст
+    const ctype = res.headers.get("content-type") || "";
+    let payload = null;
+    if (ctype.includes("application/json")) {
+      payload = await res.json().catch(()=>null);
+    } else {
+      const t = await res.text().catch(()=> "");
+      payload = t ? { raw: t } : null;
+    }
+
+    if (!res.ok){
+      const msg = payload && payload.error ? payload.error : (payload && payload.raw ? payload.raw : res.statusText);
+      const rid = payload && payload.request_id ? payload.request_id : null;
+
+      if (res.status === 401 || res.status === 403){
+        setApiStatus("Нет доступа (проверьте X-API-Key)", "error");
+        showToast("Авторизация", "API вернул <b>" + res.status + "</b>. Укажите корректный <code>X-API-Key</code> в шапке.", "error");
       } else {
-        imgEl.src = "";
-        imgEl.style.display = "none";
+        setApiStatus("Ошибка API", "error");
+        showToast("Ошибка API", "HTTP <b>" + res.status + "</b>: " + safeText(msg) + (rid ? "<br/>request_id: <code>"+rid+"</code>" : ""), "error");
       }
 
-      // базовая инфа
-      const basicInfo = [];
-      if (sku.country) basicInfo.push(sku.country);
-      if (sku.region) basicInfo.push(sku.region);
-      if (sku.color) basicInfo.push(sku.color);
-      if (sku.vintage) basicInfo.push(String(sku.vintage));
-      if (sku.style) basicInfo.push(sku.style);
-      document.getElementById("skuBasicInfo").textContent = basicInfo.join(" · ");
-
-      // meta: поставщик, винодельня
-      const metaParts = [];
-      if (sku.supplier_ru || sku.supplier) {
-        metaParts.push("Поставщик: " + (sku.supplier_ru || sku.supplier));
-      }
-      if (sku.winery_name_ru) {
-        metaParts.push("Винодельня: " + sku.winery_name_ru);
-      }
-      document.getElementById("skuMeta").textContent = metaParts.join(" | ");
-
-      // сайт производителя
-      const siteEl = document.getElementById("skuProducerSite");
-      if (sku.producer_site) {
-        siteEl.href = sku.producer_site;
-        siteEl.textContent = sku.producer_site;
-        siteEl.style.display = "inline";
-      } else {
-        siteEl.href = "#";
-        siteEl.textContent = "";
-        siteEl.style.display = "none";
-      }
-
-      // описание винодельни
-      document.getElementById("skuWineryDescription").textContent =
-        sku.winery_description_ru || "Описание винодельни недоступно.";
+      const err = new Error("API error " + res.status);
+      err.status = res.status;
+      err.payload = payload;
+      throw err;
     }
 
-    function renderHistoryChart(ctx, existingChart, label, dataPoints, valueKey) {
-      const labels = dataPoints.map((p) => p.effective_from || p.as_of || "");
-      const values = dataPoints.map((p) => p[valueKey]);
+    // Если всё ок — отметим, что ключ “живой” (если он задан)
+    if (getApiKey()) setApiStatus("Ключ принят (запросы выполняются)", "ok");
+    return payload;
+  }
 
-      if (existingChart) {
-        existingChart.destroy();
-      }
+  function setLoading(on){
+    state.loading = on;
+    elFooterRight.style.display = on ? "inline-flex" : "none";
+    elSearchBtn.disabled = on;
+  }
 
-      return new Chart(ctx, {
-        type: "line",
-        data: {
-          labels,
-          datasets: [
-            {
-              label,
-              data: values,
-              tension: 0.2,
-            },
-          ],
-        },
-        options: {
-          responsive: true,
-          scales: {
-            x: {
-              ticks: { maxRotation: 45, minRotation: 0 },
-            },
-          },
-        },
-      });
-    }
+  function updateListMeta(){
+    const parts = [];
+    parts.push("загружено: " + state.loaded);
+    if (state.total !== null && state.total !== undefined) parts.push("total: " + state.total);
+    if (!state.hasMore) parts.push("конец списка");
+    elListMeta.textContent = parts.join(" • ");
+  }
 
-    async function loadSkuDetail(code) {
-      try {
-        const sku = await apiGet(`/sku/${code}`);
-        renderSkuCard(sku);
+  function clearList(){
+    clearRowsKeepSentinel();
+    state.loaded = 0;
+    state.total = null;
+    state.query.offset = 0;
+    state.hasMore = true;
+    updateListMeta();
+  }
 
-        const [priceHistory, inventoryHistory] = await Promise.all([
-          apiGet(`/sku/${code}/price-history`, {
-            from: "2020-01-01",
-            to: "2030-12-31",
-            limit: 100,
-          }),
-          apiGet(`/sku/${code}/inventory-history`, {
-            from: "2020-01-01",
-            to: "2030-12-31",
-            limit: 100,
-          }),
-        ]);
+  function renderRow(item){
+    const code = safeText(item.code);
+    const name = safeText(item.name || item.title_ru || item.title_en || code);
+    const country = safeText(item.country);
+    const region = safeText(item.region);
+    const price = (item.price_final_rub ?? item.price_list_rub ?? item.price_rub);
+    const stockFree = item.stock_free;
+    const stockTotal = item.stock_total;
 
-        const priceCtx = document.getElementById("priceHistoryChart").getContext("2d");
-        const invCtx = document.getElementById("inventoryHistoryChart").getContext("2d");
+    const row = document.createElement("div");
+    row.className = "row" + (state.selectedCode === code ? " selected" : "");
+    row.dataset.code = code;
 
-        priceChart = renderHistoryChart(
-          priceCtx,
-          priceChart,
-          "Цена, ₽",
-          priceHistory.items || [],
-          "price_rub"
-        );
+    const thumb = document.createElement("div");
+    thumb.className = "thumb";
+    const img = document.createElement("img");
+    img.alt = code;
+    img.loading = "lazy";
+    img.src = safeText(item.image_url || (code ? ("/sku/" + encodeURIComponent(code) + "/image") : ""));
+    img.onerror = function(){
+      img.onerror = null;
+      img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="100%" height="100%" fill="#f8fafc"/><text x="50%" y="52%" dominant-baseline="middle" text-anchor="middle" font-family="Arial" font-size="12" fill="#6b7280">no image</text></svg>'
+      );
+    };
+    thumb.appendChild(img);
 
-        inventoryChart = renderHistoryChart(
-          invCtx,
-          inventoryChart,
-          "Остаток, шт",
-          inventoryHistory.items || [],
-          "stock_total"
-        );
-      } catch (err) {
-        console.error(err);
-        alert("Ошибка при загрузке SKU или истории: " + err.message);
-      }
-    }
+    const mid = document.createElement("div");
+    const nm = document.createElement("div");
+    nm.className = "name";
+    nm.textContent = name;
+    const sub = document.createElement("div");
+    sub.className = "sub";
+    const a = [];
+    if (country) a.push(country);
+    if (region) a.push(region);
+    if (stockFree !== undefined && stockFree !== null) a.push("free: " + rub(stockFree));
+    if (stockTotal !== undefined && stockTotal !== null) a.push("total: " + rub(stockTotal));
+    sub.textContent = a.join(" · ");
+    mid.appendChild(nm);
+    mid.appendChild(sub);
 
-    async function performSearch() {
-      const query = document.getElementById("searchQuery").value.trim();
-      const country = document.getElementById("searchCountry").value.trim();
-      const region = document.getElementById("searchRegion").value.trim();
+    const right = document.createElement("div");
+    right.className = "price";
+    right.innerHTML = rub(price) + "<small>SKU " + code + "</small>";
 
-      const params = { limit: 50, in_stock: "true" };
-      if (query) params.q = query;
-      if (country) params.country = country;
-      if (region) params.region = region;
+    row.appendChild(thumb);
+    row.appendChild(mid);
+    row.appendChild(right);
 
-      try {
-        const res = await apiGet("/products/search", params);
-        renderProducts(res.items || []);
-      } catch (err) {
-        console.error(err);
-        alert("Ошибка поиска: " + err.message);
-      }
-    }
+    row.addEventListener("click", ()=> selectSku(code));
+    return row;
+  }
 
-    document.addEventListener("DOMContentLoaded", () => {
-      document.getElementById("searchBtn").addEventListener("click", performSearch);
+  function renderRowsAppend(items){
+    const frag = document.createDocumentFragment();
+    for (const it of items) frag.appendChild(renderRow(it));
+    ensureSentinel();
+    elRows.insertBefore(frag, elSentinel);
+  }
 
-      document.getElementById("searchQuery").addEventListener("keydown", (e) => {
-        if (e.key === "Enter") performSearch();
-      });
-
-      performSearch(); // начальная загрузка
+  function markSelectedRow(){
+    const nodes = elRows.querySelectorAll(".row");
+    nodes.forEach(n=>{
+      if (n.dataset.code === state.selectedCode) n.classList.add("selected");
+      else n.classList.remove("selected");
     });
-  </script>
+  }
+
+  /* ========= Search & Infinite Scroll ========= */
+  function buildSearchParams(){
+    const q = elQ.value.trim();
+    const country = elCountry.value.trim();
+    const region = elRegion.value.trim();
+    const inStock = !!elInStock.checked;
+
+    return {
+      limit: state.query.limit,
+      offset: state.query.offset,
+      in_stock: inStock ? "true" : "false",
+      q: q || undefined,
+      country: country || undefined,
+      region: region || undefined,
+    };
+  }
+
+  async function loadNextPage(){
+    if (state.loading || !state.hasMore) return;
+
+    // Первую страницу загружает performSearch(); сюда приходим только за "следующей".
+    if (state.query.offset === 0 && state.loaded === 0) return;
+
+    const mySeq = ++state.reqSeq;
+    setLoading(true);
+    elFooterLeft.textContent = "Загрузка…";
+
+    try{
+      const params = buildSearchParams();
+      const data = await apiFetchJson(API_PREFIX + "/products/search", params);
+
+      // Если параллельно пришёл новый запрос — не применяем старые результаты.
+      if (mySeq !== state.reqSeq) return;
+
+      const items = (data && data.items) ? data.items : [];
+      const rawTotal = (data && (data.total !== undefined)) ? data.total : null;
+
+      const normalizedTotal = normalizeTotal(rawTotal, items.length, state.query.offset, state.query.limit);
+      if (normalizedTotal !== null) state.total = normalizedTotal;
+
+      if (!items.length){
+        state.hasMore = false;
+        elFooterLeft.textContent = "Конец списка";
+        updateListMeta();
+        return;
+      }
+
+      renderRowsAppend(items);
+
+      state.loaded += items.length;
+      state.query.offset += items.length;
+
+      // Пагинация: продолжаем, если пришла "полная" страница.
+      state.hasMore = (items.length >= state.query.limit);
+
+      // Если total выглядит консистентным — ограничиваемся им.
+      if (state.total !== null && state.loaded >= state.total) state.hasMore = false;
+
+      updateListMeta();
+
+      elFooterLeft.textContent = state.hasMore ? "Прокрутите вниз для догрузки" : "Конец списка";
+    } catch(err){
+      // Ошибка уже показана toast'ом внутри apiFetchJson
+      elFooterLeft.textContent = "Ошибка загрузки";
+    } finally{
+      setLoading(false);
+    }
+  }
+
+  async function performSearch(){
+    // новый поиск => сброс и новый seq
+    state.reqSeq++;
+    state.query.offset = 0;
+    state.hasMore = true;
+    state.loaded = 0;
+    state.total = null;
+
+    clearRowsKeepSentinel();
+    elFooterLeft.textContent = "Загрузка…";
+    updateListMeta();
+
+    // Поставим новую “версию” запроса
+    const mySeq = ++state.reqSeq;
+    setLoading(true);
+
+    try{
+      const params = buildSearchParams();
+      const data = await apiFetchJson(API_PREFIX + "/products/search", params);
+      if (mySeq !== state.reqSeq) return;
+
+      const items = (data && data.items) ? data.items : [];
+      const rawTotal = (data && (data.total !== undefined)) ? data.total : null;
+
+      state.total = normalizeTotal(rawTotal, items.length, 0, state.query.limit);
+
+      if (!items.length){
+        state.hasMore = false;
+        elFooterLeft.textContent = "Ничего не найдено";
+        updateListMeta();
+        return;
+      }
+
+      renderRowsAppend(items);
+      state.loaded = items.length;
+      state.query.offset = items.length;
+
+      // Пагинация: продолжаем, если пришла "полная" страница.
+      state.hasMore = (items.length >= state.query.limit);
+
+      // Если total выглядит консистентным — ограничиваемся им.
+      if (state.total !== null && state.loaded >= state.total) state.hasMore = false;
+
+
+updateListMeta();
+      elFooterLeft.textContent = state.hasMore ? "Прокрутите вниз для догрузки" : "Конец списка";
+
+      // авто-выбор первого элемента
+      if (items[0] && items[0].code) selectSku(String(items[0].code));
+    } catch(err){
+      elFooterLeft.textContent = "Ошибка поиска";
+    } finally{
+      setLoading(false);
+    }
+  }
+
+  function setupInfiniteScroll(){
+    // 1) IntersectionObserver (предпочтительно)
+    if ("IntersectionObserver" in window){
+      const io = new IntersectionObserver((entries)=>{
+        for (const e of entries){
+          if (e.isIntersecting){
+            loadNextPage();
+          }
+        }
+      }, { root: elRows, rootMargin: "400px 0px" });
+
+      io.observe(ensureSentinel());
+      return;
+    }
+
+    // 2) Фоллбек: scroll
+    elRows.addEventListener("scroll", ()=>{
+      const nearBottom = elRows.scrollTop + elRows.clientHeight >= elRows.scrollHeight - 300;
+      if (nearBottom) loadNextPage();
+    });
+  }
+
+  /* ========= SKU Details ========= */
+  function renderLinks(raw){
+    const urls = extractUrls(raw);
+    if (!urls.length) return "<span style='color:var(--muted)'>—</span>";
+    return urls.map(u=>{
+      const nu = normalizeUrl(u) || u;
+      const label = u.replace(/^https?:\/\//i,"");
+      return "<a href='"+nu+"' target='_blank' rel='noopener noreferrer'>"+label+"</a>";
+    }).join("<br/>");
+  }
+
+  function destroyCharts(){
+    try{
+      if (state.chartPrice && state.chartPrice.destroy) state.chartPrice.destroy();
+      if (state.chartStock && state.chartStock.destroy) state.chartStock.destroy();
+    } catch(_){}
+    state.chartPrice = null;
+    state.chartStock = null;
+  }
+
+  function renderHistoryChart(canvas, existingChart, label, dataPoints, valueKey){
+    if (!window.Chart){
+      const p = canvas.parentElement.querySelector(".chartPlaceholder");
+      if (p) p.textContent = "Chart.js не загружен (CDN недоступен).";
+      return null;
+    }
+
+    const labels = dataPoints.map(p => p.effective_from || p.as_of || "");
+    const values = dataPoints.map(p => p[valueKey]);
+
+    if (existingChart) existingChart.destroy();
+
+    // Не задаём цвета явно (пусть Chart.js выберет дефолт)
+    return new Chart(canvas.getContext("2d"), {
+      type: "line",
+      data: {
+        labels,
+        datasets: [{ label, data: values, tension: 0.2 }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: true } },
+        scales: {
+          x: { ticks: { maxRotation: 0, autoSkip: true } },
+          y: { beginAtZero: false }
+        }
+      }
+    });
+  }
+
+  async function selectSku(code){
+    if (!code) return;
+    state.selectedCode = code;
+    markSelectedRow();
+    elDetailMeta.textContent = "SKU " + code + " — загрузка…";
+    destroyCharts();
+
+    // cache
+    if (state.skuCache.has(code)){
+      const cached = state.skuCache.get(code);
+      renderSkuDetails(cached.sku, cached.priceHistory, cached.inventoryHistory);
+      elDetailMeta.textContent = "SKU " + code;
+      return;
+    }
+
+    try{
+      const [sku, priceHistory, inventoryHistory] = await Promise.all([
+        apiFetchJson(API_PREFIX + "/sku/" + encodeURIComponent(code)),
+        apiFetchJson(API_PREFIX + "/sku/" + encodeURIComponent(code) + "/price-history").catch(()=>({ items: [] })),
+        apiFetchJson(API_PREFIX + "/sku/" + encodeURIComponent(code) + "/inventory-history").catch(()=>({ items: [] })),
+      ]);
+
+      state.skuCache.set(code, { sku, priceHistory, inventoryHistory });
+      renderSkuDetails(sku, priceHistory, inventoryHistory);
+      elDetailMeta.textContent = "SKU " + code;
+    } catch(err){
+      elDetailMeta.textContent = "SKU " + code + " — ошибка";
+      elDetail.innerHTML = "<div class='desc' style='color:var(--danger)'>Не удалось загрузить карточку. Проверьте API key и доступность API.</div>";
+    }
+  }
+
+  function renderSkuDetails(sku, priceHistory, inventoryHistory){
+    const code = safeText(sku.code);
+    const name = safeText(sku.name || sku.title_ru || sku.title_en || code);
+    const country = safeText(sku.country);
+    const region = safeText(sku.region);
+    const color = safeText(sku.color);
+    const style = safeText(sku.style);
+    const grapes = safeText(sku.grapes);
+    const vintage = (sku.vintage !== null && sku.vintage !== undefined) ? String(sku.vintage) : "";
+    const supplier = safeText(sku.supplier);
+    const supplierRu = safeText(sku.supplier_ru);
+    const wineryName = safeText(sku.winery_name_ru);
+    const wineryDesc = safeText(sku.winery_description_ru);
+
+    const priceFinal = sku.price_final_rub ?? null;
+    const priceList = sku.price_list_rub ?? null;
+
+    const stockFree = sku.stock_free ?? null;
+    const stockTotal = sku.stock_total ?? null;
+
+    const producerSiteHtml = renderLinks(sku.producer_site);
+
+    const imgUrl = safeText(sku.image_url || (code ? ("/sku/" + encodeURIComponent(code) + "/image") : ""));
+
+    elDetail.innerHTML = `
+      <div class="detailTop">
+        <div class="heroImg">
+          <img src="${imgUrl}" alt="${code}" onerror="this.onerror=null;this.src='data:image/svg+xml;charset=utf-8,${encodeURIComponent('<svg xmlns=&quot;http://www.w3.org/2000/svg&quot; width=&quot;200&quot; height=&quot;200&quot;><rect width=&quot;100%&quot; height=&quot;100%&quot; fill=&quot;#f8fafc&quot;/><text x=&quot;50%&quot; y=&quot;52%&quot; dominant-baseline=&quot;middle&quot; text-anchor=&quot;middle&quot; font-family=&quot;Arial&quot; font-size=&quot;14&quot; fill=&quot;#6b7280&quot;>no image</text></svg>')}'" />
+        </div>
+        <div>
+          <h1 class="h1">${name}</h1>
+
+          <div class="sub" style="margin-bottom:8px;">
+            ${supplier ? ("Поставщик: <b>" + supplier + "</b>") : ""}
+            ${supplierRu ? ("<span style='color:var(--muted)'>(" + supplierRu + ")</span>") : ""}
+            ${wineryName ? ("<span> | Винодельня: <b>" + wineryName + "</b></span>") : ""}
+          </div>
+
+          <div style="margin: 6px 0 10px 0;">
+            <div class="sub" style="gap:10px;">
+              <span>Сайт производителя:</span>
+              <span>${producerSiteHtml}</span>
+            </div>
+          </div>
+
+          <div class="kvs">
+            <span class="kv"><b>Страна:</b> ${country || "—"}</span>
+            <span class="kv"><b>Регион:</b> ${region || "—"}</span>
+            <span class="kv"><b>Цвет:</b> ${color || "—"}</span>
+            <span class="kv"><b>Стиль:</b> ${style || "—"}</span>
+            <span class="kv"><b>Сорт:</b> ${grapes || "—"}</span>
+            ${vintage ? `<span class="kv"><b>Год:</b> ${vintage}</span>` : ""}
+            <span class="kv"><b>Цена, ₽:</b> ${rub(priceFinal)}</span>
+            <span class="kv"><b>Прайс, ₽:</b> ${rub(priceList)}</span>
+            <span class="kv"><b>Остаток free:</b> ${rub(stockFree)}</span>
+            <span class="kv"><b>Остаток total:</b> ${rub(stockTotal)}</span>
+            <span class="kv"><b>SKU:</b> ${code}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="sectionTitle">Описание винодельни</div>
+        <div class="desc">${wineryDesc ? escapeHtml(wineryDesc) : "<span style='color:var(--muted)'>—</span>"}</div>
+      </div>
+
+      <div class="section">
+        <div class="grid2">
+          <div class="chartBox">
+            <div class="chartHead">
+              <h3>История цен</h3>
+              <span class="chip">${(priceHistory && priceHistory.items && priceHistory.items.length) ? (priceHistory.items.length + " точек") : "нет данных"}</span>
+            </div>
+            <div class="chartPlaceholder">${window.Chart ? "" : "Загрузка Chart.js…"}</div>
+            <canvas id="priceChart"></canvas>
+          </div>
+
+          <div class="chartBox">
+            <div class="chartHead">
+              <h3>История остатков</h3>
+              <span class="chip">${(inventoryHistory && inventoryHistory.items && inventoryHistory.items.length) ? (inventoryHistory.items.length + " точек") : "нет данных"}</span>
+            </div>
+            <div class="chartPlaceholder">${window.Chart ? "" : "Загрузка Chart.js…"}</div>
+            <canvas id="stockChart"></canvas>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // графики
+    const priceItems = (priceHistory && priceHistory.items) ? priceHistory.items : [];
+    const invItems = (inventoryHistory && inventoryHistory.items) ? inventoryHistory.items : [];
+    const priceCanvas = document.getElementById("priceChart");
+    const stockCanvas = document.getElementById("stockChart");
+
+    if (priceCanvas){
+      const placeholder = priceCanvas.parentElement.querySelector(".chartPlaceholder");
+      if (placeholder) placeholder.textContent = (priceItems.length ? "" : "Нет данных по истории цен.");
+      if (priceItems.length){
+        state.chartPrice = renderHistoryChart(priceCanvas, state.chartPrice, "Цена, ₽", priceItems, "price_rub");
+      }
+    }
+
+    if (stockCanvas){
+      const placeholder = stockCanvas.parentElement.querySelector(".chartPlaceholder");
+      if (placeholder) placeholder.textContent = (invItems.length ? "" : "Нет данных по истории остатков.");
+      if (invItems.length){
+        state.chartStock = renderHistoryChart(stockCanvas, state.chartStock, "Остаток, шт", invItems, "stock_total");
+      }
+    }
+  }
+
+  function escapeHtml(s){
+    return String(s)
+      .replaceAll("&","&amp;")
+      .replaceAll("<","&lt;")
+      .replaceAll(">","&gt;")
+      .replaceAll('"',"&quot;")
+      .replaceAll("'","&#039;");
+  }
+
+  /* ========= API key actions ========= */
+  function loadStoredKey(){
+    const stored = localStorage.getItem("wine_assistant_api_key");
+    if (stored) elApiKey.value = stored;
+  }
+
+  function saveKey(){
+    const v = elApiKey.value.trim();
+    if (!v){
+      showToast("X-API-Key", "Введите ключ, затем нажмите “Сохранить”.", "error");
+      return;
+    }
+    localStorage.setItem("wine_assistant_api_key", v);
+    setApiStatus("Ключ сохранён локально", "ok");
+    showToast("X-API-Key", "Ключ сохранён в <code>localStorage</code>.", "ok");
+  }
+
+  function clearKey(){
+    localStorage.removeItem("wine_assistant_api_key");
+    elApiKey.value = "";
+    setApiStatus("Ключ очищен", "");
+    showToast("X-API-Key", "Сохранённый ключ удалён.", "ok");
+  }
+
+  async function quickHealthCheck(){
+    // мягкая проверка: один запрос /health (если есть и не требует ключа — ок)
+    // если /health требует ключ — тоже ок, проверим что ключ даёт доступ
+    try{
+      await apiFetchJson("/health");
+      setApiStatus("API доступен", "ok");
+    } catch(_){
+      // игнорируем: часть инсталляций закрывает /health ключом или возвращает не-json
+    }
+  }
+
+  /* ========= Events ========= */
+  elSearchBtn.addEventListener("click", ()=> performSearch());
+  elResetBtn.addEventListener("click", ()=>{
+    elQ.value = "";
+    elCountry.value = "";
+    elRegion.value = "";
+    elInStock.checked = true; // по требованию: in_stock=true по умолчанию
+    clearList();
+    performSearch();
+  });
+
+  elSaveKeyBtn.addEventListener("click", ()=> saveKey());
+  elClearKeyBtn.addEventListener("click", ()=> clearKey());
+
+  [elQ, elCountry, elRegion].forEach(el=>{
+    el.addEventListener("keydown", (e)=>{
+      if (e.key === "Enter") performSearch();
+    });
+  });
+
+  elInStock.addEventListener("change", ()=>{
+    // По UX: изменение чекбокса сразу перезапускает поиск
+    performSearch();
+  });
+
+  /* ========= Init ========= */
+  async function init(){
+    loadStoredKey();
+
+    // Важно: по требованию — показываем только in_stock=true по умолчанию
+    elInStock.checked = true;
+
+    // стартовая загрузка
+    await performSearch();
+
+    // догрузка при прокрутке
+    setupInfiniteScroll();
+
+    // необязательная health проверка
+    quickHealthCheck();
+  }
+
+  init();
+})();
+</script>
 </body>
 </html>

@@ -1,3 +1,27 @@
+### UI (`/ui`)
+
+Открыть витрину: `http://localhost:18000/ui`
+
+- По умолчанию включён `in_stock=true`.
+- Список догружается при прокрутке вниз (пагинация `limit/offset`), поэтому должны быть видны все позиции, а не только первые 30.
+
+### PowerShell: запросы к API (важно)
+
+В PowerShell `curl` часто является алиасом `Invoke-WebRequest`, поэтому для “классического” curl используйте `curl.exe`.
+Рекомендуемый вариант для вызовов API:
+
+```powershell
+$env:API_KEY = "ВАШ_API_KEY"
+Invoke-RestMethod "http://localhost:18000/health" -Headers @{ "X-API-Key" = $env:API_KEY }
+```
+
+Пример с `curl.exe`:
+
+```powershell
+curl.exe "http://localhost:18000/api/v1/products/search?limit=30&offset=0&in_stock=true" `
+  -H "X-API-Key: $($env:API_KEY)"
+```
+
 # Wine Assistant - Краткая шпаргалка по новым возможностям
 
 ## 🔑 Базовая настройка PowerShell
@@ -445,3 +469,17 @@ docker compose exec db psql -U postgres -d wine_db -c "SELECT current_user, curr
 **Создано:** 04 декабря 2025
 **Версия:** 1.0
 **Для:** Wine Assistant v0.5.0
+
+
+### Очистка тестовых данных
+
+```powershell
+# dry-run (по умолчанию)
+python scripts/cleanup_test_data.py
+
+# удалить по префиксу (например, интеграционные тесты)
+python scripts/cleanup_test_data.py --prefix INTTEST_ --apply
+
+# удалить конкретные SKU
+python scripts/cleanup_test_data.py --pattern D011352 --pattern D011331 --apply
+```
