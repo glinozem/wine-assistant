@@ -13,7 +13,10 @@ WORKDIR /app
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         curl \
+        git \
         build-essential \
+        imagemagick \
+        ghostscript \
         libpq-dev \
         fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
@@ -28,6 +31,7 @@ RUN python -m pip install --upgrade pip && \
 COPY api/ ./api/
 COPY scripts/ ./scripts/
 COPY db/ ./db/
+COPY etl/ ./etl/
 # Если у вас есть .env.example и он нужен внутри контейнера как дефолт:
 # COPY .env.example .env
 

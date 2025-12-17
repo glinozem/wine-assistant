@@ -1,4 +1,6 @@
 .PHONY: help dev-up dev-down dev-logs db-shell db-migrate         test test-unit test-int test-int-noslow lint fmt         check test-all test-db db-reset load-price show-quarantine
+.PHONY: sync-inventory-history sync-inventory-history-dry-run
+.PHONY: backfill-current-prices backfill-current-prices-dry-run
 
 # Значения по умолчанию для окружения, можно переопределить при вызове:
 # например: make test-int DB_HOST=127.0.0.1
@@ -14,6 +16,7 @@ else
   SET_DBTEST_ENV = RUN_DB_TESTS=1
 endif
 
+DOCKER_COMPOSE ?= docker compose
 
 # Путь к прайс-листу по умолчанию (можно переопределять при вызове)
 EXCEL_PATH ?= ./data/price-list.xlsx
@@ -41,18 +44,24 @@ help:
 	@echo "  make load-price      - загрузить прайс-лист в БД (scripts/load_csv)"
 	@echo "  make show-quarantine - показать последние строки из price_list_quarantine"
 	@echo "  make db-reset        - пересоздать БД (docker compose down -v && up db+migrator)"
+	@echo "  make sync-inventory-history        - синхронизировать текущие остатки (inventory) в историю (inventory_history)"
+	@echo "  make sync-inventory-history-dry-run - показать, сколько записей будет добавлено в inventory_history (без изменений БД)"
+	@echo "  make backfill-current-prices        - привести цены к контракту и дозаполнить current price rows в product_prices (apply)"
+	@echo "  make backfill-current-prices-dry-run - показать, что будет исправлено/вставлено (dry-run)"
+
+
 
 dev-up:
-	docker compose up -d db api
+	$(DOCKER_COMPOSE) up -d db api
 
 dev-down:
-	docker compose down
+	$(DOCKER_COMPOSE) down
 
 dev-logs:
-	docker compose logs -f api db
+	$(DOCKER_COMPOSE) logs -f api db
 
 db-shell:
-	docker compose exec db psql -U postgres -d wine_db
+	$(DOCKER_COMPOSE) exec db psql -U postgres -d wine_db
 
 db-migrate:
 	bash db/migrate.sh
@@ -85,11 +94,23 @@ test-db: test-int
 
 db-reset:
 	@echo "Пересоздаём docker-compose окружение с БД..."
-	docker compose down -v
-	docker compose up -d
+	$(DOCKER_COMPOSE) down -v
+	$(DOCKER_COMPOSE) up -d
 
 load-price:
 	python -m scripts.load_csv --excel "$(EXCEL_PATH)"
 
 show-quarantine:
 	psql "host=$(DB_HOST) port=$(DB_PORT) user=$(PGUSER) password=$(PGPASSWORD) dbname=$(PGDATABASE)" -c "SELECT id, envelope_id, code, dq_errors, created_at FROM price_list_quarantine ORDER BY created_at DESC LIMIT 50;"
+
+sync-inventory-history:
+	$(DOCKER_COMPOSE) exec api python -m scripts.sync_inventory_history
+
+backfill-current-prices-dry-run:
+	$(DOCKER_COMPOSE) exec api python -m scripts.backfill_current_prices --dry-run
+
+backfill-current-prices:
+	$(DOCKER_COMPOSE) exec api python -m scripts.backfill_current_prices --apply
+
+sync-inventory-history-dry-run:
+	$(DOCKER_COMPOSE) exec api python -m scripts.sync_inventory_history --dry-run

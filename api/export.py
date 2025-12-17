@@ -18,6 +18,7 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Table, TableStyle
 
 SearchItem = Mapping[str, Any]
 PriceHistory = Mapping[str, Any]
+InventoryHistory = Mapping[str, Any]
 
 
 # Имена шрифтов по умолчанию (fallback — встроенные Helvetica)
@@ -232,7 +233,14 @@ class ExportService:
 
         for wine in wines:
             title_ru = (wine.get("title_ru") or "")[:max_title_len]
-            price_final = wine.get("price_final_rub") or 0
+
+            price_list = wine.get("price_list_rub")
+            price_final = wine.get("price_final_rub")
+            if price_final is None:
+                price_final = price_list
+            if price_final is None:
+                price_final = 0
+
             grapes = wine.get("grapes") or ""
             vintage = wine.get("vintage") or ""
 
@@ -413,6 +421,81 @@ class ExportService:
         output = io.BytesIO()
         wb.save(output)
         return output.getvalue()
+
+
+    def export_inventory_history_to_excel(
+        self,
+        history: InventoryHistory,
+    ) -> bytes:
+        """
+        Экспорт истории остатков в Excel.
+
+        Ожидаемый формат history:
+        {
+            "code": "D011283",
+            "items": [
+                {
+                    "as_of": "2025-10-27 12:00:00",
+                    "stock_total": 12502,
+                    "stock_free": 12334,
+                    "reserved": 0,
+                },
+                ...
+            ],
+            "total": 2,
+            "limit": 50,
+            "offset": 0,
+        }
+        """
+        wb = Workbook()
+        ws = wb.active
+
+        code = history.get("code") or ""
+        ws.title = f"Inventory History {code}"
+
+        # Заголовок
+        ws.append(
+            [
+                "Дата (as_of)",
+                "Остаток (всего)",
+                "Зарезервировано",
+                "Свободно",
+            ]
+        )
+
+        for item in history.get("items", []):
+            stock_total = item.get("stock_total")
+            stock_free = item.get("stock_free")
+            reserved = item.get("reserved")
+
+            # Пытаемся аккуратно пересчитать reserved = stock_total - stock_free
+            try:
+                if stock_total is not None and stock_free is not None:
+                    reserved_calc = float(stock_total) - float(stock_free)
+
+                    # Если результат целый — выводим как int, чтобы в Excel было красиво
+                    if reserved_calc.is_integer():
+                        reserved = int(reserved_calc)
+                    else:
+                        reserved = reserved_calc
+            except Exception:
+                # Если расчёт не удался, оставляем reserved как есть
+                pass
+
+            ws.append(
+                [
+                    item.get("as_of"),
+                    stock_total,
+                    reserved,
+                    stock_free,
+                ]
+            )
+
+        output = io.BytesIO()
+        wb.save(output)
+        return output.getvalue()
+
+
 
     @staticmethod
     def _fmt_price(value: Any) -> str:
