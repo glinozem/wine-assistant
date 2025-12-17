@@ -10,6 +10,7 @@ from decimal import Decimal
 from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urljoin
 
 from flasgger import Swagger
 from flask import Flask, abort, g, jsonify, redirect, render_template, request, send_file, url_for
@@ -172,6 +173,13 @@ def _get_best_image_filename(code: str) -> str | None:
     return _IMAGE_INDEX.get(code)
 
 
+def _public_url(path: str) -> str:
+    base = os.getenv("API_BASE_URL") or os.getenv("PUBLIC_BASE_URL")
+    if not base:
+        return path  # относительный URL, безопасно
+    return urljoin(base.rstrip("/") + "/", path.lstrip("/"))
+
+
 def _resolve_image_url(code: str, existing_url: Any = None) -> str | None:
     """
     Возвращает стабильный URL на /sku/<code>/image если локальный файл существует.
@@ -180,7 +188,7 @@ def _resolve_image_url(code: str, existing_url: Any = None) -> str | None:
     """
     filename = _get_best_image_filename(code)
     if filename:
-        return url_for("sku_image", code=code, _external=True)
+        return _public_url(url_for("sku_image", code=code))
 
     if isinstance(existing_url, str) and existing_url.startswith(("http://", "https://")):
         return existing_url
