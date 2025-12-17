@@ -51,6 +51,9 @@ limits_config:
   ingestion_burst_size_mb: 32
   # Retention (хранение 7 дней)
   retention_period: 168h
+  max_query_series: 2000
+  max_streams_per_user: 0
+  max_entries_limit_per_query: 10000
 
 # Оптимизация запросов
 query_range:
