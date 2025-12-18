@@ -7,25 +7,48 @@ on:
     branches: [ master ]
   workflow_dispatch:
 
-# Не даём двум джобам (push и PR одного и того же бранча) идти параллельно
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
+  migration_lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate migrations layout
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python scripts/check_migrations.py
+
   tests:
+    needs: migration_lint
     runs-on: ubuntu-latest
 
     env:
       PYTHONUTF8: "1"
       PYTHONIOENCODING: "utf-8"
       TZ: Europe/Moscow
-      # Подключение к БД с хоста раннера (порт публикуем 5432:5432 в compose)
+      # DB for docker-compose (published port)
+      DB_PORT_OUT: 15432
+      # DB for migrate.sh / scripts / psql on host
       DB_HOST: 127.0.0.1
       DB_PORT: 15432
       DB_USER: postgres
       DB_PASSWORD: dev_local_pw
       DB_NAME: wine_db
+      # these are for postgres container
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: dev_local_pw
+      POSTGRES_DB: wine_db
       RUN_DB_TESTS: "1"
 
     steps:
@@ -37,7 +60,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
 
       - name: Install system deps (psql client)
         run: |
@@ -56,8 +79,9 @@ jobs:
       - name: Wait for DB readiness
         shell: bash
         run: |
+          set -Eeuo pipefail
           for i in {1..90}; do
-            if pg_isready -h "${DB_HOST}" -p "${DB_PORT}" >/dev/null 2>&1; then
+            if pg_isready -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" >/dev/null 2>&1; then
               echo "DB is ready"; exit 0
             fi
             sleep 1
@@ -66,11 +90,23 @@ jobs:
           docker compose logs db
           exit 1
 
-      - name: Apply SQL migrations
+      - name: Apply SQL migrations (idempotency check)
         env:
-          # на всякий случай прокидываем пароль и здесь
           PGPASSWORD: ${{ env.DB_PASSWORD }}
-        run: bash db/migrate.sh
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          bash db/migrate.sh
+          c1=$(psql -X -tA -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" -c "select count(*) from public.schema_migrations;")
+
+          bash db/migrate.sh
+          c2=$(psql -X -tA -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" -c "select count(*) from public.schema_migrations;")
+
+          if [[ "${c1}" != "${c2}" ]]; then
+            echo "::error::migrate.sh is not idempotent: schema_migrations count changed ${c1} -> ${c2}"
+            exit 1
+          fi
 
       - name: Run tests
         run: pytest -q -m "not monitoring"
