@@ -117,7 +117,6 @@ data/**/*.xlsx
 pgdata_*.tgz
 *.dump
 *.sql.gz
-*.zip
 *.7z
 *.rar
 *.sqlite
@@ -136,3 +135,5 @@ scripts/*fixed*.ps1
 scripts/*manual_smoke_check*.ps1
 
 docs/dev/README.snippet*.md
+
+/_bundles/
