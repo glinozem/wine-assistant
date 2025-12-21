@@ -1,0 +1,47 @@
+services:
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+    ports:
+      - "19000:9000"   # S3 API
+      - "19001:9001"   # Web console
+    volumes:
+      - minio_data:/data
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_started
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+      MINIO_BUCKET: ${MINIO_BUCKET:-wine-backups}
+    entrypoint: >
+      sh -lc "
+        echo 'Waiting for MinIO...';
+        until mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" 2>/dev/null; do
+          sleep 2;
+        done;
+        echo 'MinIO is reachable. Initializing bucket...';
+        mc mb -p "local/$MINIO_BUCKET" >/dev/null 2>&1 || true;
+        mc ls "local/$MINIO_BUCKET";
+        echo 'minio-init done';
+      "
+
+  # утилитный контейнер, чтобы не ставить mc на Windows
+  mc:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    profiles: ["tools"]
+    volumes:
+      - ./backups:/backups
+      - ./restore_tmp:/restore
+    entrypoint: ["sh", "-lc"]
+
+volumes:
+  minio_data:

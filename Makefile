@@ -19,6 +19,9 @@ endif
 
 DOCKER_COMPOSE ?= docker compose
 
+# Python launcher (override if needed): make PY=python3 ...
+PY ?= python
+
 # --- Analysis bundle (архив для ревью/диагностики) ---
 BUNDLE_OUT_DIR ?= ./_bundles
 
@@ -137,3 +140,136 @@ bundle-static:
 
 bundle-full:
 	$(POWERSHELL) $(POWERSHELL_ARGS) scripts/bundle.ps1 -OutDir "$(BUNDLE_OUT_DIR)" -IncludeStatic -IncludePipFreeze
+
+db-backup:
+	docker compose --profile backup run --rm backup backup
+
+db-restore-test:
+	docker compose --profile backup run --rm backup restore-test
+
+db-backup-dry-run-delete:
+	docker compose --profile backup run --rm backup bash -lc 'rclone delete "$${RCLONE_REMOTE}:$${S3_BUCKET}/$${S3_PREFIX}/" --min-age "$${RETENTION_REMOTE_DAYS}d" --dry-run'
+
+# -----------------------------
+# Backups: local + "remote" (MinIO)
+# -----------------------------
+
+DB_NAME ?= wine_db
+DB_USER ?= postgres
+DB_CONTAINER ?= wine-assistant-db
+
+BACKUPS_DIR ?= backups
+RESTORE_DIR ?= restore_tmp
+BACKUP_KEEP ?= 10
+
+MINIO_ROOT_USER ?= minioadmin
+MINIO_ROOT_PASSWORD ?= minioadmin123
+MINIO_BUCKET ?= wine-backups
+MINIO_PREFIX ?= postgres
+MINIO_ENDPOINT_INTERNAL ?= http://minio:9000
+
+# Важно: timestamp генерим питоном (кроссплатформенно)
+TS := $(shell $(PY) -c "import datetime as d; print(d.datetime.now().strftime('%Y%m%d_%H%M%S'))")
+BACKUP_FILE := $(DB_NAME)_$(TS).dump
+LATEST_BACKUP := $(shell $(PY) -c "import glob; f=sorted(glob.glob('$(BACKUPS_DIR)/$(DB_NAME)_*.dump')); print(f[-1] if f else '')")
+
+DC ?= docker compose
+DC_STORAGE = $(DC) -f docker-compose.yml -f docker-compose.storage.yml
+
+.PHONY: storage-up storage-down backups-list-local backups-list-remote backup-local backup-upload backup \
+        backup-download-remote restore-local restore-remote
+.PHONY: backup-verify
+.PHONY: prune-local
+.PHONY: prune-remote
+
+storage-up:
+	$(DC_STORAGE) up -d minio minio-init
+
+storage-down:
+	$(DC_STORAGE) down -v --remove-orphans
+
+backups-list-local:
+	python -c "import glob; [print(x) for x in sorted(glob.glob('$(BACKUPS_DIR)/*.dump'))]"
+
+backup-local:
+	python -c "import os; os.makedirs('$(BACKUPS_DIR)', exist_ok=True)"
+	$(DC) exec -T db bash -lc "pg_dump -U $(DB_USER) -d $(DB_NAME) -Fc -f /tmp/$(BACKUP_FILE)"
+	docker cp $(DB_CONTAINER):/tmp/$(BACKUP_FILE) $(BACKUPS_DIR)/$(BACKUP_FILE)
+	$(DC) exec -T db bash -lc "rm -f /tmp/$(BACKUP_FILE)"
+	@echo "OK: local backup -> $(BACKUPS_DIR)/$(BACKUP_FILE)"
+
+backup-upload: storage-up
+	$(DC_STORAGE) --profile tools run --rm mc "mc alias set local $(MINIO_ENDPOINT_INTERNAL) $(MINIO_ROOT_USER) $(MINIO_ROOT_PASSWORD) && \
+	  mc cp /backups/$(BACKUP_FILE) local/$(MINIO_BUCKET)/$(MINIO_PREFIX)/$(BACKUP_FILE) && \
+	  mc ls local/$(MINIO_BUCKET)/$(MINIO_PREFIX)/"
+
+backup: backup-local backup-verify backup-upload prune-local prune-remote
+backups-list-remote: storage-up
+	$(DC_STORAGE) --profile tools run --rm mc "mc alias set local $(MINIO_ENDPOINT_INTERNAL) $(MINIO_ROOT_USER) $(MINIO_ROOT_PASSWORD) && \
+	  mc ls local/$(MINIO_BUCKET)/$(MINIO_PREFIX)/"
+
+# Использование: make backup-download-remote FILE=wine_db_YYYYMMDD_HHMMSS.dump
+backup-download-remote: storage-up
+	python -c "import os; os.makedirs('$(RESTORE_DIR)', exist_ok=True)"
+	$(DC_STORAGE) --profile tools run --rm mc "mc alias set local $(MINIO_ENDPOINT_INTERNAL) $(MINIO_ROOT_USER) $(MINIO_ROOT_PASSWORD) && \
+	  mc cp local/$(MINIO_BUCKET)/$(MINIO_PREFIX)/$(FILE) /restore/$(FILE) && \
+	  ls -lah /restore/$(FILE)"
+
+# restore из локального файла:
+# - по умолчанию возьмёт самый свежий backups/wine_db_*.dump
+# - либо: make restore-local FILE=backups/wine_db_....dump
+restore-local:
+	python -c "import sys; f='$(FILE)' if '$(FILE)' else '$(LATEST_BACKUP)'; print('Using:', f) if f else sys.exit('No backup found. Set FILE=...')"
+	$(DC) stop api
+	$(DC) exec -T db bash -lc "dropdb -U $(DB_USER) --if-exists $(DB_NAME) && createdb -U $(DB_USER) $(DB_NAME)"
+	docker cp $(if $(FILE),$(FILE),$(LATEST_BACKUP)) $(DB_CONTAINER):/tmp/restore.dump
+	$(DC) exec -T db bash -lc "pg_restore -U $(DB_USER) -d $(DB_NAME) --clean --if-exists /tmp/restore.dump"
+	$(DC) start api
+	@echo "OK: restore completed"
+
+# restore из MinIO: make restore-remote FILE=wine_db_....dump
+restore-remote: backup-download-remote
+	$(MAKE) restore-local FILE=$(RESTORE_DIR)/$(FILE)
+
+# Download latest remote backup from MinIO into restore_tmp/remote_latest.dump
+.PHONY: backup-download-remote-latest restore-remote-latest
+
+backup-download-remote-latest: storage-up
+	$(PY) -m scripts.minio_backups download-latest --bucket $(MINIO_BUCKET) --prefix $(MINIO_PREFIX) --endpoint $(MINIO_ENDPOINT_INTERNAL) --user $(MINIO_ROOT_USER) --password $(MINIO_ROOT_PASSWORD) --restore-dir $(RESTORE_DIR) --dest-name remote_latest.dump
+
+# Restore DB from latest remote backup (remote_latest.dump)
+restore-remote-latest: backup-download-remote-latest
+	$(MAKE) restore-local FILE=$(RESTORE_DIR)/remote_latest.dump
+
+backup-verify:
+	@echo "Verifying dump using pg_restore -l (inside db container)..."
+	@echo "  file: $(if $(FILE),$(FILE),$(BACKUPS_DIR)/$(BACKUP_FILE))"
+	@docker cp "$(if $(FILE),$(FILE),$(BACKUPS_DIR)/$(BACKUP_FILE))" $(DB_CONTAINER):/tmp/verify.dump
+	@$(DC) exec -T db bash -lc "pg_restore -l /tmp/verify.dump > /dev/null"
+	@$(DC) exec -T db bash -lc "rm -f /tmp/verify.dump"
+	@echo "OK: backup verified"
+
+prune-local:
+	@echo "Pruning local backups: keep last $(BACKUP_KEEP)"
+	@python -c "import glob; from pathlib import Path; d=Path('$(BACKUPS_DIR)'); d.mkdir(parents=True, exist_ok=True); keep=int('$(BACKUP_KEEP)'); pat=str(d/'$(DB_NAME)_*.dump'); files=sorted(glob.glob(pat), reverse=True); print(f'[prune-local] found={len(files)} keep={keep}'); [print('  keep:', f) for f in files[:keep]]; [ (print('  delete:', f), Path(f).unlink(missing_ok=True)) for f in files[keep:] ]"
+
+prune-remote: storage-up
+	@echo "Pruning remote backups in MinIO: keep last $(BACKUP_KEEP)"
+	$(PY) -m scripts.minio_backups prune --keep $(BACKUP_KEEP) --bucket $(MINIO_BUCKET) --prefix $(MINIO_PREFIX) --endpoint $(MINIO_ENDPOINT_INTERNAL) --user $(MINIO_ROOT_USER) --password $(MINIO_ROOT_PASSWORD)
+
+# --- DR / Backups helpers -------------------------------------------------
+# Windows-friendly PowerShell invocation from make.
+# BACKUP_KEEP can be overridden per command:
+#   make dr-smoke-truncate BACKUP_KEEP=2
+
+DR_BACKUP_KEEP ?= 2
+POWERSHELL  ?= powershell
+PSFLAGS     := -NoProfile -ExecutionPolicy Bypass -File
+
+.PHONY: dr-smoke-truncate dr-smoke-dropvolume
+
+dr-smoke-truncate:
+	$(POWERSHELL) $(PSFLAGS) scripts/dr_smoke.ps1 -Mode truncate -BackupKeep $(DR_BACKUP_KEEP)
+
+dr-smoke-dropvolume:
+	$(POWERSHELL) $(PSFLAGS) scripts/dr_smoke.ps1 -Mode dropvolume -BackupKeep $(DR_BACKUP_KEEP)

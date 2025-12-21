@@ -19,6 +19,7 @@ services:
       start_period: 3s
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./backups:/backups
     restart: unless-stopped
 
   migrator:
@@ -88,6 +89,22 @@ services:
     ports:
       - "127.0.0.1:${ADMINER_PORT_OUT:-18080}:8080"
     restart: unless-stopped
+
+  backup:
+    build:
+      context: .
+      dockerfile: ops/backup/Dockerfile
+    profiles: [ "backup" ]
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env.backup
+    volumes:
+      - ./backups:/backups
+    entrypoint: [ "/usr/local/bin/backup.sh" ]
+    # по умолчанию: сделаем backup; можно вызвать restore-test отдельной командой
+    command: [ "backup" ]
 
 volumes:
   pgdata:

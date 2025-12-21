@@ -140,3 +140,6 @@ docs/dev/README.snippet*.md
 /_bundles/
 wine-assistant_analysis_bundle_*.zip
 /_analysis_bundle_staging/
+
+/backups/
+/restore_tmp/
