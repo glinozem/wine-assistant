@@ -27,6 +27,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional
 
+from scripts.emit_event import Event, emit
+
 
 @dataclass(frozen=True)
 class McContext:
@@ -136,13 +138,47 @@ def list_remote_dumps(ctx: McContext) -> List[str]:
     return keys
 
 
-def prune_remote(ctx: McContext, keep: int, *, dry_run: bool = False) -> int:
+def prune_remote(
+    ctx: McContext,
+    keep: int,
+    *,
+    dry_run: bool = False,
+    emit_json: bool = False,
+    log_file: Optional[Path] = None,
+) -> int:
     keys = list_remote_dumps(ctx)
     count = len(keys)
     print(f"[prune-remote] Found={count} Keep={keep}")
 
+    if emit_json and log_file:
+        emit(
+            Event(
+                level="info",
+                service="backup",
+                event="prune_remote_started",
+                fields={"keep": keep, "found_count": count, "dry_run": dry_run},
+            ),
+            log_file=log_file,
+        )
+
     if count <= keep:
         print("[prune-remote] Nothing to delete")
+        if emit_json and log_file:
+            emit(
+                Event(
+                    level="info",
+                    service="backup",
+                    event="prune_remote_completed",
+                    fields={
+                        "keep": keep,
+                        "found_count": count,
+                        "deleted_count": 0,
+                        "kept_count": count,
+                        "dry_run": dry_run,
+                    },
+                ),
+                log_file=log_file,
+            )
         return 0
 
     to_delete = keys[: max(0, count - keep)]
@@ -151,6 +187,22 @@ def prune_remote(ctx: McContext, keep: int, *, dry_run: bool = False) -> int:
 
     if dry_run:
         print("[prune-remote] dry-run: no deletions performed")
+        if emit_json and log_file:
+            emit(
+                Event(
+                    level="info",
+                    service="backup",
+                    event="prune_remote_completed",
+                    fields={
+                        "keep": keep,
+                        "found_count": count,
+                        "deleted_count": len(to_delete),
+                        "kept_count": count - len(to_delete),
+                        "dry_run": True,
+                    },
+                ),
+                log_file=log_file,
+            )
         return 0
 
     # Delete one-by-one (safe; object count is typically small). No external tools.
@@ -159,10 +211,33 @@ def prune_remote(ctx: McContext, keep: int, *, dry_run: bool = False) -> int:
         remote = f"{ctx.remote_path()}{k}"
         run_mc_sh(ctx, mc_alias_and(f"mc rm '{remote}'", ctx), check=True)
 
+    if emit_json and log_file:
+        emit(
+            Event(
+                level="info",
+                service="backup",
+                event="prune_remote_completed",
+                fields={
+                    "keep": keep,
+                    "found_count": count,
+                    "deleted_count": len(to_delete),
+                    "kept_count": count - len(to_delete),
+                    "dry_run": False,
+                },
+            ),
+            log_file=log_file,
+        )
+
     return 0
 
-
-def download_latest(ctx: McContext, restore_dir: Path, dest_name: str) -> int:
+def download_latest(
+    ctx: McContext,
+    restore_dir: Path,
+    dest_name: str,
+    *,
+    emit_json: bool = False,
+    log_file: Optional[Path] = None,
+) -> int:
     restore_dir.mkdir(parents=True, exist_ok=True)
 
     keys = list_remote_dumps(ctx)
@@ -173,6 +248,17 @@ def download_latest(ctx: McContext, restore_dir: Path, dest_name: str) -> int:
     latest = keys[-1]
     print(f"[download-latest] latest={latest}")
 
+    if emit_json and log_file:
+        emit(
+            Event(
+                level="info",
+                service="backup",
+                event="download_latest_started",
+                fields={"latest": latest, "dest_name": dest_name},
+            ),
+            log_file=log_file,
+        )
+
     # Copy into the container-mounted /restore path.
     # In docker-compose.storage.yml the `mc` tools container should mount:
     #   - ./restore_tmp:/restore
@@ -182,8 +268,19 @@ def download_latest(ctx: McContext, restore_dir: Path, dest_name: str) -> int:
 
     host_path = restore_dir / dest_name
     print(f"[download-latest] downloaded -> {host_path}")
-    return 0
 
+    if emit_json and log_file:
+        emit(
+            Event(
+                level="info",
+                service="backup",
+                event="download_latest_completed",
+                fields={"latest": latest, "dest_name": dest_name, "host_path": str(host_path)},
+            ),
+            log_file=log_file,
+        )
+
+    return 0
 
 def build_ctx_from_args(args: argparse.Namespace) -> McContext:
     prefix = args.prefix or ""
@@ -218,6 +315,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         sp.add_argument("--compose-profile", default="tools", help="Compose profile used for the mc container (default: tools)")
         sp.add_argument("--compose-service", default="mc", help="Compose service name for the mc container (default: mc)")
+        sp.add_argument("--emit-json", action="store_true", help="Emit structured JSON events (intended for Promtail/Loki)")
+        sp.add_argument("--log-file", default=None, help="If set with --emit-json, append JSONL events to this file")
 
     sp_list = sub.add_parser("list", help="List remote .dump files")
     add_common(sp_list)
@@ -242,10 +341,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     if args.cmd == "prune":
-        return prune_remote(ctx, keep=args.keep, dry_run=args.dry_run)
+        return prune_remote(ctx, keep=args.keep, dry_run=args.dry_run, emit_json=args.emit_json, log_file=Path(args.log_file) if args.log_file else None)
 
     if args.cmd == "download-latest":
-        return download_latest(ctx, restore_dir=Path(args.restore_dir), dest_name=args.dest_name)
+        return download_latest(ctx, restore_dir=Path(args.restore_dir), dest_name=args.dest_name, emit_json=args.emit_json, log_file=Path(args.log_file) if args.log_file else None)
 
     raise AssertionError("unreachable")
 

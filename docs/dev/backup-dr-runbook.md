@@ -117,3 +117,21 @@ docker compose -f docker-compose.yml -f docker-compose.storage.yml down --remove
 
 - `dr-smoke-truncate` and `dr-smoke-dropvolume` are intended for **local environments only**.
 - Do not run destructive operations against shared or production databases.
+
+## Backup/DR observability (optional)
+
+If you run the observability stack (`docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d`),
+backup/DR workflows emit structured JSONL events into:
+
+- `logs/backup-dr/events.jsonl`
+
+Promtail is configured to scrape this file (mounted into the `promtail` container) and push events to Loki.
+Grafana will auto-provision the dashboard:
+
+- **Wine Assistant — Backup & DR** (`observability/grafana/dashboards/wine-assistant-backup-dr.json`)
+
+Typical signals:
+- Backups completed (24h)
+- Age since last local backup (seconds)
+- Restore operations completed (7d)
+- Remote pruned backups (deleted_count sum, 7d)
