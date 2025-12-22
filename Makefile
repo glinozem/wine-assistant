@@ -18,6 +18,7 @@ else
 endif
 
 DOCKER_COMPOSE ?= docker compose
+OBS_DOCKER_COMPOSE ?= $(DOCKER_COMPOSE) -f docker-compose.yml -f docker-compose.storage.yml -f docker-compose.observability.yml
 
 # Python launcher (override if needed): make PY=python3 ...
 PY ?= python
@@ -77,11 +78,29 @@ dev-down:
 dev-logs:
 	$(DOCKER_COMPOSE) logs -f api db
 
+# Observability stack (Grafana/Loki/Promtail) - start/stop without orphan warnings
+.PHONY: obs-up obs-down obs-restart obs-logs
+obs-up:
+	$(OBS_DOCKER_COMPOSE) up -d grafana loki promtail
+
+obs-down:
+	$(OBS_DOCKER_COMPOSE) stop grafana loki promtail
+
+obs-restart:
+	$(OBS_DOCKER_COMPOSE) restart grafana loki promtail
+
+obs-logs:
+	$(OBS_DOCKER_COMPOSE) logs -f --tail=200 grafana loki promtail
+
 db-shell:
 	$(DOCKER_COMPOSE) exec db psql -U postgres -d wine_db
 
 db-migrate:
+ifeq ($(OS),Windows_NT)
+	$(POWERSHELL) $(POWERSHELL_ARGS) db/migrate.ps1
+else
 	bash db/migrate.sh
+endif
 
 test:
 	pytest -q
@@ -115,7 +134,7 @@ db-reset:
 	$(DOCKER_COMPOSE) up -d
 
 load-price:
-	python -m scripts.load_csv --excel "$(EXCEL_PATH)"
+	$(PY) -m scripts.load_csv --excel "$(EXCEL_PATH)"
 
 show-quarantine:
 	psql "host=$(DB_HOST) port=$(DB_PORT) user=$(PGUSER) password=$(PGPASSWORD) dbname=$(PGDATABASE)" -c "SELECT id, envelope_id, code, dq_errors, created_at FROM price_list_quarantine ORDER BY created_at DESC LIMIT 50;"
@@ -142,13 +161,13 @@ bundle-full:
 	$(POWERSHELL) $(POWERSHELL_ARGS) scripts/bundle.ps1 -OutDir "$(BUNDLE_OUT_DIR)" -IncludeStatic -IncludePipFreeze
 
 db-backup:
-	docker compose --profile backup run --rm backup backup
+	$(DOCKER_COMPOSE) --profile backup run --rm backup backup
 
 db-restore-test:
-	docker compose --profile backup run --rm backup restore-test
+	$(DOCKER_COMPOSE) --profile backup run --rm backup restore-test
 
 db-backup-dry-run-delete:
-	docker compose --profile backup run --rm backup bash -lc 'rclone delete "$${RCLONE_REMOTE}:$${S3_BUCKET}/$${S3_PREFIX}/" --min-age "$${RETENTION_REMOTE_DAYS}d" --dry-run'
+	$(DOCKER_COMPOSE) --profile backup run --rm backup bash -lc 'rclone delete "$${RCLONE_REMOTE}:$${S3_BUCKET}/$${S3_PREFIX}/" --min-age "$${RETENTION_REMOTE_DAYS}d" --dry-run'
 
 # -----------------------------
 # Backups: local + "remote" (MinIO)
@@ -162,6 +181,10 @@ BACKUPS_DIR ?= backups
 RESTORE_DIR ?= restore_tmp
 BACKUP_KEEP ?= 10
 
+
+# JSONL log file for backup/DR events (used by Promtail/Loki in observability stack)
+BACKUP_EVENTS_LOG ?= logs/backup-dr/events.jsonl
+
 MINIO_ROOT_USER ?= minioadmin
 MINIO_ROOT_PASSWORD ?= minioadmin123
 MINIO_BUCKET ?= wine-backups
@@ -169,11 +192,11 @@ MINIO_PREFIX ?= postgres
 MINIO_ENDPOINT_INTERNAL ?= http://minio:9000
 
 # Важно: timestamp генерим питоном (кроссплатформенно)
-TS := $(shell $(PY) -c "import datetime as d; print(d.datetime.now().strftime('%Y%m%d_%H%M%S'))")
+TS := $(shell $(PY) -c "import datetime as d, os; print(d.datetime.now().strftime('%Y%m%d_%H%M%S_%f') + '_' + str(os.getpid()))")
 BACKUP_FILE := $(DB_NAME)_$(TS).dump
 LATEST_BACKUP := $(shell $(PY) -c "import glob; f=sorted(glob.glob('$(BACKUPS_DIR)/$(DB_NAME)_*.dump')); print(f[-1] if f else '')")
 
-DC ?= docker compose
+DC ?= $(DOCKER_COMPOSE)
 DC_STORAGE = $(DC) -f docker-compose.yml -f docker-compose.storage.yml
 
 .PHONY: storage-up storage-down backups-list-local backups-list-remote backup-local backup-upload backup \
@@ -189,13 +212,13 @@ storage-down:
 	$(DC_STORAGE) down -v --remove-orphans
 
 backups-list-local:
-	python -c "import glob; [print(x) for x in sorted(glob.glob('$(BACKUPS_DIR)/*.dump'))]"
+	$(PY) -c "import glob; [print(x) for x in sorted(glob.glob('$(BACKUPS_DIR)/*.dump'))]"
 
 backup-local:
-	python -c "import os; os.makedirs('$(BACKUPS_DIR)', exist_ok=True)"
-	$(DC) exec -T db bash -lc "pg_dump -U $(DB_USER) -d $(DB_NAME) -Fc -f /tmp/$(BACKUP_FILE)"
-	docker cp $(DB_CONTAINER):/tmp/$(BACKUP_FILE) $(BACKUPS_DIR)/$(BACKUP_FILE)
-	$(DC) exec -T db bash -lc "rm -f /tmp/$(BACKUP_FILE)"
+	$(PY) -c "import os; os.makedirs('$(BACKUPS_DIR)', exist_ok=True)"
+	$(PY) -m scripts.emit_event --log-file "$(BACKUP_EVENTS_LOG)" --event backup_local_started --service backup --field file=$(BACKUP_FILE)
+	$(DC) exec -T db bash -lc "pg_dump -U $(DB_USER) -d $(DB_NAME) -Fc -f /backups/$(BACKUP_FILE)"
+	$(PY) -m scripts.emit_event --log-file "$(BACKUP_EVENTS_LOG)" --event backup_local_completed --service backup --field file=$(BACKUP_FILE) --stat-file "$(BACKUPS_DIR)/$(BACKUP_FILE)"
 	@echo "OK: local backup -> $(BACKUPS_DIR)/$(BACKUP_FILE)"
 
 backup-upload: storage-up
@@ -210,7 +233,7 @@ backups-list-remote: storage-up
 
 # Использование: make backup-download-remote FILE=wine_db_YYYYMMDD_HHMMSS.dump
 backup-download-remote: storage-up
-	python -c "import os; os.makedirs('$(RESTORE_DIR)', exist_ok=True)"
+	$(PY) -c "import os; os.makedirs('$(RESTORE_DIR)', exist_ok=True)"
 	$(DC_STORAGE) --profile tools run --rm mc "mc alias set local $(MINIO_ENDPOINT_INTERNAL) $(MINIO_ROOT_USER) $(MINIO_ROOT_PASSWORD) && \
 	  mc cp local/$(MINIO_BUCKET)/$(MINIO_PREFIX)/$(FILE) /restore/$(FILE) && \
 	  ls -lah /restore/$(FILE)"
@@ -219,12 +242,15 @@ backup-download-remote: storage-up
 # - по умолчанию возьмёт самый свежий backups/wine_db_*.dump
 # - либо: make restore-local FILE=backups/wine_db_....dump
 restore-local:
-	python -c "import sys; f='$(FILE)' if '$(FILE)' else '$(LATEST_BACKUP)'; print('Using:', f) if f else sys.exit('No backup found. Set FILE=...')"
+	$(PY) -c "import sys; f='$(FILE)' if '$(FILE)' else '$(LATEST_BACKUP)'; print('Using:', f) if f else sys.exit('No backup found. Set FILE=...')"
+	$(PY) -m scripts.emit_event --log-file "$(BACKUP_EVENTS_LOG)" --event restore_local_started --service backup --field file=$(if $(FILE),$(FILE),$(LATEST_BACKUP))
+	$(MAKE) backup-verify FILE=$(if $(FILE),$(FILE),$(LATEST_BACKUP))
 	$(DC) stop api
 	$(DC) exec -T db bash -lc "dropdb -U $(DB_USER) --if-exists $(DB_NAME) && createdb -U $(DB_USER) $(DB_NAME)"
 	docker cp $(if $(FILE),$(FILE),$(LATEST_BACKUP)) $(DB_CONTAINER):/tmp/restore.dump
 	$(DC) exec -T db bash -lc "pg_restore -U $(DB_USER) -d $(DB_NAME) --clean --if-exists /tmp/restore.dump"
 	$(DC) start api
+	$(PY) -m scripts.emit_event --log-file "$(BACKUP_EVENTS_LOG)" --event restore_local_completed --service backup --field file=$(if $(FILE),$(FILE),$(LATEST_BACKUP))
 	@echo "OK: restore completed"
 
 # restore из MinIO: make restore-remote FILE=wine_db_....dump
@@ -235,7 +261,7 @@ restore-remote: backup-download-remote
 .PHONY: backup-download-remote-latest restore-remote-latest
 
 backup-download-remote-latest: storage-up
-	$(PY) -m scripts.minio_backups download-latest --bucket $(MINIO_BUCKET) --prefix $(MINIO_PREFIX) --endpoint $(MINIO_ENDPOINT_INTERNAL) --user $(MINIO_ROOT_USER) --password $(MINIO_ROOT_PASSWORD) --restore-dir $(RESTORE_DIR) --dest-name remote_latest.dump
+	$(PY) -m scripts.minio_backups download-latest --emit-json --log-file "$(BACKUP_EVENTS_LOG)" --bucket $(MINIO_BUCKET) --prefix $(MINIO_PREFIX) --endpoint $(MINIO_ENDPOINT_INTERNAL) --user $(MINIO_ROOT_USER) --password $(MINIO_ROOT_PASSWORD) --restore-dir $(RESTORE_DIR) --dest-name remote_latest.dump
 
 # Restore DB from latest remote backup (remote_latest.dump)
 restore-remote-latest: backup-download-remote-latest
@@ -251,25 +277,24 @@ backup-verify:
 
 prune-local:
 	@echo "Pruning local backups: keep last $(BACKUP_KEEP)"
-	@python -c "import glob; from pathlib import Path; d=Path('$(BACKUPS_DIR)'); d.mkdir(parents=True, exist_ok=True); keep=int('$(BACKUP_KEEP)'); pat=str(d/'$(DB_NAME)_*.dump'); files=sorted(glob.glob(pat), reverse=True); print(f'[prune-local] found={len(files)} keep={keep}'); [print('  keep:', f) for f in files[:keep]]; [ (print('  delete:', f), Path(f).unlink(missing_ok=True)) for f in files[keep:] ]"
+	$(PY) -m scripts.prune_local_backups --backups-dir "$(BACKUPS_DIR)" --db-name "$(DB_NAME)" --keep "$(BACKUP_KEEP)" --log-file "$(BACKUP_EVENTS_LOG)"
 
 prune-remote: storage-up
 	@echo "Pruning remote backups in MinIO: keep last $(BACKUP_KEEP)"
-	$(PY) -m scripts.minio_backups prune --keep $(BACKUP_KEEP) --bucket $(MINIO_BUCKET) --prefix $(MINIO_PREFIX) --endpoint $(MINIO_ENDPOINT_INTERNAL) --user $(MINIO_ROOT_USER) --password $(MINIO_ROOT_PASSWORD)
+	$(PY) -m scripts.minio_backups prune --keep $(BACKUP_KEEP) --emit-json --log-file "$(BACKUP_EVENTS_LOG)" --bucket $(MINIO_BUCKET) --prefix $(MINIO_PREFIX) --endpoint $(MINIO_ENDPOINT_INTERNAL) --user $(MINIO_ROOT_USER) --password $(MINIO_ROOT_PASSWORD)
 
 # --- DR / Backups helpers -------------------------------------------------
 # Windows-friendly PowerShell invocation from make.
-# BACKUP_KEEP can be overridden per command:
-#   make dr-smoke-truncate BACKUP_KEEP=2
+# DR_BACKUP_KEEP can be overridden per command:
+#   make dr-smoke-truncate DR_BACKUP_KEEP=2
 
 DR_BACKUP_KEEP ?= 2
-POWERSHELL  ?= powershell
-PSFLAGS     := -NoProfile -ExecutionPolicy Bypass -File
+MANAGE_PROMTAIL ?= 0
 
 .PHONY: dr-smoke-truncate dr-smoke-dropvolume
 
 dr-smoke-truncate:
-	$(POWERSHELL) $(PSFLAGS) scripts/dr_smoke.ps1 -Mode truncate -BackupKeep $(DR_BACKUP_KEEP)
+	$(POWERSHELL) $(POWERSHELL_ARGS) scripts/dr_smoke.ps1 -Mode truncate -BackupKeep $(DR_BACKUP_KEEP) $(if $(filter 1,$(MANAGE_PROMTAIL)),-ManagePromtail)
 
 dr-smoke-dropvolume:
-	$(POWERSHELL) $(PSFLAGS) scripts/dr_smoke.ps1 -Mode dropvolume -BackupKeep $(DR_BACKUP_KEEP)
+	$(POWERSHELL) $(POWERSHELL_ARGS) scripts/dr_smoke.ps1 -Mode dropvolume -BackupKeep $(DR_BACKUP_KEEP) $(if $(filter 1,$(MANAGE_PROMTAIL)),-ManagePromtail)

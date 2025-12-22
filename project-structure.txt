@@ -1,87 +1,96 @@
 # Wine Assistant — Project Structure
 
-Generated: 2025-12-21 (Europe/Helsinki)
+Generated: 2025-12-21
 
-This document summarizes the repository layout (tracked files) and highlights the DR/backups additions introduced on 2025-12-21.
+This document is regenerated strictly from two inputs:
+1) `git ls-files` → `project-files.tracked.txt` (authoritative list of tracked files)
+2) `tree /F /A` + `Dump-Dir` outputs → `project-structure-auto.txt` and `ls_*.txt` (authoritative snapshot of what exists in the working directory, including untracked artifacts)
 
-## Key entrypoints
-- API: api/app.py (Flask app), api/wsgi.py (WSGI entrypoint)
-- DB: db/init.sql, db/migrate.sh, db/migrations/*.sql
-- Compose: docker-compose.yml (core stack), docker-compose.storage.yml (MinIO stack), docker-compose.observability.yml (metrics/logs)
-- Make tasks: Makefile (backup/restore, MinIO tooling, DR smoke tests)
+## Key entrypoints (tracked)
+- `api/app.py`
+- `api/export.py`
+- `api/wsgi.py`
+- `api/templates/ui.html`
+- `db/init.sql`
+- `db/migrate.sh`
+- `docker-compose.yml`
+- `docker-compose.observability.yml`
+- `docker-compose.storage.yml`
+- `Makefile`
 
-## Repository tree (tracked, depth ≤ 5)
+## Tracked repository tree (from `git ls-files`, depth ≤ 5)
+
+Tracked files: 182
+
+```
 .
-├── .dockerignore
-├── .env.example
-├── .gitattributes
 ├── .github
+│   ├── workflows
+│   │   ├── changelog-on-release.yml
+│   │   ├── ci.yml
+│   │   ├── release-drafter.yml
+│   │   ├── secrets.yml
+│   │   └── semgrep.yml
 │   ├── changelog-config.json
-│   ├── release-drafter.yml
-│   └── workflows
-│       ├── changelog-on-release.yml
-│       ├── ci.yml
-│       ├── release-drafter.yml
-│       ├── secrets.yml
-│       └── semgrep.yml
-├── .gitignore
-├── .gitleaks.toml
+│   └── release-drafter.yml
 ├── .hooks
 │   └── block_keys.py
-├── .pre-commit-config.yaml
-├── CHANGELOG.md
-├── Dockerfile
-├── INDEX.md
-├── Makefile
-├── PROTECTION_CHECK.txt
-├── QUICK_REFERENCE.md
-├── README.md
 ├── api
+│   ├── templates
+│   │   └── ui.html
 │   ├── app.py
 │   ├── export.py
 │   ├── logging_config.py
 │   ├── request_middleware.py
 │   ├── schemas.py
-│   ├── templates
-│   │   └── ui.html
 │   ├── validation.py
 │   └── wsgi.py
 ├── data
 │   └── sample
 │       └── dw_sample_products.csv
 ├── db
+│   ├── migrations
+│   │   ├── _legacy
+│   │   │   ├── 2025-10-14-diagnostics.sql
+│   │   │   ├── 2025-10-14-price-check.sql
+│   │   │   ├── 2025-10-14-price-history-guardrails.sql
+│   │   │   └── 2025-10-14-prices-and-search.sql
+│   │   ├── 0000_schema_migrations.sql
+│   │   ├── 0001_prices-and-search.sql
+│   │   ├── 0002_price-history-guardrails.sql
+│   │   ├── 0003_inventory-columns-and-asof.sql
+│   │   ├── 0004_diagnostics.sql
+│   │   ├── 0005_price-check.sql
+│   │   ├── 0006_add-idempotency-tables.sql
+│   │   ├── 0007_schema-migrations-view.sql
+│   │   ├── 0008_schema-migrations-view.sql
+│   │   ├── 0009_schema-migrations-view-fix.sql
+│   │   ├── 0010_price-list-quarantine.sql
+│   │   ├── 0011_product_prices_partitioning.sql
+│   │   ├── 0011_products_extra_fields.sql
+│   │   ├── 0012_wineries.sql
+│   │   └── 0013_product_prices_guardrails_after_partitioning.sql
 │   ├── init.sql
 │   ├── migrate.ps1
-│   ├── migrate.sh
-│   └── migrations
-│       ├── 0000_schema_migrations.sql
-│       ├── 0001_prices-and-search.sql
-│       ├── 0002_price-history-guardrails.sql
-│       ├── 0003_inventory-columns-and-asof.sql
-│       ├── 0004_diagnostics.sql
-│       ├── 0005_price-check.sql
-│       ├── 0006_add-idempotency-tables.sql
-│       ├── 0007_schema-migrations-view.sql
-│       ├── 0008_schema-migrations-view.sql
-│       ├── 0009_schema-migrations-view-fix.sql
-│       ├── 0010_price-list-quarantine.sql
-│       ├── 0011_product_prices_partitioning.sql
-│       ├── 0011_products_extra_fields.sql
-│       ├── 0012_wineries.sql
-│       ├── 2025-10-14-diagnostics.sql
-│       ├── 2025-10-14-price-check.sql
-│       ├── 2025-10-14-price-history-guardrails.sql
-│       └── 2025-10-14-prices-and-search.sql
-├── docker-compose.observability.yml
-├── docker-compose.storage.yml
-├── docker-compose.yml
+│   └── migrate.sh
 ├── docs
-│   ├── BEFORE_AFTER_COMPARISON.md
-│   ├── README_UPDATE_SUMMARY.md
-│   ├── ROADMAP_v3_RU.md
 │   ├── dev
-│   │   ├── PR_DESCRIPTION.md
+│   │   ├── backup-dr-runbook.md
+│   │   ├── cheatsheet-from-clean-clone-to-green-tests.md
+│   │   ├── cleanup-test-data.md
+│   │   ├── dev-setup-windows.md
+│   │   ├── export-web-ui.md
+│   │   ├── gitignore.md
+│   │   ├── how-to-create-analysis-bundle.md
+│   │   ├── issue-83-84-notes.md
+│   │   ├── issue-85-partitioning-notes.md
+│   │   ├── issue-91-summary.md
+│   │   ├── logging-eventsdd05122025.md
+│   │   ├── manual-smoke-checkdd03122025.md
 │   │   ├── PR_body_ru_extended_wineries_sku_20251130dd30112025.md
+│   │   ├── PR_DESCRIPTION.md
+│   │   ├── pricing-rules.md
+│   │   ├── producer_site_image_url_readme_ru.md
 │   │   ├── README-before06112025.md
 │   │   ├── README-before07112025-01.md
 │   │   ├── README-before07112025.md
@@ -97,39 +106,28 @@ This document summarizes the repository layout (tracked files) and highlights th
 │   │   ├── README-before24112025.md
 │   │   ├── README-before28112025.md
 │   │   ├── README-before30112025.md
+│   │   ├── readme-inventory-and-chartsdd03122025.md
 │   │   ├── README.auto_images.ru-28112025.md
 │   │   ├── README.auto_images.ru.extended-28112025.md
 │   │   ├── README.extradd04122025.md
 │   │   ├── README.ru-additiondd28112025.md
 │   │   ├── README.wineriesdd30112025.md
-│   │   ├── READMEdd04122025.md
-│   │   ├── backup-dr-runbook.md
-│   │   ├── cheatsheet-from-clean-clone-to-green-tests.md
-│   │   ├── cleanup-test-data.md
-│   │   ├── dev-setup-windows.md
-│   │   ├── export-web-ui.md
-│   │   ├── gitignore.md
-│   │   ├── how-to-create-analysis-bundle.md
-│   │   ├── issue-83-84-notes.md
-│   │   ├── issue-85-partitioning-notes.md
-│   │   ├── issue-91-summary.md
-│   │   ├── logging-eventsdd05122025.md
-│   │   ├── manual-smoke-checkdd03122025.md
-│   │   ├── pricing-rules.md
-│   │   ├── producer_site_image_url_readme_ru.md
-│   │   ├── readme-inventory-and-chartsdd03122025.md
 │   │   ├── readme_block_new_products_fields_ru.md
 │   │   ├── readme_wine_fields_export.md
+│   │   ├── READMEdd04122025.md
 │   │   ├── release-notes-2025-12-16.md
 │   │   ├── release-notes-2025-12-21.md
 │   │   ├── web-ui.md
 │   │   └── windows-powershell-http.md
+│   ├── BEFORE_AFTER_COMPARISON.md
 │   ├── dev-checklist.ps1
 │   ├── manual-smoke-check.md
 │   ├── pr-93-summary.md
+│   ├── README_UPDATE_SUMMARY.md
 │   ├── requirements.md
 │   ├── roadmap_sprint7+.md
-│   └── roadmap_sprint7+_v2.md
+│   ├── roadmap_sprint7+_v2.md
+│   └── ROADMAP_v3_RU.md
 ├── etl
 │   ├── image_extractor.py
 │   ├── mapping_template.json
@@ -139,7 +137,6 @@ This document summarizes the repository layout (tracked files) and highlights th
 │   ├── cleanup_old_partitions.py
 │   └── ingest_dw_price.py
 ├── observability
-│   ├── README.md
 │   ├── grafana
 │   │   ├── dashboards
 │   │   │   └── wine-assistant-api.json
@@ -149,19 +146,17 @@ This document summarizes the repository layout (tracked files) and highlights th
 │   │       └── datasources
 │   │           └── datasources.yml
 │   ├── loki-config.yml
-│   └── promtail-config.yml
+│   ├── promtail-config.yml
+│   └── README.md
 ├── ops
 │   └── backup
-│       ├── Dockerfile
-│       └── backup.sh
-├── project-structure.txt
-├── pyproject.toml
-├── pytest.ini
-├── requirements.txt
+│       ├── backup.sh
+│       └── Dockerfile
 ├── scripts
 │   ├── __init__.py
 │   ├── backfill_current_prices.py
 │   ├── bundle.ps1
+│   ├── check_migrations.py
 │   ├── check_wineries_vs_products.py
 │   ├── cleanup_test_data.py
 │   ├── data_quality.py
@@ -185,10 +180,6 @@ This document summarizes the repository layout (tracked files) and highlights th
 │   ├── smoke_backup_restore.ps1
 │   └── sync_inventory_history.py
 ├── tests
-│   ├── README.md
-│   ├── __init__.py
-│   ├── conftest.py
-│   ├── cors-test.html
 │   ├── e2e
 │   │   └── __init__.py
 │   ├── fixtures
@@ -202,38 +193,148 @@ This document summarizes the repository layout (tracked files) and highlights th
 │   │   ├── test_api_export_sku_and_price_history.py
 │   │   ├── test_api_products_search_happy.py
 │   │   └── test_price_import_etl.py
+│   ├── unit
+│   │   ├── __init__.py
+│   │   ├── test_data_quality.py
+│   │   ├── test_date_extraction.py
+│   │   ├── test_export_service.py
+│   │   ├── test_health.py
+│   │   ├── test_idempotency.py
+│   │   ├── test_load_csv.py
+│   │   ├── test_load_utils.py
+│   │   ├── test_schemas.py
+│   │   └── test_validation.py
+│   ├── __init__.py
+│   ├── conftest.py
+│   ├── cors-test.html
+│   ├── README.md
 │   ├── test_api_health.py
 │   ├── test_api_limits_and_security.py
 │   ├── test_api_products_happy.py
 │   ├── test_api_products_validation.py
-│   ├── test_api_search_validation.py
-│   └── unit
-│       ├── __init__.py
-│       ├── test_data_quality.py
-│       ├── test_date_extraction.py
-│       ├── test_export_service.py
-│       ├── test_health.py
-│       ├── test_idempotency.py
-│       ├── test_load_csv.py
-│       ├── test_load_utils.py
-│       ├── test_schemas.py
-│       └── test_validation.py
-└── .coveragerc
+│   └── test_api_search_validation.py
+├── .coveragerc
+├── .dockerignore
+├── .env.example
+├── .gitattributes
+├── .gitignore
+├── .gitleaks.toml
+├── .pre-commit-config.yaml
+├── CHANGELOG.md
+├── docker-compose.observability.yml
+├── docker-compose.storage.yml
+├── docker-compose.yml
+├── Dockerfile
+├── INDEX.md
+├── Makefile
+├── project-structure.txt
+├── PROTECTION_CHECK.txt
+├── pyproject.toml
+├── pytest.ini
+├── QUICK_REFERENCE.md
+├── README.md
+└── requirements.txt
+```
 
-## DR / backups additions (2025-12-21)
-- MinIO “remote-like” storage for local dev/DR testing:
-  - docker-compose.storage.yml
-  - scripts/minio_backups.py (CLI: list / prune / download-latest)
-- DR smoke tests (restore verification):
-  - scripts/dr_smoke.ps1 (modes: truncate / dropvolume)
-  - scripts/smoke_backup_restore.ps1 (lightweight helper)
-- Optional backup container (rclone + pg_dump), profile `backup`:
-  - ops/backup/Dockerfile
-  - ops/backup/backup.sh
-  - docker-compose.yml: service `backup` (profile: backup)
+## Working directory snapshot (from `tree /F /A` + `Dump-Dir`)
 
-## Expected untracked runtime directories (ignored)
-- backups/      (local pg_dump artifacts; pruned by BACKUP_KEEP)
-- restore_tmp/  (download-latest destination)
-- .venv/        (local virtualenv)
-- htmlcov/      (pytest-cov output)
+### Untracked items at repository root
+
+Untracked directories at root (subdirs/files counts derived from `tree /F /A`):
+
+| Dir             | Subdirs | Files |
+| --------------- | ------- | ----- |
+| .idea           | 2       | 8     |
+| .pytest_cache   | 3       | 5     |
+| .ruff_cache     | 3       | 14    |
+| .venv           | 1959    | 16094 |
+| _bundles        | 1       | 1     |
+| backups         | 1       | 5     |
+| htmlcov         | 1       | 33    |
+| logs            | 1       | 0     |
+| restore_tmp     | 1       | 1     |
+| smoke_artifacts | 1       | 3     |
+| static          | 2       | 296   |
+
+Untracked files at root:
+
+- `.coverage`
+- `.env`
+- `.env.backup`
+- `ls_api.txt`
+- `ls_api_templates.txt`
+- `ls_db.txt`
+- `ls_db_migrations.txt`
+- `ls_docs.txt`
+- `ls_docs_dev.txt`
+- `ls_etl.txt`
+- `ls_github.txt`
+- `ls_hooks.txt`
+- `ls_observability.txt`
+- `ls_root.txt`
+- `ls_scripts.txt`
+- `ls_static.txt`
+- `ls_tests.txt`
+- `Makefile-backup`
+- `must-have-check.txt`
+- `project-files.tracked.txt`
+- `project-structure-auto.txt`
+- `structure_dump.zip`
+
+### Untracked items inside tracked directories (observed)
+
+- `api/`
+  - Backups: `api/templates/ui.html.backup`, `api/templates/ui.html.backup1`
+  - Python bytecode cache: `api/__pycache__/*.pyc` (7 files)
+- `etl/`
+  - Backups: `etl/image_extractor.py.backup`, `etl/image_extractor.py.backup1`
+  - Python bytecode cache: `etl/__pycache__/*.pyc` (1 file)
+- `scripts/`
+  - Backups: `scripts/load_utils.py.backup`, `scripts/load_utils.py.backup1`
+  - Local variants: `scripts/manual_smoke_check.fixed.v4.ps1`, `scripts/quick_smoke_check.fixed.v4.ps1`
+  - Python bytecode cache: `scripts/__pycache__/*.pyc` (13 files)
+- `tests/`
+  - Python bytecode cache: `tests/**/__pycache__/*.pyc` (26 files)
+- `docs/`
+  - `docs/dev/README.snippetdd17122025.md`
+- `data/`
+  - `data/catalog/*` (5 files; includes multiple `wineries_enrichment*.xlsx` and one PDF)
+  - `data/inbox/*` (18 files; `.xlsx` price lists; filenames include Cyrillic characters)
+
+### Selected contents of notable untracked root directories (examples)
+
+- `backups/` (5 files)
+  - `backups/db_20251213_215134.sql`
+  - `backups/pgdata_20251213_215415.tgz`
+  - `backups/static_images_20251213_215631.zip`
+  - `backups/wine_db_20251221_184225.dump`
+  - `backups/wine_db_20251221_184326.dump`
+- `restore_tmp/` (1 file)
+  - `restore_tmp/remote_latest.dump`
+- `smoke_artifacts/` (3 files)
+  - `smoke_artifacts/inventory_history_D010210.xlsx`
+  - `smoke_artifacts/price_history_D010210.xlsx`
+  - `smoke_artifacts/sku_D010210.pdf`
+- `_bundles/` (1 file)
+  - `_bundles/wine-assistant_analysis_bundle_20251221_030310.zip`
+- `static/` (296 files; primarily images under `static/images/`)
+  - Examples: `static/images/D000081.jpeg`, `static/images/D011535.png`
+
+## Must-have check (from `must-have-check.txt`)
+
+| Path                             | Exists |
+| -------------------------------- | ------ |
+| README.md                        | True   |
+| CHANGELOG.md                     | True   |
+| Dockerfile                       | True   |
+| docker-compose.yml               | True   |
+| docker-compose.observability.yml | True   |
+| requirements.txt                 | True   |
+| Makefile                         | True   |
+| project-structure.txt            | True   |
+| db/migrate.sh                    | True   |
+| db/init.sql                      | True   |
+| api/app.py                       | True   |
+| api/export.py                    | True   |
+| api/wsgi.py                      | True   |
+| api/templates/ui.html            | True   |

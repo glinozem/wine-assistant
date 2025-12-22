@@ -33,6 +33,7 @@ scrape_configs:
             level: level
             event: event
             service: service
+            ts_unix: ts_unix
             http_method: http_method
             # НЕ извлекаем high-cardinality поля как labels:
             # request_id, http_path, sku_code, dt_from, dt_to
@@ -44,3 +45,32 @@ scrape_configs:
           event:
           service:
           http_method:
+
+  - job_name: backup_dr_files
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: wine-backups
+          __path__: /var/log/wine-assistant/backup-dr/*.jsonl
+    pipeline_stages:
+      - json:
+          expressions:
+            level: level
+            event: event
+            service: service
+            ts_unix: ts_unix
+            duration_sec: duration_sec
+            deleted_count: deleted_count
+            kept_count: kept_count
+            found_count: found_count
+            size_bytes: size_bytes
+
+      - timestamp:
+          source: ts_unix
+          format: Unix
+
+      - labels:
+          level:
+          event:
+          service:

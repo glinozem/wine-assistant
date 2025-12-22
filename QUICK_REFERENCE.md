@@ -7,7 +7,7 @@
 
 ### PowerShell: запросы к API (важно)
 
-В PowerShell `curl` часто является алиасом `Invoke-WebRequest`, поэтому для “классического” curl используйте `curl.exe`.
+В PowerShell `curl` часто является алиасом `Invoke-WebRequest`, поэтому для "классического" curl используйте `curl.exe`.
 Рекомендуемый вариант для вызовов API:
 
 ```powershell
@@ -36,6 +36,142 @@ $headers = @{ "X-API-Key" = $env:API_KEY }
 
 # Проверка
 echo $env:API_KEY
+```
+
+---
+
+## 📊 Observability & Monitoring (NEW)
+
+### Запуск observability stack
+
+```powershell
+# Запуск Grafana + Loki + Promtail
+make obs-up
+
+# Альтернатива через docker compose
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d
+
+# Остановка
+make obs-down
+
+# Перезапуск
+make obs-restart
+
+# Логи observability сервисов
+make obs-logs
+```
+
+### Grafana Dashboard
+
+```powershell
+# Открыть Grafana в браузере:
+# http://localhost:15000
+# Login: admin / Password: admin
+
+# Backup/DR Dashboard:
+# http://localhost:15000/d/wine-assistant-backup-dr/backup-dr
+```
+
+**Dashboard показывает:**
+- ✅ Backups completed (last 24h)
+- ⏱️ Age since last backup (with color thresholds)
+- 🔄 Restore operations (last 7d)
+- 🗑️ Remote pruned backups (last 7d)
+
+### Просмотр логов событий
+
+```powershell
+# Просмотр backup/DR событий
+Get-Content logs/backup-dr/events.jsonl | Select-Object -Last 20
+
+# Парсинг JSON
+Get-Content logs/backup-dr/events.jsonl | Select-Object -Last 5 | ForEach-Object { $_ | ConvertFrom-Json }
+
+# Фильтрация по событию
+Get-Content logs/backup-dr/events.jsonl | ConvertFrom-Json | Where-Object { $_.event -eq "backup_local_completed" }
+
+# Фильтрация по уровню (errors only)
+Get-Content logs/backup-dr/events.jsonl | ConvertFrom-Json | Where-Object { $_.level -eq "error" }
+```
+
+### Loki Query Language (LogQL) примеры
+
+В Grafana Explore (`http://localhost:15000/explore`):
+
+```logql
+# Все backup события
+{job="wine-backups", event="backup_local_completed"}
+
+# Возраст последнего бэкапа
+time() - max_over_time({job="wine-backups", event="backup_local_completed"} | json | unwrap ts_unix [7d])
+
+# Количество бэкапов за 24 часа
+count_over_time({job="wine-backups", event="backup_local_completed"}[24h])
+
+# Все ошибки
+{job="wine-backups", level="error"}
+
+# Удалённые бэкапы (deleted_count)
+{job="wine-backups", event="prune_remote_completed"} | json | deleted_count > 0
+```
+
+---
+
+## 💾 Backup & DR операции
+
+### Создание бэкапов
+
+```powershell
+# Локальный бэкап
+make backup-local
+
+# Полный цикл: backup + upload to MinIO + prune
+make backup BACKUP_KEEP=10
+
+# Проверка бэкапов
+ls backups/
+```
+
+### Восстановление
+
+```powershell
+# Восстановить из локального бэкапа (latest)
+make restore-local
+
+# Восстановить из конкретного файла
+make restore-local FILE=backups/wine_db_20251222_140049.dump
+
+# Восстановить из MinIO (latest remote)
+make restore-remote-latest
+```
+
+### DR Smoke Tests
+
+```powershell
+# DR test (truncate mode) - быстрый
+make dr-smoke-truncate DR_BACKUP_KEEP=2
+
+# DR test (dropvolume mode) - полный
+make dr-smoke-dropvolume DR_BACKUP_KEEP=2
+
+# С автоматическим управлением Promtail (рекомендуется для Windows)
+make dr-smoke-truncate DR_BACKUP_KEEP=2 MANAGE_PROMTAIL=1
+
+# Или напрямую через PowerShell
+.\scripts\dr_smoke.ps1 -Mode truncate -BackupKeep 2 -ManagePromtail
+```
+
+### MinIO управление
+
+```powershell
+# Запуск MinIO
+make storage-up
+
+# Список бэкапов в MinIO
+make backups-list-remote
+
+# Очистка старых бэкапов
+make backup BACKUP_KEEP=5
 ```
 
 ---
@@ -346,6 +482,9 @@ new Chart(ctx, {
 # Запуск
 docker compose up -d
 
+# Запуск с observability
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d
+
 # Остановка
 docker compose down
 
@@ -454,21 +593,56 @@ python scripts/sync_inventory_history.py 2>&1 | Tee-Object -FilePath sync.log
 docker compose exec db psql -U postgres -d wine_db -c "SELECT current_user, current_database();"
 ```
 
+### Проблема: Grafana не показывает данные
+
+```powershell
+# Проверить что Promtail запущен
+docker compose -f docker-compose.yml -f docker-compose.observability.yml ps promtail
+
+# Проверить логи Promtail
+make obs-logs
+
+# Проверить что события пишутся
+Get-Content logs/backup-dr/events.jsonl | Select-Object -Last 5
+
+# Создать тестовый бэкап для проверки
+make backup-local
+
+# Проверить данные в Loki через Explore:
+# http://localhost:15000/explore
+```
+
+### Проблема: DR smoke test падает с "file is being used"
+
+```powershell
+# Использовать MANAGE_PROMTAIL=1 для автоматического управления Promtail
+make dr-smoke-truncate MANAGE_PROMTAIL=1
+
+# Или вручную остановить Promtail перед запуском
+docker compose -f docker-compose.yml -f docker-compose.observability.yml stop promtail
+.\scripts\dr_smoke.ps1 -Mode truncate -BackupKeep 2
+docker compose -f docker-compose.yml -f docker-compose.observability.yml start promtail
+```
+
 ---
 
 ## 📚 Полезные ссылки
 
-- **Swagger UI:** http://localhost:18000/docs
+- **API Swagger:** http://localhost:18000/docs
 - **Adminer:** http://localhost:18080
+- **Grafana:** http://localhost:15000 (admin/admin)
+- **Backup/DR Dashboard:** http://localhost:15000/d/wine-assistant-backup-dr/backup-dr
+- **Loki Explore:** http://localhost:15000/explore
 - **GitHub Issues:** https://github.com/glinozem/wine-assistant/issues
 - **README:** [README.md](README.md)
-- **Manual Smoke Check:** [docs/manual-smoke-check.md](docs/manual-smoke-check.md)
+- **Backup/DR Runbook:** [docs/dev/backup-dr-runbook.md](docs/dev/backup-dr-runbook.md)
 
 ---
 
 **Создано:** 04 декабря 2025
-**Версия:** 1.0
-**Для:** Wine Assistant v0.5.0
+**Обновлено:** 22 декабря 2025 (добавлен Observability Stack)
+**Версия:** 1.1
+**Для:** Wine Assistant v0.5.0+
 
 
 ### Очистка тестовых данных
