@@ -1,11 +1,24 @@
 {
   "annotations": {
-    "list": []
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
   },
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "id": null,
+  "id": 4,
   "links": [],
   "liveNow": false,
   "panels": [
@@ -16,6 +29,20 @@
       },
       "fieldConfig": {
         "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
           "unit": "short"
         },
         "overrides": []
@@ -28,6 +55,9 @@
       },
       "id": 1,
       "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
           "calcs": [
@@ -36,10 +66,13 @@
           "fields": "",
           "values": false
         },
+        "showPercentChange": false,
         "showThresholdLabels": false,
-        "showThresholdMarkers": true
+        "showThresholdMarkers": true,
+        "textMode": "auto",
+        "wideLayout": true
       },
-      "pluginVersion": "11.0.0",
+      "pluginVersion": "10.4.2",
       "targets": [
         {
           "expr": "sum(count_over_time({job=\"wine-backups\", event=\"backup_local_completed\"}[24h]))",
@@ -56,6 +89,24 @@
       },
       "fieldConfig": {
         "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "#EAB839",
+                "value": 86400
+              },
+              {
+                "color": "#E24D42",
+                "value": 172800
+              }
+            ]
+          },
           "unit": "s"
         },
         "overrides": []
@@ -68,6 +119,9 @@
       },
       "id": 2,
       "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
           "calcs": [
@@ -76,17 +130,26 @@
           "fields": "",
           "values": false
         },
+        "showPercentChange": false,
         "showThresholdLabels": false,
-        "showThresholdMarkers": true
+        "showThresholdMarkers": true,
+        "textMode": "auto",
+        "wideLayout": true
       },
-      "pluginVersion": "11.0.0",
+      "pluginVersion": "10.4.2",
       "targets": [
         {
-          "expr": "time() - max_over_time({job=\"wine-backups\", event=\"backup_local_completed\"} | json | unwrap ts_unix [7d])",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "min(\r\n  last_over_time(\r\n    {job=\"wine-backups\", event=\"backup_local_completed\"}\r\n    | label_format age_sec=`{{ sub (unixEpoch now) (unixEpoch __timestamp__) }}`\r\n    | unwrap age_sec [7d]\r\n  )\r\n)\r\n",
+          "queryType": "range",
           "refId": "A"
         }
       ],
-      "title": "Age since last local backup (seconds)",
+      "title": "Age since last local backup",
       "type": "stat"
     },
     {
@@ -96,6 +159,20 @@
       },
       "fieldConfig": {
         "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
           "unit": "short"
         },
         "overrides": []
@@ -108,6 +185,9 @@
       },
       "id": 3,
       "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
           "calcs": [
@@ -116,9 +196,13 @@
           "fields": "",
           "values": false
         },
+        "showPercentChange": false,
         "showThresholdLabels": false,
-        "showThresholdMarkers": true
+        "showThresholdMarkers": true,
+        "textMode": "auto",
+        "wideLayout": true
       },
+      "pluginVersion": "10.4.2",
       "targets": [
         {
           "expr": "sum(count_over_time({job=\"wine-backups\", event=\"restore_local_completed\"}[7d]))",
@@ -126,8 +210,7 @@
         }
       ],
       "title": "Restore operations completed (last 7d)",
-      "type": "stat",
-      "pluginVersion": "11.0.0"
+      "type": "stat"
     },
     {
       "datasource": {
@@ -136,6 +219,20 @@
       },
       "fieldConfig": {
         "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
           "unit": "short"
         },
         "overrides": []
@@ -148,6 +245,9 @@
       },
       "id": 4,
       "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
           "calcs": [
@@ -156,9 +256,13 @@
           "fields": "",
           "values": false
         },
+        "showPercentChange": false,
         "showThresholdLabels": false,
-        "showThresholdMarkers": true
+        "showThresholdMarkers": true,
+        "textMode": "auto",
+        "wideLayout": true
       },
+      "pluginVersion": "10.4.2",
       "targets": [
         {
           "expr": "sum_over_time({job=\"wine-backups\", event=\"prune_remote_completed\"} | json | unwrap deleted_count [7d])",
@@ -166,11 +270,10 @@
         }
       ],
       "title": "Remote pruned backups (deleted_count sum, last 7d)",
-      "type": "stat",
-      "pluginVersion": "11.0.0"
+      "type": "stat"
     }
   ],
-  "refresh": "30s",
+  "refresh": "5m",
   "schemaVersion": 39,
   "tags": [
     "wine-assistant",
@@ -188,5 +291,6 @@
   "timezone": "",
   "title": "Wine Assistant — Backup & DR",
   "uid": "wine-assistant-backup-dr",
-  "version": 1
+  "version": 13,
+  "weekStart": ""
 }
