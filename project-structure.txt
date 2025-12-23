@@ -1,6 +1,6 @@
 # Wine Assistant — Project Structure
 
-Generated: 2025-12-21
+Generated: 2025-12-23
 
 This document is regenerated strictly from two inputs:
 1) `git ls-files` → `project-files.tracked.txt` (authoritative list of tracked files)
@@ -13,6 +13,7 @@ This document is regenerated strictly from two inputs:
 - `api/templates/ui.html`
 - `db/init.sql`
 - `db/migrate.sh`
+- `db/migrate.ps1`
 - `docker-compose.yml`
 - `docker-compose.observability.yml`
 - `docker-compose.storage.yml`
@@ -20,7 +21,7 @@ This document is regenerated strictly from two inputs:
 
 ## Tracked repository tree (from `git ls-files`, depth ≤ 5)
 
-Tracked files: 182
+Tracked files: 186
 
 ```
 .
@@ -75,22 +76,8 @@ Tracked files: 182
 │   └── migrate.sh
 ├── docs
 │   ├── dev
-│   │   ├── backup-dr-runbook.md
-│   │   ├── cheatsheet-from-clean-clone-to-green-tests.md
-│   │   ├── cleanup-test-data.md
-│   │   ├── dev-setup-windows.md
-│   │   ├── export-web-ui.md
-│   │   ├── gitignore.md
-│   │   ├── how-to-create-analysis-bundle.md
-│   │   ├── issue-83-84-notes.md
-│   │   ├── issue-85-partitioning-notes.md
-│   │   ├── issue-91-summary.md
-│   │   ├── logging-eventsdd05122025.md
-│   │   ├── manual-smoke-checkdd03122025.md
-│   │   ├── PR_body_ru_extended_wineries_sku_20251130dd30112025.md
 │   │   ├── PR_DESCRIPTION.md
-│   │   ├── pricing-rules.md
-│   │   ├── producer_site_image_url_readme_ru.md
+│   │   ├── PR_body_ru_extended_wineries_sku_20251130dd30112025.md
 │   │   ├── README-before06112025.md
 │   │   ├── README-before07112025-01.md
 │   │   ├── README-before07112025.md
@@ -103,31 +90,46 @@ Tracked files: 182
 │   │   ├── README-before19112025.md
 │   │   ├── README-before21112025.md
 │   │   ├── README-before22112025.md
+│   │   ├── README-before22122025.md
 │   │   ├── README-before24112025.md
 │   │   ├── README-before28112025.md
 │   │   ├── README-before30112025.md
-│   │   ├── readme-inventory-and-chartsdd03122025.md
 │   │   ├── README.auto_images.ru-28112025.md
 │   │   ├── README.auto_images.ru.extended-28112025.md
 │   │   ├── README.extradd04122025.md
 │   │   ├── README.ru-additiondd28112025.md
 │   │   ├── README.wineriesdd30112025.md
+│   │   ├── READMEdd04122025.md
+│   │   ├── backup-dr-runbook.md
+│   │   ├── cheatsheet-from-clean-clone-to-green-tests.md
+│   │   ├── cleanup-test-data.md
+│   │   ├── dev-setup-windows.md
+│   │   ├── export-web-ui.md
+│   │   ├── gitignore.md
+│   │   ├── how-to-create-analysis-bundle.md
+│   │   ├── issue-83-84-notes.md
+│   │   ├── issue-85-partitioning-notes.md
+│   │   ├── issue-91-summary.md
+│   │   ├── logging-eventsdd05122025.md
+│   │   ├── manual-smoke-checkdd03122025.md
+│   │   ├── pricing-rules.md
+│   │   ├── producer_site_image_url_readme_ru.md
+│   │   ├── readme-inventory-and-chartsdd03122025.md
 │   │   ├── readme_block_new_products_fields_ru.md
 │   │   ├── readme_wine_fields_export.md
-│   │   ├── READMEdd04122025.md
 │   │   ├── release-notes-2025-12-16.md
 │   │   ├── release-notes-2025-12-21.md
 │   │   ├── web-ui.md
 │   │   └── windows-powershell-http.md
 │   ├── BEFORE_AFTER_COMPARISON.md
+│   ├── README_UPDATE_SUMMARY.md
+│   ├── ROADMAP_v3_RU.md
 │   ├── dev-checklist.ps1
 │   ├── manual-smoke-check.md
 │   ├── pr-93-summary.md
-│   ├── README_UPDATE_SUMMARY.md
 │   ├── requirements.md
 │   ├── roadmap_sprint7+.md
-│   ├── roadmap_sprint7+_v2.md
-│   └── ROADMAP_v3_RU.md
+│   └── roadmap_sprint7+_v2.md
 ├── etl
 │   ├── image_extractor.py
 │   ├── mapping_template.json
@@ -139,19 +141,20 @@ Tracked files: 182
 ├── observability
 │   ├── grafana
 │   │   ├── dashboards
-│   │   │   └── wine-assistant-api.json
+│   │   │   ├── wine-assistant-api.json
+│   │   │   └── wine-assistant-backup-dr.json
 │   │   └── provisioning
 │   │       ├── dashboards
 │   │       │   └── dashboards.yml
 │   │       └── datasources
 │   │           └── datasources.yml
+│   ├── README.md
 │   ├── loki-config.yml
-│   ├── promtail-config.yml
-│   └── README.md
+│   └── promtail-config.yml
 ├── ops
 │   └── backup
-│       ├── backup.sh
-│       └── Dockerfile
+│       ├── Dockerfile
+│       └── backup.sh
 ├── scripts
 │   ├── __init__.py
 │   ├── backfill_current_prices.py
@@ -162,6 +165,7 @@ Tracked files: 182
 │   ├── data_quality.py
 │   ├── date_extraction.py
 │   ├── dr_smoke.ps1
+│   ├── emit_event.py
 │   ├── enrich_producers.py
 │   ├── extract_wineries_from_pdf.py
 │   ├── idempotency.py
@@ -174,6 +178,7 @@ Tracked files: 182
 │   ├── migrate.ps1
 │   ├── minio_backups.py
 │   ├── normalize_wineries_suppliers.py
+│   ├── prune_local_backups.py
 │   ├── quick_smoke_check.ps1
 │   ├── run_integration_tests.ps1
 │   ├── setup_scheduler.ps1
@@ -204,10 +209,10 @@ Tracked files: 182
 │   │   ├── test_load_utils.py
 │   │   ├── test_schemas.py
 │   │   └── test_validation.py
+│   ├── README.md
 │   ├── __init__.py
 │   ├── conftest.py
 │   ├── cors-test.html
-│   ├── README.md
 │   ├── test_api_health.py
 │   ├── test_api_limits_and_security.py
 │   ├── test_api_products_happy.py
@@ -221,18 +226,18 @@ Tracked files: 182
 ├── .gitleaks.toml
 ├── .pre-commit-config.yaml
 ├── CHANGELOG.md
-├── docker-compose.observability.yml
-├── docker-compose.storage.yml
-├── docker-compose.yml
 ├── Dockerfile
 ├── INDEX.md
 ├── Makefile
-├── project-structure.txt
 ├── PROTECTION_CHECK.txt
-├── pyproject.toml
-├── pytest.ini
 ├── QUICK_REFERENCE.md
 ├── README.md
+├── docker-compose.observability.yml
+├── docker-compose.storage.yml
+├── docker-compose.yml
+├── project-structure.txt
+├── pyproject.toml
+├── pytest.ini
 └── requirements.txt
 ```
 
@@ -242,25 +247,27 @@ Tracked files: 182
 
 Untracked directories at root (subdirs/files counts derived from `tree /F /A`):
 
-| Dir             | Subdirs | Files |
-| --------------- | ------- | ----- |
-| .idea           | 2       | 8     |
-| .pytest_cache   | 3       | 5     |
-| .ruff_cache     | 3       | 14    |
-| .venv           | 1959    | 16094 |
-| _bundles        | 1       | 1     |
-| backups         | 1       | 5     |
-| htmlcov         | 1       | 33    |
-| logs            | 1       | 0     |
-| restore_tmp     | 1       | 1     |
-| smoke_artifacts | 1       | 3     |
-| static          | 2       | 296   |
+| Dir | Subdirs | Files |
+| --- | ------- | ----- |
+| .idea | 1 | 8 |
+| .pytest_cache | 2 | 5 |
+| .ruff_cache | 2 | 14 |
+| .venv | 1958 | 16094 |
+| _bundles | 0 | 2 |
+| backups | 0 | 6 |
+| htmlcov | 0 | 33 |
+| logs | 1 | 18 |
+| restore_tmp | 0 | 1 |
+| smoke_artifacts | 0 | 3 |
+| static | 1 | 296 |
 
 Untracked files at root:
 
 - `.coverage`
 - `.env`
 - `.env.backup`
+- `Makefile-backup`
+- `docker-compose.observability.yml.backup`
 - `ls_api.txt`
 - `ls_api_templates.txt`
 - `ls_db.txt`
@@ -275,11 +282,11 @@ Untracked files at root:
 - `ls_scripts.txt`
 - `ls_static.txt`
 - `ls_tests.txt`
-- `Makefile-backup`
 - `must-have-check.txt`
 - `project-files.tracked.txt`
 - `project-structure-auto.txt`
 - `structure_dump.zip`
+- `wine-assistant_analysis_bundle_20251221_224949.zip`
 
 ### Untracked items inside tracked directories (observed)
 
@@ -290,9 +297,9 @@ Untracked files at root:
   - Backups: `etl/image_extractor.py.backup`, `etl/image_extractor.py.backup1`
   - Python bytecode cache: `etl/__pycache__/*.pyc` (1 file)
 - `scripts/`
-  - Backups: `scripts/load_utils.py.backup`, `scripts/load_utils.py.backup1`
+  - Backups: `scripts/dr_smoke.ps1.backup`, `scripts/load_utils.py.backup`, `scripts/load_utils.py.backup1`, `scripts/minio_backups.py.backup`
   - Local variants: `scripts/manual_smoke_check.fixed.v4.ps1`, `scripts/quick_smoke_check.fixed.v4.ps1`
-  - Python bytecode cache: `scripts/__pycache__/*.pyc` (13 files)
+  - Python bytecode cache: `scripts/__pycache__/*.pyc` (15 files)
 - `tests/`
   - Python bytecode cache: `tests/**/__pycache__/*.pyc` (26 files)
 - `docs/`
@@ -300,41 +307,49 @@ Untracked files at root:
 - `data/`
   - `data/catalog/*` (5 files; includes multiple `wineries_enrichment*.xlsx` and one PDF)
   - `data/inbox/*` (18 files; `.xlsx` price lists; filenames include Cyrillic characters)
+- `observability/`
+  - `observability/promtail-config.yml.backup`
 
 ### Selected contents of notable untracked root directories (examples)
 
-- `backups/` (5 files)
-  - `backups/db_20251213_215134.sql`
-  - `backups/pgdata_20251213_215415.tgz`
-  - `backups/static_images_20251213_215631.zip`
-  - `backups/wine_db_20251221_184225.dump`
-  - `backups/wine_db_20251221_184326.dump`
+- `backups/` (6 files)
+  - backups/db_20251213_215134.sql
+  - backups/pgdata_20251213_215415.tgz
+  - backups/static_images_20251213_215631.zip
+  - backups/wine_db_20251222_140049_172449_16544.dump
+  - backups/wine_db_20251222_142605_333267_15472.dump
+  - backups/wine_db_20251222_225916_208294_12384.dump
 - `restore_tmp/` (1 file)
-  - `restore_tmp/remote_latest.dump`
+  - restore_tmp/remote_latest.dump
 - `smoke_artifacts/` (3 files)
-  - `smoke_artifacts/inventory_history_D010210.xlsx`
-  - `smoke_artifacts/price_history_D010210.xlsx`
-  - `smoke_artifacts/sku_D010210.pdf`
-- `_bundles/` (1 file)
-  - `_bundles/wine-assistant_analysis_bundle_20251221_030310.zip`
+  - smoke_artifacts/inventory_history_D010210.xlsx
+  - smoke_artifacts/price_history_D010210.xlsx
+  - smoke_artifacts/sku_D010210.pdf
+- `_bundles/` (2 files)
+  - _bundles/wine-assistant_analysis_bundle_20251221_030310.zip
+  - _bundles/wine-assistant_analysis_bundle_20251221_225622.zip
 - `static/` (296 files; primarily images under `static/images/`)
-  - Examples: `static/images/D000081.jpeg`, `static/images/D011535.png`
+  - Examples:
+  - static/images/Alsace___������.png
+  - static/images/D000081.jpeg
+  - static/images/Red_wine___�������_����.png
+  - static/images/Rose_wine___�������_����.png
 
 ## Must-have check (from `must-have-check.txt`)
 
-| Path                             | Exists |
-| -------------------------------- | ------ |
-| README.md                        | True   |
-| CHANGELOG.md                     | True   |
-| Dockerfile                       | True   |
-| docker-compose.yml               | True   |
-| docker-compose.observability.yml | True   |
-| requirements.txt                 | True   |
-| Makefile                         | True   |
-| project-structure.txt            | True   |
-| db/migrate.sh                    | True   |
-| db/init.sql                      | True   |
-| api/app.py                       | True   |
-| api/export.py                    | True   |
-| api/wsgi.py                      | True   |
-| api/templates/ui.html            | True   |
+| Path | Exists |
+| ---- | ------ |
+| README.md | True |
+| CHANGELOG.md | True |
+| Dockerfile | True |
+| docker-compose.yml | True |
+| docker-compose.observability.yml | True |
+| requirements.txt | True |
+| Makefile | True |
+| project-structure.txt | True |
+| db/migrate.sh | True |
+| db/init.sql | True |
+| api/app.py | True |
+| api/export.py | True |
+| api/wsgi.py | True |
+| api/templates/ui.html | True |

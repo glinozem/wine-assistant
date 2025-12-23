@@ -1,53 +1,4 @@
 {
-  "__inputs": [
-    {
-      "name": "DS_LOKI",
-      "label": "loki",
-      "description": "",
-      "type": "datasource",
-      "pluginId": "loki",
-      "pluginName": "Loki"
-    }
-  ],
-  "__elements": {},
-  "__requires": [
-    {
-      "type": "panel",
-      "id": "barchart",
-      "name": "Bar chart",
-      "version": ""
-    },
-    {
-      "type": "grafana",
-      "id": "grafana",
-      "name": "Grafana",
-      "version": "10.4.2"
-    },
-    {
-      "type": "panel",
-      "id": "logs",
-      "name": "Logs",
-      "version": ""
-    },
-    {
-      "type": "datasource",
-      "id": "loki",
-      "name": "Loki",
-      "version": "1.0.0"
-    },
-    {
-      "type": "panel",
-      "id": "piechart",
-      "name": "Pie chart",
-      "version": ""
-    },
-    {
-      "type": "panel",
-      "id": "timeseries",
-      "name": "Time series",
-      "version": ""
-    }
-  ],
   "annotations": {
     "list": [
       {
@@ -74,7 +25,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "loki"
       },
       "fieldConfig": {
         "defaults": {
@@ -154,7 +105,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "loki"
           },
           "editorMode": "code",
           "expr": "sum(rate({job=\"docker-logs\"} |= \"http_request_completed\" [1m])) * 60",
@@ -168,7 +119,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "loki"
       },
       "fieldConfig": {
         "defaults": {
@@ -248,7 +199,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "loki"
           },
           "editorMode": "code",
           "expr": "avg(avg_over_time({job=\"docker-logs\"} |= \"http_request_completed\" | json | unwrap duration_ms [5m]))",
@@ -262,7 +213,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "loki"
       },
       "description": "",
       "fieldConfig": {
@@ -342,7 +293,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "loki"
           },
           "editorMode": "code",
           "expr": "sum by (status_code) (count_over_time({job=\"docker-logs\"} |= \"http_request_completed\" | json | status_code != \"\" [5m]))",
@@ -356,7 +307,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "loki"
       },
       "fieldConfig": {
         "defaults": {
@@ -404,7 +355,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "loki"
           },
           "editorMode": "code",
           "expr": "sum by (http_path) (count_over_time({job=\"docker-logs\"} |= \"http_request_completed\" | json | http_path != \"\" [1h]))",
@@ -418,7 +369,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "loki"
       },
       "fieldConfig": {
         "defaults": {
@@ -496,7 +447,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "loki"
           },
           "editorMode": "code",
           "expr": "avg by (http_path) (avg_over_time({job=\"docker-logs\"} |= \"http_request_completed\" | json | unwrap duration_ms [1h]))",
@@ -510,7 +461,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "loki"
       },
       "fieldConfig": {
         "defaults": {
@@ -558,7 +509,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "loki"
           },
           "editorMode": "code",
           "expr": "sum by (event) (count_over_time({job=\"docker-logs\"} |= \"api.app\" | json | level = \"ERROR\" [1h]))",
@@ -572,7 +523,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "loki"
       },
       "gridPos": {
         "h": 8,
@@ -595,7 +546,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "loki"
           },
           "editorMode": "code",
           "expr": "{job=\"docker-logs\"} |= \"http_request_completed\" | json",
@@ -609,7 +560,7 @@
     {
       "datasource": {
         "type": "loki",
-        "uid": "${DS_LOKI}"
+        "uid": "loki"
       },
       "description": "",
       "gridPos": {
@@ -633,7 +584,7 @@
         {
           "datasource": {
             "type": "loki",
-            "uid": "${DS_LOKI}"
+            "uid": "loki"
           },
           "editorMode": "code",
           "expr": "{job=\"docker-logs\", level=\"ERROR\"}",
@@ -645,7 +596,7 @@
       "type": "logs"
     }
   ],
-  "refresh": "15m",
+  "refresh": "5m",
   "schemaVersion": 39,
   "tags": [
     "wine-assistant",
@@ -663,6 +614,6 @@
   "timezone": "browser",
   "title": "Wine Assistant API Monitoring",
   "uid": "wine-assistant-api",
-  "version": 10,
+  "version": 22,
   "weekStart": ""
 }
