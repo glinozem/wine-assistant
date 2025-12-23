@@ -93,6 +93,45 @@ def with_rate_limiter_enabled(monkeypatch):
     yield
 
 
+def _env(key: str, default: str) -> str:
+    v = os.getenv(key)
+    return v if v not in (None, "") else default
+
+
+def _pg_connect_or_skip(*, host=None, port=None, user=None, password=None, dbname=None, connect_timeout: int = 2):
+    h = host or _env("DB_HOST", _env("PGHOST", "127.0.0.1"))
+    p = int(port or _env("DB_PORT", _env("PGPORT", "15432")))
+    u = user or _env("DB_USER", _env("PGUSER", "postgres"))
+    pw = password or _env("DB_PASSWORD", _env("PGPASSWORD", "postgres"))
+    db = dbname or _env("DB_NAME", _env("PGDATABASE", "wine_db"))
+
+    try:
+        return psycopg2.connect(
+            host=h,
+            port=p,
+            user=u,
+            password=pw,
+            dbname=db,
+            connect_timeout=connect_timeout,
+        )
+    except psycopg2.OperationalError as exc:
+        pytest.skip(f"PostgreSQL is not available at {h}:{p} (db='{db}', user='{u}'). Reason: {exc}")
+
+
+def pytest_configure(config):
+    # register custom markers (works with --strict-markers)
+    config.addinivalue_line("markers", "db: requires a running Postgres (enable with RUN_DB_TESTS=1)")
+
+
+def pytest_collection_modifyitems(config, items):
+    if os.getenv("RUN_DB_TESTS") == "1":
+        return
+    skip_db = pytest.mark.skip(reason="DB tests are disabled. Set RUN_DB_TESTS=1 to enable.")
+    for item in items:
+        if "db" in item.keywords:
+            item.add_marker(skip_db)
+
+
 # -----------------------------------------------------------------------------
 # Database fixtures
 # -----------------------------------------------------------------------------
@@ -138,6 +177,8 @@ def db_connection():
 
     Если БД недоступна, тест *пропускается* с понятным сообщением.
     """
+    if os.getenv("RUN_DB_TESTS") != "1":
+        pytest.skip("DB tests are disabled. Set RUN_DB_TESTS=1 to enable.")
     conn = _pg_connect_or_skip()
     # ensure isolation between tests
     conn.autocommit = False
