@@ -217,6 +217,25 @@ class ImportRunRegistry:
                 raise ValueError(f"Cannot mark running: {run_id} (expected status 'pending')")
             logger.info("Marked run %s as running", run_id)
 
+    def attach_envelope(self, run_id: UUID, envelope_id: UUID) -> None:
+        """
+        Attach envelope_id to an existing run.
+        NOTE: caller must commit.
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE import_runs
+                SET envelope_id = %s
+                WHERE run_id = %s
+                  AND status IN ('pending','running')
+                """,
+                (envelope_id, run_id),
+            )
+            if cur.rowcount == 0:
+                raise ValueError(f"Cannot attach envelope: {run_id} (expected status pending/running)")
+            logger.info("Attached envelope %s to run %s", envelope_id, run_id)
+
     def mark_success(
         self,
         run_id: UUID,
