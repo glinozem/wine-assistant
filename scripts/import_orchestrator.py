@@ -191,7 +191,8 @@ def run_import_orchestrator(
             artifacts = payload.get("artifact_paths") or payload.get("artifacts")
 
         if artifacts is not None and not isinstance(artifacts, dict):
-            logger.warning("artifact_paths/artifacts must be a dict[str,str]; got: %s",type(artifacts))
+            logger.warning("artifact_paths/artifacts must be a dict[str,"
+                           "str]; got: %s", type(artifacts))
             artifacts = None
 
         registry.mark_success(
