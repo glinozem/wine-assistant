@@ -7,6 +7,15 @@ import psycopg2.errors  # noqa: F401  # useful in tests if you need specific PG 
 import pytest
 from flask import Flask
 
+# Optional: load variables from local .env for tests/cli runs (does not override shell/CI env)
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(override=False)
+except Exception:
+    # python-dotenv is optional; tests can still run if env vars are provided by the shell/CI.
+    pass
+
 # -----------------------------------------------------------------------------
 # Test bootstrap
 # -----------------------------------------------------------------------------
@@ -98,26 +107,6 @@ def _env(key: str, default: str) -> str:
     return v if v not in (None, "") else default
 
 
-def _pg_connect_or_skip(*, host=None, port=None, user=None, password=None, dbname=None, connect_timeout: int = 2):
-    h = host or _env("DB_HOST", _env("PGHOST", "127.0.0.1"))
-    p = int(port or _env("DB_PORT", _env("PGPORT", "15432")))
-    u = user or _env("DB_USER", _env("PGUSER", "postgres"))
-    pw = password or _env("DB_PASSWORD", _env("PGPASSWORD", "postgres"))
-    db = dbname or _env("DB_NAME", _env("PGDATABASE", "wine_db"))
-
-    try:
-        return psycopg2.connect(
-            host=h,
-            port=p,
-            user=u,
-            password=pw,
-            dbname=db,
-            connect_timeout=connect_timeout,
-        )
-    except psycopg2.OperationalError as exc:
-        pytest.skip(f"PostgreSQL is not available at {h}:{p} (db='{db}', user='{u}'). Reason: {exc}")
-
-
 def pytest_configure(config):
     # register custom markers (works with --strict-markers)
     config.addinivalue_line("markers", "db: requires a running Postgres (enable with RUN_DB_TESTS=1)")
@@ -147,11 +136,12 @@ def _pg_connect_or_skip(
     """
     Try to connect to Postgres or skip the test with a helpful message.
     """
-    h = host or os.getenv("PGHOST", "127.0.0.1")
-    p = int(port or os.getenv("PGPORT", "15432"))  # prefer local mapped port in dev/tests
-    u = user or os.getenv("PGUSER", "postgres")
-    pw = password or os.getenv("PGPASSWORD", "postgres")
-    db = dbname or os.getenv("PGDATABASE", "wine_db")
+    # Prefer DB_* (project-wide), fallback to PG* (libpq/psql conventions).
+    h = host or _env("DB_HOST", _env("PGHOST", "127.0.0.1"))
+    p = int(port or _env("DB_PORT", _env("PGPORT", "15432")))
+    u = user or _env("DB_USER", _env("PGUSER", "postgres"))
+    pw = password or _env("DB_PASSWORD", _env("PGPASSWORD", "postgres"))
+    db = dbname or _env("DB_NAME", _env("PGDATABASE", "wine_db"))
 
     try:
         return psycopg2.connect(
@@ -164,7 +154,8 @@ def _pg_connect_or_skip(
         )
     except psycopg2.OperationalError as exc:
         # If database isn't up, skip DB-bound tests instead of failing the whole suite.
-        pytest.skip(f"PostgreSQL is not available at {h}:{p} (db='{db}'). Reason: {exc}")
+        pytest.skip(
+            f"PostgreSQL is not available at {h}:{p} (db='{db}'). Reason: {exc}")
 
 
 @pytest.fixture(scope="function")
