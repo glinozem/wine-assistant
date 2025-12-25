@@ -8,7 +8,7 @@
 
 Изначально учебный проект, Wine Assistant вырос в полноценное решение, демонстрирующее best practices современной backend-разработки на Python.
 
-**Текущий статус:** Production-ready • 175 тестов • Sprint 7 завершён ✅ • M1 (Import Operations) Complete 🎉 • Observability & Monitoring ready ✅ • AI Integration планируется (Sprint 8) 🔜
+**Текущий статус:** Production-ready • 165 тестов • Sprint 7 завершён ✅ • Observability & Monitoring ready ✅ • AI Integration планируется (Sprint 8) 🔜
 
 ---
 
@@ -16,17 +16,14 @@
 
 ### 📊 Управление данными и ETL
 
-- **Import Orchestrator** — production-grade система импорта с полным аудитом
 - **Автоматический импорт прайс-листов** (Excel/CSV) с интеллектуальным парсингом
-- **Идемпотентность импортов** по ключу `(supplier, as_of_date, file_sha256)`
-- **Retry support** — автоматический retry failed импортов через orchestrator
-- **Stale run detector** — автоматическая очистка зависших операций
 - **Извлечение изображений из Excel** → автоматическое заполнение `image_url`
 - **Справочник виноделен** (`wineries`) из PDF-каталога поставщика
 - **Enrichment каталога** данными о регионе, производителе, сайтах виноделен
 - **История цен и остатков** с автоматическим версионированием
 - **Ежедневная синхронизация остатков** в `inventory_history` для аналитики и графиков
 - **Карантин данных** для невалидных записей (Data Quality Gates)
+- **Идемпотентность** загрузок через SHA-256 хеши
 - **Партиционирование** таблиц по кварталам для масштабирования
 
 ### 🔌 REST API & Интеграции
@@ -108,91 +105,6 @@ make obs-logs        # Просмотр логов
 ```
 
 **Dashboard доступен по адресу:** `http://localhost:15000/d/wine-assistant-backup-dr/backup-dr`
-
-### 📥 Импорт прайс-листов (M1 Complete) 🎉
-
-> **Production-ready импорт** с идемпотентностью, аудитом и автоматизацией
-
-Импорт выполняется через **Import Orchestrator** с записью статусов и метрик в таблицу `import_runs`.
-Для интеграции с legacy ETL используется адаптер `scripts/import_targets/run_daily_adapter.py`.
-
-**Ключевые компоненты:**
-- **Import Orchestrator** — единая точка входа для всех импортов
-- **Import Run Registry** — журнал попыток с метриками (`import_runs` table)
-- **Stale Run Detector** — автоматическая очистка зависших импортов
-- **Legacy ETL Adapter** — интеграция с существующим `etl/run_daily`
-- **Ingest Envelope** — трассировка файлов через `file_sha256`
-
-**Быстрый старт (ежедневный импорт):**
-```powershell
-# Wrapper скрипт автоматически:
-# - найдёт последний файл по дате в имени (2025_12_24 Прайс...)
-# - извлечёт as_of_date из имени файла
-# - запустит orchestrator
-
-.\scripts\run_daily_import.ps1 -Supplier "dreemwine"
-
-# Expected output:
-# INFO import_run_success metrics={'total_rows_processed': 262, 'rows_skipped': 298}
-```
-
-**Ручной запуск (точечная диагностика):**
-```powershell
-python -m scripts.run_import_orchestrator `
-  --supplier "dreemwine" `
-  --file "data/inbox/2025_12_10 Прайс_Легенда_Виноделия.xlsx" `
-  --as-of-date "2025-12-10" `
-  --import-fn "scripts.import_targets.run_daily_adapter:import_with_run_daily"
-```
-
-**Проверка в БД:**
-```powershell
-docker compose exec -T db psql -U postgres -d wine_db -c "
-SELECT run_id, supplier, status, total_rows_processed, rows_skipped, envelope_id, created_at
-FROM import_runs
-ORDER BY created_at DESC LIMIT 10;"
-```
-
-**Автоматизация (Windows Task Scheduler):**
-```powershell
-# Ежедневный импорт (09:00)
-$taskName = "wine-assistant daily import"
-$scriptPath = (Resolve-Path ".\scripts\run_daily_import.ps1").Path
-schtasks /Create /TN $taskName /SC DAILY /ST 09:00 `
-  /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" -Supplier dreemwine" /F
-
-# Stale detector (каждые 15 минут)
-$taskName = "wine-assistant stale detector"
-$scriptPath = (Resolve-Path ".\scripts\run_stale_detector.ps1").Path
-schtasks /Create /TN $taskName /SC MINUTE /MO 15 `
-  /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`"" /F
-```
-
-**Особенности:**
-- ✅ **Идемпотентность:** ключ `(supplier, as_of_date, file_sha256)` — повторный импорт → skip
-- ✅ **Retry support:** failed импорт можно перезапустить той же командой
-- ✅ **Full audit:** каждая попытка (success/failed/skipped) в `import_runs`
-- ✅ **File traceability:** связь с файлом через `envelope_id`
-- ✅ **Automatic cleanup:** stale detector переводит зависшие runs в `rolled_back`
-- ✅ **Production validated:** DreemWine case (262 rows in 1.5s)
-
-**Документация:**
-- **Архитектура:** [`docs/dev/import_flow.md`](docs/dev/import_flow.md) — компоненты, статусы, контракты
-- **Runbook:** [`docs/runbook_import.md`](docs/runbook_import.md) — troubleshooting, SQL queries
-- **Quick Reference:** [`QUICK_REFERENCE.md`](QUICK_REFERENCE.md#import-operations) — command cheat sheet
-
-**Мониторинг:**
-```sql
--- Staleness check (критический порог: 24h)
-SELECT supplier, hours_since_success, last_success_at
-FROM v_import_staleness WHERE hours_since_success > 24;
-
--- Failed imports (last 7d)
-SELECT supplier, as_of_date, error_summary, created_at
-FROM import_runs
-WHERE status = 'failed' AND created_at > NOW() - INTERVAL '7 days'
-ORDER BY created_at DESC;
-```
 
 ### 🤖 AI Capabilities (В разработке - Sprint 8)
 
@@ -359,7 +271,6 @@ make dr-smoke-truncate DR_BACKUP_KEEP=2 MANAGE_PROMTAIL=1
 │  • Inventory Management                      │
 │  • Export Services (JSON/XLSX/PDF)           │
 │  • Winery Management                         │
-│  • Import Orchestrator (M1) 🎉               │
 └─────────────────┬────────────────────────────┘
                   │
 ┌─────────────────┴────────────────────────────┐
@@ -368,7 +279,6 @@ make dr-smoke-truncate DR_BACKUP_KEEP=2 MANAGE_PROMTAIL=1
 │  • Partitioned Tables (Quarterly)            │
 │  • Automated Migrations                      │
 │  • Data Quality Gates                        │
-│  • Import Run Registry (import_runs)         │
 └──────────────────────────────────────────────┘
 
          Observability Stack
@@ -376,7 +286,6 @@ make dr-smoke-truncate DR_BACKUP_KEEP=2 MANAGE_PROMTAIL=1
 │  Promtail → Loki → Grafana                   │
 │  • Structured JSONL Logging                  │
 │  • Backup/DR Metrics                         │
-│  • Import Operations Monitoring              │
 │  • API Request Tracking                      │
 │  • Real-time Dashboards                      │
 └──────────────────────────────────────────────┘
@@ -397,8 +306,6 @@ make dr-smoke-truncate DR_BACKUP_KEEP=2 MANAGE_PROMTAIL=1
 - **[INDEX.md](INDEX.md)** — Навигация по документации
 - **[QUICK_REFERENCE.md](QUICK_REFERENCE.md)** — Шпаргалка по командам
 - **[CHANGELOG.md](CHANGELOG.md)** — История изменений
-- **[docs/dev/import_flow.md](docs/dev/import_flow.md)** — Import Operations архитектура
-- **[docs/runbook_import.md](docs/runbook_import.md)** — Import Operations runbook
 - **[docs/dev/backup-dr-runbook.md](docs/dev/backup-dr-runbook.md)** — Backup/DR руководство
 - **[docs/dev/web-ui.md](docs/dev/web-ui.md)** — Документация UI
 - **[docs/dev/windows-powershell-http.md](docs/dev/windows-powershell-http.md)** — PowerShell для API
@@ -458,13 +365,9 @@ pytest tests/integration/
 
 # С подробным выводом
 pytest -v
-
-# Import Operations tests (requires DB) - PowerShell
-$env:RUN_DB_TESTS="1"; pytest tests/unit/test_import_run_registry.py
-$env:RUN_DB_TESTS="1"; pytest tests/unit/test_import_orchestrator_flow.py
 ```
 
-**Test Coverage:** 175 тестов, >80% покрытие
+**Test Coverage:** 165 тестов, >80% покрытие
 
 ---
 
