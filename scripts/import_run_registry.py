@@ -76,7 +76,7 @@ class ImportRunRegistry:
             # 1) blocker first
             cur.execute(
                 """
-                SELECT run_id, status, error_summary, created_at, started_at
+                SELECT run_id, status, error_summary, created_at, started_at, envelope_id
                 FROM import_runs
                 WHERE supplier = %s
                   AND file_sha256 = %s
@@ -131,6 +131,8 @@ class ImportRunRegistry:
         file_sha256 = compute_file_sha256(file_path)
         file_size = os.path.getsize(file_path)
         source_filename = os.path.basename(file_path)
+        envelope_id_param = str(
+            envelope_id) if envelope_id is not None else None
 
         with self.conn.cursor() as cur:
             cur.execute(
@@ -151,7 +153,7 @@ class ImportRunRegistry:
                     source_filename,
                     file_sha256,
                     file_size,
-                    envelope_id,
+                    envelope_id_param,
                     as_of_date,
                     as_of_datetime,
                     triggered_by,
@@ -211,7 +213,7 @@ class ImportRunRegistry:
                 WHERE run_id = %s
                   AND status = 'pending'
                 """,
-                (run_id,),
+                (str(run_id),),
             )
             if cur.rowcount == 0:
                 raise ValueError(f"Cannot mark running: {run_id} (expected status 'pending')")
@@ -230,7 +232,7 @@ class ImportRunRegistry:
                 WHERE run_id = %s
                   AND status IN ('pending','running')
                 """,
-                (envelope_id, run_id),
+                (str(envelope_id), str(run_id)),
             )
             if cur.rowcount == 0:
                 raise ValueError(f"Cannot attach envelope: {run_id} (expected status pending/running)")
@@ -258,9 +260,9 @@ class ImportRunRegistry:
 
         if envelope_id:
             set_parts.append("envelope_id = %s")
-            params.append(envelope_id)
+            params.append(str(envelope_id))
 
-        params.append(run_id)
+        params.append(str(run_id))
 
         with self.conn.cursor() as cur:
             cur.execute(
@@ -294,7 +296,8 @@ class ImportRunRegistry:
                 WHERE run_id = %s
                   AND status = 'running'
                 """,
-                (error_summary, Json(error_details) if error_details else None, run_id),
+                (error_summary, Json(error_details) if error_details else
+                None, str(run_id)),
             )
             if cur.rowcount == 0:
                 raise ValueError(f"Cannot mark failed: {run_id} (expected status 'running')")
@@ -309,7 +312,7 @@ class ImportRunRegistry:
                 FROM import_runs
                 WHERE run_id = %s
                 """,
-                (run_id,),
+                (str(run_id),),
             )
             row = cur.fetchone()
             if not row:
