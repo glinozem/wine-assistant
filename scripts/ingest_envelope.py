@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 from uuid import UUID, uuid4
 
 import psycopg2
+from psycopg2 import errors
 from psycopg2.extras import RealDictCursor
 
 from scripts.idempotency import compute_file_sha256
@@ -84,8 +85,12 @@ def create_ingest_envelope_best_effort(
     envelope_id = uuid4()
 
     candidate_values: dict[str, Any] = {}
+    if "file_name" in colset:
+        candidate_values["file_name"] = source_filename
+    if "file_path" in colset:
+        candidate_values["file_path"] = file_path
     if "envelope_id" in colset:
-        candidate_values["envelope_id"] = envelope_id
+        candidate_values["envelope_id"] = str(envelope_id)
     if "supplier" in colset:
         candidate_values["supplier"] = supplier
     if "source_filename" in colset:
@@ -123,7 +128,10 @@ def create_ingest_envelope_best_effort(
 
     columns_sql = ", ".join(candidate_values.keys())
     placeholders = ", ".join(["%s"] * len(candidate_values))
-    params = list(candidate_values.values())
+    params = [
+        str(v) if isinstance(v, UUID) else v
+        for v in candidate_values.values()
+    ]
 
     try:
         with conn.cursor() as cur:
@@ -134,6 +142,28 @@ def create_ingest_envelope_best_effort(
             created_id = cur.fetchone()[0]
         logger.info("Created ingest_envelope (column-aware): %s", created_id)
         return EnvelopeCreateResult(created_id, None)
+
+    except errors.UniqueViolation as exc:
+        conn.rollback()
+
+        # ключевой кейс: повтор того же файла => envelope уже существует
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT envelope_id FROM ingest_envelope WHERE file_sha256 = %s",
+                    (file_sha256,),
+                )
+                row = cur.fetchone()
+            if row and row[0]:
+                existing = row[0]
+                if isinstance(existing, str):
+                    existing = UUID(existing)
+                return EnvelopeCreateResult(existing, None)
+        except Exception:
+            pass
+
+        return EnvelopeCreateResult(None, f"envelope insert failed: {exc}")
+
     except Exception as exc:
         conn.rollback()
         return EnvelopeCreateResult(None, f"envelope insert failed: {exc}")

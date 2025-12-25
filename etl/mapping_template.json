@@ -1,17 +1,18 @@
 {
   "sheet": "Основной",
+  "header_row": 3,
   "mapping": {
     "code": "Код",
-    "producer": "Производитель",
+    "producer": "Поставщик",
     "title_ru": "Наименование",
     "country": "Страна",
-    "region": "Регион",
+    "region": "Unnamed: 6",
     "color": "Цвет",
     "style": "Тип",
-    "grapes": "Сорт",
-    "abv": "Крепость",
-    "pack": "Упаковка",
-    "volume": "Объем",
-    "price_rub": "Цена"
+    "grapes": "Сорт\nвинограда",
+    "abv": "Алк.,\n%",
+    "volume": "Ёмк.,\nл",
+    "pack": "Бут.\nв кор.",
+    "price_rub": "Цена со скидкой"
   }
 }

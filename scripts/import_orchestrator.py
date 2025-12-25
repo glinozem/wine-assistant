@@ -89,6 +89,10 @@ def run_import_orchestrator(
         reason = f"{action}: {blocker}"
         logger.info("import_orchestrator: skip. supplier=%s as_of_date=%s reason=%s", supplier, as_of_date, reason)
 
+        envelope_id = None
+        if isinstance(blocker, dict):
+            envelope_id = blocker.get("envelope_id")
+
         if create_skipped_audit_row:
             try:
                 registry.create_skipped_attempt(
@@ -97,6 +101,7 @@ def run_import_orchestrator(
                     as_of_date=as_of_date,
                     reason=reason,
                     triggered_by=triggered_by,
+                    envelope_id=envelope_id,
                 )
                 conn.commit()
             except Exception:
