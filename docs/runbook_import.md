@@ -140,13 +140,67 @@ Envelope создаётся best-effort.
 
 ## 4) Детектор «зависших» импортов
 
-Запуск вручную:
+### Dry-run (проверка без запуска)
 
 ```powershell
-.\scripts\run_stale_detector.ps1 -RunningMinutes 120
+# Проверить параметры и команду без запуска
+.\scripts\run_stale_detector.ps1 -RunningMinutes 120 -PendingMinutes 15 -Verbose -WhatIf
 ```
 
-Назначение: найти `import_runs` со статусом `running`, которые висят дольше порога, и перевести в `stale/rolled_back` (согласно политике проекта).
+**Expected output:**
+```
+=== Wine Assistant - Stale Import Runs Detector ===
+Repo root:       D:\Documents\JetBrainsIDEProjects\PyCharmProjects\wine-assistant
+RunningMinutes:  120
+PendingMinutes:  15
+
+VERBOSE: PowerShell: 5.1.26100.7462
+VERBOSE: Python: D:\...\wine-assistant\.venv\Scripts\python.exe
+VERBOSE: Command: "..." -m scripts.mark_stale_import_runs --running-minutes 120 --pending-minutes 15
+WHATIF: stale detector will NOT be executed.
+WHATIF: command = "..." -m scripts.mark_stale_import_runs --running-minutes 120 --pending-minutes 15
+WHATIF: RunningMinutes = 120
+WHATIF: PendingMinutes = 15
+```
+
+### Реальный запуск с диагностикой
+
+```powershell
+# Запуск с диагностикой
+.\scripts\run_stale_detector.ps1 -RunningMinutes 120 -PendingMinutes 15 -Verbose
+```
+
+**Expected output:**
+```
+=== Wine Assistant - Stale Import Runs Detector ===
+Repo root:       D:\Documents\JetBrainsIDEProjects\PyCharmProjects\wine-assistant
+RunningMinutes:  120
+PendingMinutes:  15
+
+VERBOSE: PowerShell: 5.1.26100.7462
+VERBOSE: Python: D:\...\wine-assistant\.venv\Scripts\python.exe
+VERBOSE: Command: "..." -m scripts.mark_stale_import_runs --running-minutes 120 --pending-minutes 15
+Running stale detector...
+
+2025-12-26 08:58:57,299 INFO __main__ stale_import_runs_done rolled_back_running=0 rolled_back_pending=0
+
+Stale detector completed successfully.
+```
+
+### Тихий запуск (без диагностики)
+
+```powershell
+# Defaults: RunningMinutes=120, PendingMinutes=15
+.\scripts\run_stale_detector.ps1
+```
+
+**Назначение:** найти `import_runs` со статусом `running` или `pending`, которые висят дольше порога, и перевести в `rolled_back`.
+
+**Параметры:**
+- `-RunningMinutes` — порог для stuck "running" импортов (default: 120)
+- `-PendingMinutes` — порог для stuck "pending" импортов (default: 15)
+- `-Verbose` — показывает версии PowerShell/Python, команду запуска
+- `-WhatIf` — не запускает detector, только показывает параметры
 
 ## 5) Примечание по семантике `as_of_date`
 
@@ -202,7 +256,7 @@ WHERE supplier='dreemwine' AND as_of_date='2025-12-10'
 GROUP BY status;"
 ```
 
-Expected result:
+**Expected result:**
 ```
   status  | count
 ----------+-------
@@ -227,8 +281,41 @@ ORDER BY created_at DESC LIMIT 1;"
 # Orchestrator создаст новую попытку для той же (supplier, as_of_date, file_sha256)
 ```
 
+### 6.4 Cleanup зависших импортов
+
+```powershell
+# 1. Найти зависшие импорты
+docker compose exec -T db psql -U postgres -d wine_db -c "
+SELECT run_id, supplier, status, started_at,
+       EXTRACT(EPOCH FROM (NOW() - started_at))/60 as minutes_running
+FROM import_runs
+WHERE status IN ('running', 'pending')
+ORDER BY started_at;"
+
+# 2. Dry-run stale detector
+.\scripts\run_stale_detector.ps1 -RunningMinutes 120 -PendingMinutes 15 -Verbose -WhatIf
+
+# Output:
+# WHATIF: stale detector will NOT be executed.
+# WHATIF: RunningMinutes = 120
+# WHATIF: PendingMinutes = 15
+
+# 3. Запустить cleanup
+.\scripts\run_stale_detector.ps1 -RunningMinutes 120 -PendingMinutes 15 -Verbose
+
+# Output:
+# 2025-12-26 08:58:57,299 INFO stale_import_runs_done rolled_back_running=0 rolled_back_pending=0
+
+# 4. Проверить результат
+docker compose exec -T db psql -U postgres -d wine_db -c "
+SELECT status, COUNT(*) as count
+FROM import_runs
+WHERE created_at > NOW() - INTERVAL '1 day'
+GROUP BY status;"
+```
+
 ---
 
 **Обновлено:** 26 декабря 2025
-**Версия:** 1.1
-**Добавлено:** Verbose/WhatIf диагностика, примеры сценариев
+**Версия:** 1.2
+**Добавлено:** Verbose/WhatIf для stale detector, expected output, сценарий cleanup

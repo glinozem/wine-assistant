@@ -157,7 +157,13 @@ FROM import_runs
 WHERE status = 'running'
   AND started_at < NOW() - INTERVAL '2 hours';"
 
-# Auto-fix with stale detector
+# Dry-run: проверить что будет сделано
+.\scripts\run_stale_detector.ps1 -RunningMinutes 120 -Verbose -WhatIf
+
+# Реальный запуск с диагностикой
+.\scripts\run_stale_detector.ps1 -RunningMinutes 120 -Verbose
+
+# Без диагностики (как раньше)
 .\scripts\run_stale_detector.ps1 -RunningMinutes 120
 ```
 
@@ -176,6 +182,38 @@ Get-ChildItem "data/inbox/*.xlsx" |
 # Trigger manual import
 .\scripts\run_daily_import.ps1 -Supplier "dreemwine"
 ```
+
+### Stale Detector (зависшие импорты)
+
+```powershell
+# Dry-run: проверить параметры и команду без запуска
+.\scripts\run_stale_detector.ps1 -RunningMinutes 120 -PendingMinutes 15 -Verbose -WhatIf
+
+# Expected output:
+# VERBOSE: PowerShell: 5.1.26100.7462
+# VERBOSE: Python: D:\...\wine-assistant\.venv\Scripts\python.exe
+# VERBOSE: Command: "..." -m scripts.mark_stale_import_runs --running-minutes 120 --pending-minutes 15
+# WHATIF: stale detector will NOT be executed.
+# WHATIF: RunningMinutes = 120
+# WHATIF: PendingMinutes = 15
+
+# Реальный запуск с диагностикой
+.\scripts\run_stale_detector.ps1 -RunningMinutes 120 -PendingMinutes 15 -Verbose
+
+# Expected output:
+# Running stale detector...
+# 2025-12-26 08:58:57,299 INFO stale_import_runs_done rolled_back_running=0 rolled_back_pending=0
+# Stale detector completed successfully.
+
+# Тихий запуск (без диагностики)
+.\scripts\run_stale_detector.ps1
+```
+
+**Диагностика stale detector:**
+- `-Verbose` — показывает версии PowerShell/Python, команду запуска
+- `-WhatIf` — не запускает detector, только показывает параметры
+- `-RunningMinutes` — порог для stuck "running" импортов (default: 120)
+- `-PendingMinutes` — порог для stuck "pending" импортов (default: 15)
 
 ### Monitoring Queries
 
@@ -395,6 +433,6 @@ docker compose up -d --force-recreate api
 ---
 
 **Создано:** 04 декабря 2025
-**Обновлено:** 26 декабря 2025 (добавлен Verbose/WhatIf режимы)
-**Версия:** 1.3
+**Обновлено:** 26 декабря 2025 (добавлены Verbose/WhatIf для stale detector)
+**Версия:** 1.4
 **Для:** Wine Assistant v0.5.0+ (M1 Complete)
