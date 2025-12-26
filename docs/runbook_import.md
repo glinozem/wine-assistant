@@ -28,20 +28,40 @@
 - определит `as_of_date` из имени,
 - запустит orchestrator.
 
-**Диагностика файлов:**
-- `-Verbose` — показывает топ-5 кандидатов с датами из имени и LastWriteTime:
-  ```
-  VERBOSE: Top candidates (sorted):
-  VERBOSE:  1) 2025_12_10 Прайс... | parsed_date=2025-12-10 | last_write=2025-12-24 13:42:00
-  VERBOSE:  2) 2025_12_03 Прайс... | parsed_date=2025-12-03 | last_write=2025-12-03 11:00:00
-  VERBOSE: Chosen file: D:\...\2025_12_10 Прайс_Легенда_Виноделия.xlsx
-  ```
-- `-WhatIf` — не запускает импорт, только показывает выбранный файл и as_of_date:
-  ```
-  WHATIF: orchestrator will NOT be executed.
-  WHATIF: selected file = D:\...\2025_12_10 Прайс_Легенда_Виноделия.xlsx
-  WHATIF: as_of_date     = 2025-12-10
-  ```
+**Диагностика файлов (пример вывода `-Verbose -WhatIf`):**
+```
+=== Wine Assistant - Daily Import ===
+Repo root:       D:\...\wine-assistant
+Supplier:        dreemwine
+
+PowerShell: 5.1.26100.7462
+Python: D:\...\wine-assistant\.venv\Scripts\python.exe
+Mode:            auto-discovery
+Inbox:           D:\...\wine-assistant\data\inbox
+
+Scanning inbox: D:\...\wine-assistant\data\inbox
+Top candidates (sorted):
+ 1) 2025_12_10 Прайс_Легенда_Виноделия.xlsx | parsed_date=2025-12-10 | last_write=2025-12-24 13:42:00
+ 2) 2025_12_03 Прайс_Легенда_Виноделия.xlsx | parsed_date=2025-12-03 | last_write=2025-12-03 11:00:00
+ 3) 2025_12_02 Прайс_Легенда_Виноделия.xlsx | parsed_date=2025-12-02 | last_write=2025-12-24 13:42:00
+Chosen file: D:\...\2025_12_10 Прайс_Легенда_Виноделия.xlsx
+Selected file:   2025_12_10 Прайс_Легенда_Виноделия.xlsx
+Selected full path: D:\...\2025_12_10 Прайс_Легенда_Виноделия.xlsx
+as_of_date:      2025-12-10 (from filename)
+as_of_date source: filename (override via -AsOfDate to change)
+Command:        "D:\...\.venv\Scripts\python.exe" -m scripts.run_import_orchestrator --supplier dreemwine --file "..." --as-of-date 2025-12-10 --import-fn scripts.import_targets.run_daily_adapter:import_with_run_daily
+
+WHATIF: import orchestrator will NOT be executed.
+WHATIF: command       = "..." -m scripts.run_import_orchestrator ...
+WHATIF: supplier      = dreemwine
+WHATIF: selected file = D:\...\2025_12_10 Прайс_Легенда_Виноделия.xlsx
+WHATIF: as_of_date    = 2025-12-10
+```
+
+Обратите внимание:
+- Команда выводится в **одну строку** (без переносов) для удобства копирования
+- Топ-5 кандидатов отсортированы по дате из имени (desc), затем по LastWriteTime
+- `as_of_date source: filename` показывает откуда взята дата
 
 ## 2) Типовые SQL-проверки
 
@@ -112,7 +132,7 @@ docker compose exec -T db psql -U postgres -d wine_db -c `
 .\scripts\run_daily_import.ps1 -Supplier "dreemwine" -Verbose -WhatIf
 ```
 
-Output покажет:
+Output покажет (см. пример в разделе 1):
 - Топ-5 кандидатов с датами
 - Выбранный файл
 - Извлечённый as_of_date
@@ -150,15 +170,15 @@ Envelope создаётся best-effort.
 **Expected output:**
 ```
 === Wine Assistant - Stale Import Runs Detector ===
-Repo root:       D:\Documents\JetBrainsIDEProjects\PyCharmProjects\wine-assistant
+Repo root:       D:\...\wine-assistant
 RunningMinutes:  120
 PendingMinutes:  15
 
-VERBOSE: PowerShell: 5.1.26100.7462
-VERBOSE: Python: D:\...\wine-assistant\.venv\Scripts\python.exe
-VERBOSE: Command: "..." -m scripts.mark_stale_import_runs --running-minutes 120 --pending-minutes 15
+PowerShell: 5.1.26100.7462
+Python: D:\...\wine-assistant\.venv\Scripts\python.exe
+Command:        "D:\...\.venv\Scripts\python.exe" -m scripts.mark_stale_import_runs --running-minutes 120 --pending-minutes 15
 WHATIF: stale detector will NOT be executed.
-WHATIF: command = "..." -m scripts.mark_stale_import_runs --running-minutes 120 --pending-minutes 15
+WHATIF: command        = "..." -m scripts.mark_stale_import_runs --running-minutes 120 --pending-minutes 15
 WHATIF: RunningMinutes = 120
 WHATIF: PendingMinutes = 15
 ```
@@ -173,13 +193,13 @@ WHATIF: PendingMinutes = 15
 **Expected output:**
 ```
 === Wine Assistant - Stale Import Runs Detector ===
-Repo root:       D:\Documents\JetBrainsIDEProjects\PyCharmProjects\wine-assistant
+Repo root:       D:\...\wine-assistant
 RunningMinutes:  120
 PendingMinutes:  15
 
-VERBOSE: PowerShell: 5.1.26100.7462
-VERBOSE: Python: D:\...\wine-assistant\.venv\Scripts\python.exe
-VERBOSE: Command: "..." -m scripts.mark_stale_import_runs --running-minutes 120 --pending-minutes 15
+PowerShell: 5.1.26100.7462
+Python: D:\...\wine-assistant\.venv\Scripts\python.exe
+Command:        "..." -m scripts.mark_stale_import_runs --running-minutes 120 --pending-minutes 15
 Running stale detector...
 
 2025-12-26 08:58:57,299 INFO __main__ stale_import_runs_done rolled_back_running=0 rolled_back_pending=0
@@ -199,8 +219,10 @@ Stale detector completed successfully.
 **Параметры:**
 - `-RunningMinutes` — порог для stuck "running" импортов (default: 120)
 - `-PendingMinutes` — порог для stuck "pending" импортов (default: 15)
-- `-Verbose` — показывает версии PowerShell/Python, команду запуска
+- `-Verbose` — показывает версии PowerShell/Python, команду запуска (однострочный формат)
 - `-WhatIf` — не запускает detector, только показывает параметры
+
+**Важно:** Команда выводится в одну строку для удобства копирования и логирования.
 
 ## 5) Примечание по семантике `as_of_date`
 
@@ -227,6 +249,12 @@ Get-ChildItem "data/inbox/2025_12_24*.xlsx"
 
 # 2. Dry-run для проверки
 .\scripts\run_daily_import.ps1 -Supplier "dreemwine" -Verbose -WhatIf
+
+# Output покажет:
+# - Топ-5 кандидатов
+# - Выбранный файл: 2025_12_24 Прайс...
+# - as_of_date: 2025-12-24 (from filename)
+# - WHATIF: import orchestrator will NOT be executed.
 
 # 3. Запустить импорт
 .\scripts\run_daily_import.ps1 -Supplier "dreemwine"
@@ -304,7 +332,9 @@ ORDER BY started_at;"
 .\scripts\run_stale_detector.ps1 -RunningMinutes 120 -PendingMinutes 15 -Verbose
 
 # Output:
+# Running stale detector...
 # 2025-12-26 08:58:57,299 INFO stale_import_runs_done rolled_back_running=0 rolled_back_pending=0
+# Stale detector completed successfully.
 
 # 4. Проверить результат
 docker compose exec -T db psql -U postgres -d wine_db -c "
@@ -317,5 +347,5 @@ GROUP BY status;"
 ---
 
 **Обновлено:** 26 декабря 2025
-**Версия:** 1.2
-**Добавлено:** Verbose/WhatIf для stale detector, expected output, сценарий cleanup
+**Версия:** 1.2-final
+**Добавлено:** Точные примеры вывода, однострочный формат команд

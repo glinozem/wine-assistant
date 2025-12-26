@@ -55,14 +55,21 @@ try {
 
   $pyArgs = @(
     "-m", "scripts.mark_stale_import_runs",
-    "--running-minutes", $RunningMinutes,
-    "--pending-minutes", $PendingMinutes
+    "--running-minutes", $RunningMinutes.ToString(),
+    "--pending-minutes", $PendingMinutes.ToString()
   )
 
   $argStr = (($pyArgs | ForEach-Object { Format-LogArg $_ }) -join " ")
   $cmdStr = ('"{0}" {1}' -f $python, $argStr)
 
-  Write-Verbose ("Command: {0}" -f $cmdStr)
+  # Guarantee a single physical line in logs (no embedded CR/LF).
+  $cmdStr = ($cmdStr -replace "(\r\n|\r|\n)", " ").Trim()
+
+  if ($PSBoundParameters.ContainsKey('Verbose')) {
+    Write-Host ("Command:        {0}" -f $cmdStr)
+  } else {
+    Write-Verbose ("Command: {0}" -f $cmdStr)
+  }
 
   if ($WhatIf) {
     Write-Host "WHATIF: stale detector will NOT be executed."
