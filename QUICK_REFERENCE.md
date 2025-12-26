@@ -29,6 +29,12 @@ Wrapper скрипт автоматически:
 # Простейший вариант
 .\scripts\run_daily_import.ps1 -Supplier "dreemwine"
 
+# С диагностикой (показывает топ-5 кандидатов + выбранный файл)
+.\scripts\run_daily_import.ps1 -Supplier "dreemwine" -Verbose
+
+# Dry-run (не запускает импорт, только показывает что будет сделано)
+.\scripts\run_daily_import.ps1 -Supplier "dreemwine" -Verbose -WhatIf
+
 # С явным указанием файла
 .\scripts\run_daily_import.ps1 `
   -Supplier "dreemwine" `
@@ -39,6 +45,10 @@ Wrapper скрипт автоматически:
   -Supplier "dreemwine" `
   -AsOfDate "2025-12-06"
 ```
+
+**Диагностика файлов:**
+- `-Verbose` — показывает топ-5 кандидатов с датами из имени и LastWriteTime
+- `-WhatIf` — не запускает импорт, только показывает выбранный файл и as_of_date
 
 ### Ручной запуск orchestrator
 
@@ -120,6 +130,21 @@ ORDER BY created_at DESC LIMIT 1;"
 
 # Retry after fix (same command)
 python -m scripts.run_import_orchestrator ...
+```
+
+**Problem: Wrong file selected**
+```powershell
+# Диагностика: проверить какой файл будет выбран
+.\scripts\run_daily_import.ps1 -Supplier "dreemwine" -Verbose -WhatIf
+
+# Output покажет:
+# VERBOSE: Top candidates (sorted):
+# VERBOSE:  1) 2025_12_10 Прайс... | parsed_date=2025-12-10 | last_write=...
+# WHATIF: selected file = ...
+# WHATIF: as_of_date     = 2025-12-10
+
+# Решение: явно указать файл
+.\scripts\run_daily_import.ps1 -Supplier "dreemwine" -FilePath "data/inbox/specific_file.xlsx"
 ```
 
 **Problem: Import stuck (running > 2 hours)**
@@ -370,6 +395,6 @@ docker compose up -d --force-recreate api
 ---
 
 **Создано:** 04 декабря 2025
-**Обновлено:** 25 декабря 2025 (добавлен Import Operations)
-**Версия:** 1.2
+**Обновлено:** 26 декабря 2025 (добавлен Verbose/WhatIf режимы)
+**Версия:** 1.3
 **Для:** Wine Assistant v0.5.0+ (M1 Complete)
