@@ -13,13 +13,35 @@
 ## 1) Стандартный путь (дежурный запуск)
 
 ```powershell
+# Простейший вариант
 .\scripts\run_daily_import.ps1 -Supplier "dreemwine"
+
+# С диагностикой (показывает топ-5 кандидатов + выбранный файл)
+.\scripts\run_daily_import.ps1 -Supplier "dreemwine" -Verbose
+
+# Dry-run (не запускает импорт, только показывает что будет сделано)
+.\scripts\run_daily_import.ps1 -Supplier "dreemwine" -Verbose -WhatIf
 ```
 
 Скрипт:
 - выберет последний файл по **дате в имени** `YYYY_MM_DD`,
 - определит `as_of_date` из имени,
 - запустит orchestrator.
+
+**Диагностика файлов:**
+- `-Verbose` — показывает топ-5 кандидатов с датами из имени и LastWriteTime:
+  ```
+  VERBOSE: Top candidates (sorted):
+  VERBOSE:  1) 2025_12_10 Прайс... | parsed_date=2025-12-10 | last_write=2025-12-24 13:42:00
+  VERBOSE:  2) 2025_12_03 Прайс... | parsed_date=2025-12-03 | last_write=2025-12-03 11:00:00
+  VERBOSE: Chosen file: D:\...\2025_12_10 Прайс_Легенда_Виноделия.xlsx
+  ```
+- `-WhatIf` — не запускает импорт, только показывает выбранный файл и as_of_date:
+  ```
+  WHATIF: orchestrator will NOT be executed.
+  WHATIF: selected file = D:\...\2025_12_10 Прайс_Легенда_Виноделия.xlsx
+  WHATIF: as_of_date     = 2025-12-10
+  ```
 
 ## 2) Типовые SQL-проверки
 
@@ -47,6 +69,16 @@ docker compose exec -T db psql -U postgres -d wine_db -c `
    order by created_at desc;"
 ```
 
+**Пример результата:**
+```
+                run_id                | status  | as_of_date |            file_sha256            |             envelope_id
+--------------------------------------+---------+------------+-----------------------------------+--------------------------------------
+ 7273eabf-ac5c-4a1f-9b59-982eef6c7520 | skipped | 2025-12-10 | e8b0...                          | 6a8a99ff-e01d-412e-8ebd-60da5defd2f6
+ 153a53b0-4002-41e8-9111-a33d9b0b5333 | success | 2025-12-10 | e8b0...                          | 6a8a99ff-e01d-412e-8ebd-60da5defd2f6
+```
+
+Обратите внимание: `envelope_id` одинаковый, что подтверждает идемпотентность.
+
 ## 3) Частые проблемы и что делать
 
 ### 3.1 Ошибка partition: `effective_from = null`
@@ -70,7 +102,35 @@ docker compose exec -T db psql -U postgres -d wine_db -c `
 2) вывести колонки через pandas (см. QUICK_REFERENCE),
 3) при необходимости обновить mapping.
 
-### 3.3 Envelope не создаётся / падает вставка
+### 3.3 Неправильный файл выбран
+
+Симптом: скрипт выбирает не тот файл, который вы ожидали.
+
+Диагностика:
+```powershell
+# Посмотреть какой файл будет выбран (без запуска импорта)
+.\scripts\run_daily_import.ps1 -Supplier "dreemwine" -Verbose -WhatIf
+```
+
+Output покажет:
+- Топ-5 кандидатов с датами
+- Выбранный файл
+- Извлечённый as_of_date
+
+Решение:
+```powershell
+# Явно указать нужный файл
+.\scripts\run_daily_import.ps1 `
+  -Supplier "dreemwine" `
+  -FilePath "data/inbox/2025_12_03 Прайс_Легенда_Виноделия.xlsx"
+
+# Или override as_of_date
+.\scripts\run_daily_import.ps1 `
+  -Supplier "dreemwine" `
+  -AsOfDate "2025-12-03"
+```
+
+### 3.4 Envelope не создаётся / падает вставка
 
 Envelope создаётся best-effort.
 Если `public.ingest_envelope` отсутствует или schema требует NOT NULL без defaults — envelope будет `None`, но импорт продолжится.
@@ -93,3 +153,82 @@ Envelope создаётся best-effort.
 `as_of_date` — бизнес-дата «эффективности» цен (используется как `effective_from` в `product_prices`).
 
 По умолчанию `run_daily_import.ps1` берёт её из имени файла (`YYYY_MM_DD` → `YYYY-MM-DD`), но вы можете override'ить `-AsOfDate`.
+
+**Пример:**
+```powershell
+# Файл: 2025_12_10 Прайс...xlsx
+# as_of_date автоматически: 2025-12-10
+
+# Override (если бизнес-дата отличается от даты в имени):
+.\scripts\run_daily_import.ps1 -Supplier "dreemwine" -AsOfDate "2025-12-06"
+```
+
+## 6) Типичные сценарии
+
+### 6.1 Первый импорт новой даты
+
+```powershell
+# 1. Проверить что файл появился
+Get-ChildItem "data/inbox/2025_12_24*.xlsx"
+
+# 2. Dry-run для проверки
+.\scripts\run_daily_import.ps1 -Supplier "dreemwine" -Verbose -WhatIf
+
+# 3. Запустить импорт
+.\scripts\run_daily_import.ps1 -Supplier "dreemwine"
+
+# 4. Проверить результат
+docker compose exec -T db psql -U postgres -d wine_db -c "
+SELECT run_id, status, total_rows_processed, rows_skipped
+FROM import_runs
+ORDER BY created_at DESC LIMIT 1;"
+```
+
+### 6.2 Повторный импорт (идемпотентность)
+
+```powershell
+# Повторный запуск той же команды
+.\scripts\run_daily_import.ps1 -Supplier "dreemwine"
+
+# Expected output:
+# INFO import_orchestrator: skip. reason=SKIP_ALREADY_SUCCESS
+# INFO Created skipped attempt ... (SKIP_ALREADY_SUCCESS: ...)
+
+# Проверка в БД - должно быть 2 записи: success + skipped
+docker compose exec -T db psql -U postgres -d wine_db -c "
+SELECT status, COUNT(*) as count
+FROM import_runs
+WHERE supplier='dreemwine' AND as_of_date='2025-12-10'
+GROUP BY status;"
+```
+
+Expected result:
+```
+  status  | count
+----------+-------
+ success  |     1
+ skipped  |     1
+```
+
+### 6.3 Retry failed импорта
+
+```powershell
+# 1. Проверить ошибку
+docker compose exec -T db psql -U postgres -d wine_db -c "
+SELECT run_id, error_summary, error_details
+FROM import_runs
+WHERE status = 'failed'
+ORDER BY created_at DESC LIMIT 1;"
+
+# 2. Исправить проблему (например, обновить mapping)
+
+# 3. Retry (той же командой)
+.\scripts\run_daily_import.ps1 -Supplier "dreemwine"
+# Orchestrator создаст новую попытку для той же (supplier, as_of_date, file_sha256)
+```
+
+---
+
+**Обновлено:** 26 декабря 2025
+**Версия:** 1.1
+**Добавлено:** Verbose/WhatIf диагностика, примеры сценариев
