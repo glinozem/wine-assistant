@@ -28,6 +28,17 @@ function Resolve-Python {
   return "python"
 }
 
+function Format-LogArg {
+  param([object]$Value)
+  if ($null -eq $Value) { return '""' }
+
+  $s = [string]$Value
+  if ($s -match '[\s"]') {
+    return '"' + ($s -replace '"', '\"') + '"'
+  }
+  return $s
+}
+
 try {
   $repoRoot = Resolve-RepoRoot
   Set-Location -LiteralPath $repoRoot
@@ -42,25 +53,29 @@ try {
   Write-Verbose ("PowerShell: {0}" -f $PSVersionTable.PSVersion)
   Write-Verbose ("Python: {0}" -f $python)
 
-$cmdStr = ('"{0}" -m scripts.mark_stale_import_runs --running-minutes {1} --pending-minutes {2}' -f `
-  $python, $RunningMinutes, $PendingMinutes)
+  $pyArgs = @(
+    "-m", "scripts.mark_stale_import_runs",
+    "--running-minutes", $RunningMinutes,
+    "--pending-minutes", $PendingMinutes
+  )
 
-Write-Verbose ("Command: {0}" -f $cmdStr)
+  $argStr = (($pyArgs | ForEach-Object { Format-LogArg $_ }) -join " ")
+  $cmdStr = ('"{0}" {1}' -f $python, $argStr)
 
-if ($WhatIf) {
-  Write-Host "WHATIF: stale detector will NOT be executed."
-  Write-Host ("WHATIF: command = {0}" -f $cmdStr)
-  Write-Host ("WHATIF: RunningMinutes = {0}" -f $RunningMinutes)
-  Write-Host ("WHATIF: PendingMinutes = {0}" -f $PendingMinutes)
-  exit 0
-}
+  Write-Verbose ("Command: {0}" -f $cmdStr)
 
-Write-Host "Running stale detector..."
-Write-Host ""
+  if ($WhatIf) {
+    Write-Host "WHATIF: stale detector will NOT be executed."
+    Write-Host ("WHATIF: command        = {0}" -f $cmdStr)
+    Write-Host ("WHATIF: RunningMinutes = {0}" -f $RunningMinutes)
+    Write-Host ("WHATIF: PendingMinutes = {0}" -f $PendingMinutes)
+    exit 0
+  }
 
-& $python -m scripts.mark_stale_import_runs `
-  --running-minutes $RunningMinutes `
-  --pending-minutes $PendingMinutes
+  Write-Host "Running stale detector..."
+  Write-Host ""
+
+  & $python @pyArgs
 
   if ($LASTEXITCODE -ne 0) {
     throw "Stale detector exited with code $LASTEXITCODE."

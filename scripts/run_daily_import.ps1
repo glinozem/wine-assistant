@@ -35,6 +35,18 @@ function Resolve-Python {
   return "python"
 }
 
+function Format-LogArg {
+  param([object]$Value)
+  if ($null -eq $Value) { return '""' }
+
+  $s = [string]$Value
+  # Quote only when needed (spaces/quotes) to keep logs readable.
+  if ($s -match '[\s"]') {
+    return '"' + ($s -replace '"', '\"') + '"'
+  }
+  return $s
+}
+
 function Find-LatestPriceFile {
   param([string]$InboxPath)
 
@@ -56,24 +68,12 @@ function Find-LatestPriceFile {
       try {
         $dateStr = "{0}-{1}-{2}" -f $Matches[1], $Matches[2], $Matches[3]
         $date = [DateTime]::ParseExact($dateStr, "yyyy-MM-dd", $null)
-        [PSCustomObject]@{
-          File    = $_
-          Date    = $date
-          HasDate = $true
-        }
+        [PSCustomObject]@{ File = $_; Date = $date; HasDate = $true }
       } catch {
-        [PSCustomObject]@{
-          File    = $_
-          Date    = $_.LastWriteTime
-          HasDate = $false
-        }
+        [PSCustomObject]@{ File = $_; Date = $_.LastWriteTime; HasDate = $false }
       }
     } else {
-      [PSCustomObject]@{
-        File    = $_
-        Date    = $_.LastWriteTime
-        HasDate = $false
-      }
+      [PSCustomObject]@{ File = $_; Date = $_.LastWriteTime; HasDate = $false }
     }
   }
 
@@ -120,9 +120,12 @@ try {
   $python = Resolve-Python
 
   Write-Host "=== Wine Assistant - Daily Import ==="
-  Write-Host ("Repo root:  {0}" -f $repoRoot)
-  Write-Host ("Supplier:   {0}" -f $Supplier)
+  Write-Host ("Repo root:       {0}" -f $repoRoot)
+  Write-Host ("Supplier:        {0}" -f $Supplier)
   Write-Host ""
+
+  Write-Verbose ("PowerShell: {0}" -f $PSVersionTable.PSVersion)
+  Write-Verbose ("Python: {0}" -f $python)
 
   # Determine file path
   if ($FilePath) {
@@ -130,46 +133,62 @@ try {
       throw "Specified file not found: $FilePath"
     }
     $file = Get-Item -LiteralPath $FilePath
-    Write-Host "Using explicit file: $($file.FullName)"
+    Write-Host ("Mode:            explicit file")
+    Write-Host ("Selected file:   {0}" -f $file.Name)
+    Write-Verbose ("Selected full path: {0}" -f $file.FullName)
   } else {
     $inboxPath = if ($InboxPath) { $InboxPath } else { (Join-Path $repoRoot "data\inbox") }
     if (-not (Test-Path -LiteralPath $inboxPath)) {
       throw "Inbox directory not found: $inboxPath"
     }
 
-    Write-Host "Auto-discovering latest file in: $inboxPath"
+    Write-Host ("Mode:            auto-discovery")
+    Write-Host ("Inbox:           {0}" -f $inboxPath)
+    Write-Host ""
+
     $file = Find-LatestPriceFile -InboxPath $inboxPath
-    Write-Host "Selected file: $($file.Name)"
+    Write-Host ("Selected file:   {0}" -f $file.Name)
     Write-Verbose ("Selected full path: {0}" -f $file.FullName)
   }
 
   # Determine as_of_date
   if ($AsOfDate) {
     $asOfDateStr = $AsOfDate
-    Write-Host "Using explicit as_of_date: $asOfDateStr"
+    Write-Host ("as_of_date:      {0} (explicit)" -f $asOfDateStr)
   } else {
     $asOfDateStr = Extract-AsOfDate -FileName $file.Name
-    Write-Host "Extracted as_of_date from filename: $asOfDateStr"
+    Write-Host ("as_of_date:      {0} (from filename)" -f $asOfDateStr)
     Write-Verbose ("as_of_date source: filename (override via -AsOfDate to change)")
   }
 
+  # Build orchestrator command (for logs + safe invocation)
+  $pyArgs = @(
+    "-m", "scripts.run_import_orchestrator",
+    "--supplier", $Supplier,
+    "--file", $file.FullName,
+    "--as-of-date", $asOfDateStr,
+    "--import-fn", "scripts.import_targets.run_daily_adapter:import_with_run_daily"
+  )
+
+  $argStr = (($pyArgs | ForEach-Object { Format-LogArg $_ }) -join " ")
+  $cmdStr = ('"{0}" {1}' -f $python, $argStr)
+  Write-Verbose ("Command: {0}" -f $cmdStr)
+
   if ($WhatIf) {
-  Write-Host ""
-  Write-Host "WHATIF: orchestrator will NOT be executed."
-  Write-Host ("WHATIF: selected file = {0}" -f $file.FullName)
-  Write-Host ("WHATIF: as_of_date     = {0}" -f $asOfDateStr)
-  exit 0
+    Write-Host ""
+    Write-Host "WHATIF: import orchestrator will NOT be executed."
+    Write-Host ("WHATIF: command       = {0}" -f $cmdStr)
+    Write-Host ("WHATIF: supplier      = {0}" -f $Supplier)
+    Write-Host ("WHATIF: selected file = {0}" -f $file.FullName)
+    Write-Host ("WHATIF: as_of_date    = {0}" -f $asOfDateStr)
+    exit 0
   }
 
   Write-Host ""
   Write-Host "Running import orchestrator..."
   Write-Host ""
 
-  & $python -m scripts.run_import_orchestrator `
-    --supplier $Supplier `
-    --file $file.FullName `
-    --as-of-date $asOfDateStr `
-    --import-fn "scripts.import_targets.run_daily_adapter:import_with_run_daily"
+  & $python @pyArgs
 
   if ($LASTEXITCODE -ne 0) {
     throw "Import orchestrator failed with exit code $LASTEXITCODE"
@@ -180,6 +199,8 @@ try {
   exit 0
 }
 catch {
-  Write-Error $_
+  Write-Host ""
+  Write-Error ("Daily import failed: {0}" -f $_.Exception.Message)
+  Write-Verbose ("ErrorRecord: {0}" -f ($_ | Out-String))
   exit 1
 }
