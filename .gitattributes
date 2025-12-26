@@ -1,9 +1,13 @@
-* text=auto eol=lf
-*.py   text eol=lf
+# Normalize text files; keep Windows-friendly line endings for PowerShell.
+* text=auto
+
+# PowerShell scripts should be CRLF on Windows to avoid editor/tooling churn.
+*.ps1 text eol=crlf
+
+# Markdown/docs stay LF for consistency across platforms.
+*.md  text eol=lf
+
+# Common config formats
 *.yml  text eol=lf
 *.yaml text eol=lf
-*.sql  text eol=lf
-*.sh   text eol=lf
-*.bat  text eol=crlf
-*.ps1  text eol=crlf
-*.sql text eol=lf
+*.json text eol=lf

@@ -9,7 +9,13 @@ param(
   [string]$FilePath = "",
 
   # Optional: override as_of_date (if business date ≠ filename date)
-  [string]$AsOfDate = ""
+  [string]$AsOfDate = "",
+
+  # Optional: override inbox path (default: data\inbox under repo root)
+  [string]$InboxPath = "",
+
+  # Dry run: select file + compute as_of_date, but do not run orchestrator
+  [switch]$WhatIf
 )
 
 Set-StrictMode -Version Latest
@@ -126,7 +132,7 @@ try {
     $file = Get-Item -LiteralPath $FilePath
     Write-Host "Using explicit file: $($file.FullName)"
   } else {
-    $inboxPath = Join-Path $repoRoot "data\inbox"
+    $inboxPath = if ($InboxPath) { $InboxPath } else { (Join-Path $repoRoot "data\inbox") }
     if (-not (Test-Path -LiteralPath $inboxPath)) {
       throw "Inbox directory not found: $inboxPath"
     }
@@ -145,6 +151,14 @@ try {
     $asOfDateStr = Extract-AsOfDate -FileName $file.Name
     Write-Host "Extracted as_of_date from filename: $asOfDateStr"
     Write-Verbose ("as_of_date source: filename (override via -AsOfDate to change)")
+  }
+
+  if ($WhatIf) {
+  Write-Host ""
+  Write-Host "WHATIF: orchestrator will NOT be executed."
+  Write-Host ("WHATIF: selected file = {0}" -f $file.FullName)
+  Write-Host ("WHATIF: as_of_date     = {0}" -f $asOfDateStr)
+  exit 0
   }
 
   Write-Host ""
