@@ -5,7 +5,10 @@ param(
   [int]$RunningMinutes = 120,
 
   # If a run is "pending" longer than this threshold — it is considered stale.
-  [int]$PendingMinutes = 15
+  [int]$PendingMinutes = 15,
+
+  # Dry run: show what would be executed, but do not execute anything.
+  [switch]$WhatIf
 )
 
 Set-StrictMode -Version Latest
@@ -30,15 +33,34 @@ try {
   Set-Location -LiteralPath $repoRoot
   $python = Resolve-Python
 
-  Write-Host "=== Stale Import Detector ==="
-  Write-Host ("Repo root:        {0}" -f $repoRoot)
-  Write-Host ("RunningMinutes:   {0}" -f $RunningMinutes)
-  Write-Host ("PendingMinutes:   {0}" -f $PendingMinutes)
+  Write-Host "=== Wine Assistant - Stale Import Runs Detector ==="
+  Write-Host ("Repo root:       {0}" -f $repoRoot)
+  Write-Host ("RunningMinutes:  {0}" -f $RunningMinutes)
+  Write-Host ("PendingMinutes:  {0}" -f $PendingMinutes)
   Write-Host ""
 
-  & $python -m scripts.mark_stale_import_runs `
-    --running-minutes $RunningMinutes `
-    --pending-minutes $PendingMinutes
+  Write-Verbose ("PowerShell: {0}" -f $PSVersionTable.PSVersion)
+  Write-Verbose ("Python: {0}" -f $python)
+
+$cmdStr = ('"{0}" -m scripts.mark_stale_import_runs --running-minutes {1} --pending-minutes {2}' -f `
+  $python, $RunningMinutes, $PendingMinutes)
+
+Write-Verbose ("Command: {0}" -f $cmdStr)
+
+if ($WhatIf) {
+  Write-Host "WHATIF: stale detector will NOT be executed."
+  Write-Host ("WHATIF: command = {0}" -f $cmdStr)
+  Write-Host ("WHATIF: RunningMinutes = {0}" -f $RunningMinutes)
+  Write-Host ("WHATIF: PendingMinutes = {0}" -f $PendingMinutes)
+  exit 0
+}
+
+Write-Host "Running stale detector..."
+Write-Host ""
+
+& $python -m scripts.mark_stale_import_runs `
+  --running-minutes $RunningMinutes `
+  --pending-minutes $PendingMinutes
 
   if ($LASTEXITCODE -ne 0) {
     throw "Stale detector exited with code $LASTEXITCODE."
@@ -49,6 +71,8 @@ try {
   exit 0
 }
 catch {
-  Write-Error $_
+  Write-Host ""
+  Write-Error ("Stale detector failed: {0}" -f $_.Exception.Message)
+  Write-Verbose ("ErrorRecord: {0}" -f ($_ | Out-String))
   exit 1
 }
