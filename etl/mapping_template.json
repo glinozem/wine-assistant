@@ -3,6 +3,7 @@
   "header_row": 3,
   "mapping": {
     "code": "Код",
+    "supplier": "Поставщик",
     "producer": "Поставщик",
     "title_ru": "Наименование",
     "country": "Страна",
@@ -13,6 +14,11 @@
     "abv": "Алк.,\n%",
     "volume": "Ёмк.,\nл",
     "pack": "Бут.\nв кор.",
-    "price_rub": "Цена со скидкой"
+    "price_rub": "Цена со скидкой",
+    "price_list_rub": "Цена\nпрайс",
+    "price_final_rub": "Цена со скидкой",
+    "stock_total": "остатки",
+    "reserved": "резерв",
+    "stock_free": "свободный остаток"
   }
 }
