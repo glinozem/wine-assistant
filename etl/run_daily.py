@@ -1,6 +1,7 @@
 import argparse
 import os
-from datetime import date, datetime, time
+import re
+from datetime import date, datetime, time, timezone
 
 import pandas as pd
 import psycopg2
@@ -28,13 +29,33 @@ def get_conn():
     )
 
 
+def norm_supplier_key(x) -> str | None:
+    if x is None:
+        return None
+    s = str(x).strip()
+    if not s or s == "_":
+        return None
+    s = s.lower()
+    s = re.sub(r"[^a-z0-9]+", "_", s)
+    s = re.sub(r"_+", "_", s).strip("_")
+    return s or None
+
+
 def upsert_product(cur, row, *, effective_from: datetime):
+    # products: master data + current prices (for UI/API)
     sql = """
-    INSERT INTO products (code, producer, title_ru, title_en, country, region,
-                          color, style, grapes, abv, pack, volume, price_rub)
-    VALUES (%(code)s, %(producer)s, %(title_ru)s, %(title_en)s, %(country)s, %(region)s,
-            %(color)s, %(style)s, %(grapes)s, %(abv)s, %(pack)s, %(volume)s, %(price_rub)s)
+    INSERT INTO products (
+        code, supplier, producer, title_ru, title_en, country, region,
+        color, style, grapes, abv, pack, volume,
+        price_list_rub, price_final_rub, price_rub
+    )
+    VALUES (
+        %(code)s, %(supplier)s, %(producer)s, %(title_ru)s, %(title_en)s, %(country)s, %(region)s,
+        %(color)s, %(style)s, %(grapes)s, %(abv)s, %(pack)s, %(volume)s,
+        %(price_list_rub)s, %(price_final_rub)s, %(price_rub)s
+    )
     ON CONFLICT (code) DO UPDATE SET
+      supplier=COALESCE(EXCLUDED.supplier, products.supplier),
       producer=EXCLUDED.producer,
       title_ru=EXCLUDED.title_ru,
       title_en=EXCLUDED.title_en,
@@ -46,40 +67,96 @@ def upsert_product(cur, row, *, effective_from: datetime):
       abv=EXCLUDED.abv,
       pack=EXCLUDED.pack,
       volume=EXCLUDED.volume,
-      price_rub=EXCLUDED.price_rub;
+      price_list_rub=COALESCE(EXCLUDED.price_list_rub, products.price_list_rub),
+      price_final_rub=COALESCE(EXCLUDED.price_final_rub, products.price_final_rub),
+      price_rub=COALESCE(EXCLUDED.price_rub, products.price_rub);
     """
     cur.execute(sql, row)
 
+    # product_prices: history (close previous open interval if price changed)
+    price = row.get("price_rub")
+    if price is None:
+        return
+
     cur.execute(
-        """
-        SELECT price_rub FROM product_prices
-        WHERE code=%s AND effective_to IS NULL
-        ORDER BY effective_from DESC
-        LIMIT 1
-        """,
+        """SELECT price_rub
+           FROM product_prices
+          WHERE code=%s AND effective_to IS NULL
+          ORDER BY effective_from DESC
+          LIMIT 1""",
         (row["code"],),
     )
     last = cur.fetchone()
+    last_price = None if last is None else float(last[0])
 
-    if last is None or float(last[0]) != float(row["price_rub"] or 0):
-        # 1) закрываем текущую открытую цену
+    if last_price is None or abs(last_price - float(price)) > 1e-9:
+        if last is not None:
+            cur.execute(
+                """UPDATE product_prices
+                       SET effective_to=%s
+                     WHERE code=%s AND effective_to IS NULL""",
+                (effective_from, row["code"]),
+            )
         cur.execute(
-            """
-            UPDATE product_prices
-            SET effective_to = %s
-            WHERE code=%s AND effective_to IS NULL
-            """,
-            (effective_from, row["code"]),
-        )
-        # 2) вставляем новую цену с effective_from
-        cur.execute(
-            """
-            INSERT INTO product_prices (code, price_rub, effective_from)
-            VALUES (%s, %s, %s)
-            """,
-            (row["code"], row["price_rub"], effective_from),
+            """INSERT INTO product_prices (code, price_rub, effective_from, effective_to)
+                 VALUES (%s, %s, %s, NULL)""",
+            (row["code"], float(price), effective_from),
         )
 
+
+def upsert_inventory(cur, row, *, as_of: datetime):
+    """Upsert inventory snapshot into `inventory` and append a same-day snapshot to `inventory_history` (idempotent)."""
+    code = row.get("code")
+    if not code:
+        return
+
+    stock_total = row.get("stock_total")
+    reserved = row.get("reserved")
+    stock_free = row.get("stock_free")
+
+    if stock_total is None and reserved is None and stock_free is None:
+        return
+
+    # inventory table columns are NOT NULL => default missing values to 0
+    if stock_total is None:
+        stock_total = 0
+    if reserved is None:
+        reserved = 0
+    if stock_free is None:
+        stock_free = 0
+
+    # Normalize as_of for consistent timestamptz writes
+    as_of_ts = as_of.astimezone(timezone.utc) if as_of.tzinfo else as_of.replace(tzinfo=timezone.utc)
+
+    cur.execute(
+        """INSERT INTO inventory (code, stock_total, reserved, stock_free, asof_date)
+             VALUES (%s, %s, %s, %s, %s)
+             ON CONFLICT (code) DO UPDATE SET
+                 stock_total=EXCLUDED.stock_total,
+                 reserved=EXCLUDED.reserved,
+                 stock_free=EXCLUDED.stock_free,
+                 asof_date=EXCLUDED.asof_date,
+                 updated_at=now()""",
+        (code, stock_total, reserved, stock_free, as_of.date()),
+    )
+    # Snapshot into inventory_history (idempotent); keep only meaningful stock rows to avoid noise.
+    if float(stock_total) != 0 or float(reserved) != 0 or float(stock_free) != 0:
+        cur.execute(
+            """INSERT INTO inventory_history (as_of, code, stock_total,
+                                              reserved, stock_free)
+               SELECT %s,
+                      %s,
+                      %s,
+                      %s,
+                      %s WHERE NOT EXISTS (
+                 SELECT 1
+                   FROM inventory_history h
+                  WHERE h.code = %s
+                   AND h.as_of:: date = %s:: date
+                   )""",
+            (as_of_ts, code, stock_total, reserved, stock_free, code,
+             as_of_ts),
+        )
 
 def _norm_col(x) -> str:
     return str(x).strip().lower().replace("\n", " ")
@@ -105,6 +182,7 @@ def detect_mapping(df, mapping_template):
     aliases = {
         "code": ["код", "артикул", "sku", "код товара", "id"],
         "producer": ["производитель", "бренд", "house", "winery", "поставщик"],
+        "supplier": ["поставщик", "supplier_key", "supplier"],
         "title_ru": ["наименование", "наим.", "продукт", "вино", "название"],
         "title_en": ["name_en", "title_en", "англ", "en"],
         "country": ["страна"],
@@ -113,9 +191,13 @@ def detect_mapping(df, mapping_template):
         "style": ["стиль", "тип", "категория"],
         "grapes": ["сорт", "сорта", "сортовой состав", "виноград"],
         "abv": ["крепость", "алк", "алкоголь", "alc", "abv"],
-        "pack": ["упаковка", "коробке", "кол-во"],
-        "volume": ["объем", "объём", "емк", "емкость", "литраж", "тара"],
-        "price_rub": ["цена", "цена руб", "цена, руб", "цена (руб)", "стоимость", "опт"],
+        "pack": ["упак", "бут", "в кор", "pack", "case"],
+        "price_list_rub": ["цена прайс", "прайс", "price list", "list price"],
+        "price_final_rub": ["цена со скид", "цена с", "final price", "price final", "цена фин"],
+        "price_rub": ["цена", "руб", "price", "стоимость"],
+        "stock_total": ["остатки", "остаток", "stock total", "налич", "in stock"],
+        "reserved": ["резерв", "reserved"],
+        "stock_free": ["свобод", "free", "available", "доступн"],
     }
     mapping = {}
     for tgt, keys in aliases.items():
@@ -124,26 +206,63 @@ def detect_mapping(df, mapping_template):
             if any(k in lc for k in keys):
                 mapping[tgt] = c
                 break
-    return mapping
+        return mapping
 
 
 def normalize_row(raw, m):
-    row = {
-        "code": norm_str(raw.get(m.get("code"))),
-        "producer": norm_str(raw.get(m.get("producer"))),
-        "title_ru": norm_str(raw.get(m.get("title_ru"))),
-        "title_en": norm_str(raw.get(m.get("title_en"))),
-        "country": norm_str(raw.get(m.get("country"))),
-        "region": norm_str(raw.get(m.get("region"))),
-        "color": norm_str(raw.get(m.get("color"))),
-        "style": norm_str(raw.get(m.get("style"))),
-        "grapes": norm_str(raw.get(m.get("grapes"))),
-        "abv": parse_abv(raw.get(m.get("abv"))),
-        "pack": norm_str(raw.get(m.get("pack"))),
-        "volume": normalize_volume(raw.get(m.get("volume"))),
-        "price_rub": to_number(raw.get(m.get("price_rub"))),
-    }
-    return row
+    # Prices
+    price_list = to_number(raw.get(m.get("price_list_rub")))
+    price_final = to_number(raw.get(m.get("price_final_rub")))
+    price_rub = to_number(raw.get(m.get("price_rub")))
+
+    # Fallbacks: if only one of the price columns is mapped
+    if price_final is None and price_rub is not None:
+        price_final = price_rub
+    if price_rub is None and price_final is not None:
+        price_rub = price_final
+
+    # Inventory
+    stock_total = to_number(raw.get(m.get("stock_total")))
+    reserved = to_number(raw.get(m.get("reserved")))
+    stock_free = to_number(raw.get(m.get("stock_free")))
+
+    # If "free" is missing but total/reserved exist, compute it
+    if stock_free is None and stock_total is not None and reserved is not None:
+        stock_free = max(0.0, stock_total - reserved)
+
+    supplier_src = raw.get(m.get("supplier")) if m.get("supplier") else None
+    if supplier_src is None:
+        supplier_src = raw.get(m.get("producer"))
+
+    supplier_key = norm_str(supplier_src)
+
+    producer_src = raw.get(m.get("producer")) if m.get("producer") else None
+    if producer_src is None:
+        producer_src = supplier_src
+
+    return dict(
+        code=str(raw.get(m.get("code"))).strip() if raw.get(m.get("code")) is not None else None,
+        supplier=supplier_key,
+        producer=norm_str(producer_src) or supplier_key,
+        title_ru=norm_str(raw.get(m.get("title_ru"))),
+        title_en=norm_str(raw.get(m.get("title_en"))),
+        country=norm_str(raw.get(m.get("country"))),
+        region=norm_str(raw.get(m.get("region"))),
+        color=norm_str(raw.get(m.get("color"))),
+        style=norm_str(raw.get(m.get("style"))),
+        grapes=norm_str(raw.get(m.get("grapes"))),
+        abv=parse_abv(raw.get(m.get("abv"))),
+        volume=normalize_volume(raw.get(m.get("volume"))),
+        pack=to_number(raw.get(m.get("pack"))),
+
+        price_list_rub=price_list,
+        price_final_rub=price_final,
+        price_rub=price_rub,
+
+        stock_total=stock_total,
+        reserved=reserved,
+        stock_free=stock_free,
+    )
 
 
 def is_valid(row):
@@ -232,6 +351,7 @@ def run_etl(
         with conn.cursor() as cur:
             for row in rows:
                 upsert_product(cur, row, effective_from=effective_from)
+                upsert_inventory(cur, row, as_of=effective_from)
 
         # коммитим только если это наш conn; если conn orchestrator'а — он решает commit/rollback
         if own_conn:

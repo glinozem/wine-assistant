@@ -140,7 +140,7 @@ show-quarantine:
 	psql "host=$(DB_HOST) port=$(DB_PORT) user=$(PGUSER) password=$(PGPASSWORD) dbname=$(PGDATABASE)" -c "SELECT id, envelope_id, code, dq_errors, created_at FROM price_list_quarantine ORDER BY created_at DESC LIMIT 50;"
 
 sync-inventory-history:
-	$(DOCKER_COMPOSE) exec api python -m scripts.sync_inventory_history
+	$(DOCKER_COMPOSE) exec api python -m scripts.sync_inventory_history $(if $(AS_OF),--as-of "$(AS_OF)",)
 
 backfill-current-prices-dry-run:
 	$(DOCKER_COMPOSE) exec api python -m scripts.backfill_current_prices --dry-run
@@ -149,7 +149,7 @@ backfill-current-prices:
 	$(DOCKER_COMPOSE) exec api python -m scripts.backfill_current_prices --apply
 
 sync-inventory-history-dry-run:
-	$(DOCKER_COMPOSE) exec api python -m scripts.sync_inventory_history --dry-run
+	$(DOCKER_COMPOSE) exec api python -m scripts.sync_inventory_history $(if $(AS_OF),--as-of "$(AS_OF)",) --dry-run
 
 bundle:
 	$(POWERSHELL) $(POWERSHELL_ARGS) scripts/bundle.ps1 -OutDir "$(BUNDLE_OUT_DIR)"
@@ -298,3 +298,35 @@ dr-smoke-truncate:
 
 dr-smoke-dropvolume:
 	$(POWERSHELL) $(POWERSHELL_ARGS) scripts/dr_smoke.ps1 -Mode dropvolume -BackupKeep $(DR_BACKUP_KEEP) $(if $(filter 1,$(MANAGE_PROMTAIL)),-ManagePromtail)
+
+.PHONY: smoke-e2e
+
+SMOKE_SUPPLIER ?= dreemwine
+SMOKE_BASE_URL ?= http://localhost:18000
+SMOKE_FRESH ?= 0
+SMOKE_BUILD ?= 0
+SMOKE_STALE_MODE ?= whatif
+SMOKE_API_SMOKE ?= 0
+
+smoke-e2e:
+	$(POWERSHELL) $(POWERSHELL_ARGS) scripts/smoke_e2e.ps1 -Supplier "$(SMOKE_SUPPLIER)" -BaseUrl "$(SMOKE_BASE_URL)" -StaleDetectorMode "$(SMOKE_STALE_MODE)" $(if $(filter 1,$(SMOKE_FRESH)),-Fresh) $(if $(filter 1,$(SMOKE_BUILD)),-Build) $(if $(filter 1,$(SMOKE_API_SMOKE)),-RunApiSmoke)
+
+
+# --- Daily incremental import ----------------------------------------------
+
+.PHONY: daily-import daily-import-files daily-import-ps1
+
+# Auto-inbox: take ONLY the newest .xlsx from data/inbox and process it.
+daily-import:
+	$(PY) -m scripts.daily_import --inbox "data/inbox"
+
+# Explicit files list:
+#   make daily-import-files FILES="data/inbox/a.xlsx data/inbox/b.xlsx"
+daily-import-files:
+	$(PY) -m scripts.daily_import --files $(FILES)
+
+# Windows PowerShell wrapper (alternative):
+#   make daily-import-ps1
+#   make daily-import-ps1 FILES="data\\inbox\\a.xlsx"  (space-separated)
+daily-import-ps1:
+	$(POWERSHELL) $(POWERSHELL_ARGS) scripts/run_daily_import.ps1 $(if $(FILES),-Files $(FILES))
