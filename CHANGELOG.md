@@ -4,6 +4,85 @@
 
 ### Added
 
+#### Daily Import v1.0.4 (Production Ready) 🎉
+
+**Incremental Import Infrastructure**
+- **`scripts/daily_import.py`** — новый orchestrator для ежедневного инкрементного импорта
+  - Auto-inbox режим: автоматический выбор новейшего `.xlsx` файла из `data/inbox`
+  - Explicit files режим: импорт конкретного списка файлов
+  - Idempotent: безопасен для повторного запуска (SKIP уже импортированных файлов)
+  - Advisory lock: предотвращает параллельное выполнение
+  - Архивация: SUCCESS → `data/archive/YYYY-MM/`, ERROR → `data/quarantine/YYYY-MM/`
+  - Полный пайплайн: import → wineries → enrichment → maintenance → inventory snapshot
+  - PR: #173
+
+**ETL & Inventory Enhancements**
+- **Inventory tracking** в `etl/run_daily.py`
+  - Поддержка колонок `stock_total`, `reserved`, `stock_free`
+  - Функция `upsert_inventory()` для обновления текущих остатков
+  - Идемпотентные snapshot'ы в `inventory_history` (один на дату)
+  - Автоматическое вычисление `stock_free` если отсутствует
+
+- **Supplier normalization**
+  - Новое поле `supplier` в products table
+  - Функция `norm_supplier_key()` для нормализации ключей поставщиков
+  - Fallback логика: supplier → producer если не указан
+
+- **Extended price tracking**
+  - `price_list_rub` — прайсовая цена
+  - `price_final_rub` — финальная цена со скидкой
+  - `price_rub` — текущая цена (для обратной совместимости)
+  - Fallback логика между полями
+
+- **Mapping template updates** (`etl/mapping_template.json`)
+  - Добавлены поля: `supplier`, `price_list_rub`, `price_final_rub`
+  - Добавлены поля: `stock_total`, `reserved`, `stock_free`
+
+**Automation & Testing Scripts**
+- **`scripts/bootstrap_from_scratch.ps1`** — автоматизация fresh deployment
+  - Wipes volumes (`docker compose down -v`)
+  - Imports all price lists from inbox (sorted by date)
+  - Loads wineries catalog
+  - Enriches products with region/site
+  - Backfills missing data
+  - Creates inventory snapshot
+  - Verification checks
+  - Optional rebuild images flag
+  - PR: #173
+
+- **`scripts/smoke_e2e.ps1`** — end-to-end smoke testing
+  - Full import workflow orchestration
+  - Data integrity validation
+  - Fresh mode support (wipe volumes)
+  - Configurable stale detector
+  - Optional API smoke tests
+  - SQL validation checks
+  - Makefile integration: `make smoke-e2e`
+  - PR: #173
+
+**Makefile Targets**
+- `make daily-import` — auto-inbox (newest file only)
+- `make daily-import-files FILES="..."` — explicit file list
+- `make daily-import-ps1` — PowerShell wrapper
+- `make sync-inventory-history AS_OF="..."` — inventory snapshot with custom date
+- `make smoke-e2e` — E2E smoke tests with parameters
+- PR: #173
+
+**PowerShell Wrappers**
+- **`scripts/run_daily_import.ps1`** — полностью переписан как thin wrapper
+  - Упрощен с 214 строк до 64 строк
+  - Прямой вызов `python -m scripts.daily_import`
+  - Параметры: `-Files`, `-InboxPath`, `-NoSnapshot`, `-SnapshotDryRunFirst`
+  - PR: #173
+
+**Documentation**
+- **`docs/changes_daily_import.md`** — документация daily import flow
+  - Архитектура пайплайна
+  - Режимы работы (auto-inbox, explicit files)
+  - Правила архивации
+  - Operational notes
+  - PR: #173
+
 #### Import Operations (M1 Complete) 🎉
 - **Import orchestrator** — production-grade система импорта с полным аудитом
   - Registry `import_runs`: журналирование всех попыток импорта (success/failed/skipped/rolled_back)
@@ -113,13 +192,31 @@
 
 - **`project-structure.txt`** — обновлена структура с учётом observability файлов
 
-- **`etl/run_daily.py`** — интегрирован с Import Orchestrator (#165)
+- **`etl/run_daily.py`** — интегрирован с Import Orchestrator (#165, #173)
   - Принимает `conn` parameter для transaction control (R0.2)
   - Возвращает structured metrics/artifacts dict
   - Auto `as_of_date`/`as_of_datetime` support через argument
   - Production mapping: `etl/mapping_template.json` (DreemWine: sheet="Основной", header_row=3)
+  - **Inventory tracking:** upsert в `inventory` + snapshot в `inventory_history`
+  - **Supplier normalization:** norm_supplier_key() для supplier field
+  - **Extended prices:** price_list_rub, price_final_rub, price_rub с fallback логикой
 
 ### Fixed
+
+#### v1.0.4 Bugfix (Windows CP1251 Encoding) ✅
+- **UnicodeEncodeError на Windows console** — RESOLVED
+  - Добавлена функция `safe_print()` в 4 скрипта:
+    - `scripts/load_wineries.py`
+    - `scripts/enrich_producers.py`
+    - `scripts/sync_inventory_history.py`
+    - `scripts/daily_import.py` (новый файл)
+  - Использует `import builtins` (canonical approach)
+  - Graceful fallback: CP1251 encoding с `errors='replace'`
+  - Emoji отображаются как `?` на CP1251 console (expected behavior)
+  - **Testing:** 15+ consecutive successful runs, exit code 0
+  - **Tag:** v1.0.4
+  - **PR:** #172
+
 - Тесты: скорректирован unit-тест, который проверяет приоритет `df.attrs['prefer_discount_cell']` над `PREFER_S5` (в `scripts/load_utils.py` логика уже корректна)
 
 - DR smoke test: file locking issues на Windows при использовании Promtail

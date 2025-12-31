@@ -8,7 +8,7 @@
 
 Изначально учебный проект, Wine Assistant вырос в полноценное решение, демонстрирующее best practices современной backend-разработки на Python.
 
-**Текущий статус:** Production-ready • 175+ тестов • M1 (Import Operations) Complete 🎉 • **Daily Import v1.0.4 Ready** 🎉 • Observability & Monitoring ready ✅ • AI Integration планируется (Sprint 8) 🔜
+**Текущий статус:** Production-ready • 175 тестов • Sprint 7 завершён ✅ • M1 (Import Operations) Complete 🎉 • Observability & Monitoring ready ✅ • AI Integration планируется (Sprint 8) 🔜
 
 ---
 
@@ -16,13 +16,9 @@
 
 ### 📊 Управление данными и ETL
 
-- **Daily Import v1.0.4** — incremental imports без wipe volumes, Windows-friendly 🎉
 - **Import Orchestrator** — production-grade система импорта с полным аудитом
 - **Автоматический импорт прайс-листов** (Excel/CSV) с интеллектуальным парсингом
 - **Идемпотентность импортов** по ключу `(supplier, as_of_date, file_sha256)`
-- **Inventory tracking** — автоматические snapshot'ы с историей
-- **Supplier normalization** — нормализация поставщиков
-- **Extended price tracking** — list/final/current цены
 - **Retry support** — автоматический retry failed импортов через orchestrator
 - **Stale run detector** — автоматическая очистка зависших операций
 - **Извлечение изображений из Excel** → автоматическое заполнение `image_url`
@@ -113,338 +109,7 @@ make obs-logs        # Просмотр логов
 
 **Dashboard доступен по адресу:** `http://localhost:15000/d/wine-assistant-backup-dr/backup-dr`
 
----
-
-## 📥 Daily Import v1.0.4 (Production Ready) 🎉
-
-> **Incremental daily imports** без wipe volumes, с inventory tracking и Windows CP1251 support
-
-### Overview
-
-Daily Import v1.0.4 обеспечивает production-ready решение для ежедневного обновления прайс-листов без необходимости очистки volumes.
-
-**Ключевые фичи:**
-- ✅ **Incremental imports** — no volume wiping required
-- ✅ **Idempotent** — safe to run multiple times on same data
-- ✅ **Inventory tracking** — automatic snapshots with full history
-- ✅ **Windows-friendly** — UnicodeEncodeError fixed (CP1251 encoding)
-- ✅ **Concurrency protection** — advisory locks prevent parallel runs
-- ✅ **Smart archiving** — SUCCESS/SKIP → archive/, ERROR → quarantine/
-- ✅ **Full pipeline** — import → wineries → enrichment → maintenance → inventory
-
-### Quick Start
-
-**Auto-inbox mode (рекомендуется):**
-```bash
-# Automatically selects newest .xlsx file from data/inbox
-make daily-import
-
-# Or via Python
-python -m scripts.daily_import --inbox data/inbox
-
-# Or via PowerShell
-.\scripts\run_daily_import.ps1
-```
-
-**Explicit files mode:**
-```bash
-# Process specific files
-make daily-import-files FILES="data/inbox/file1.xlsx data/inbox/file2.xlsx"
-
-# Or via Python
-python -m scripts.daily_import --files data/inbox/file1.xlsx data/inbox/file2.xlsx
-
-# Or via PowerShell
-.\scripts\run_daily_import.ps1 -Files data\inbox\file1.xlsx, data\inbox\file2.xlsx
-```
-
-### Pipeline Steps
-
-Когда вы запускаете daily import, выполняются следующие шаги:
-
-1. **Advisory Lock Acquisition** — предотвращает параллельные импорты
-2. **File Import** (`load_csv`)
-   - Импорт данных из Excel
-   - Idempotent: пропускает уже импортированные файлы (по SHA-256)
-   - Архивирует файл в `data/archive/YYYY-MM/` (даже при SKIP)
-   - При ошибке: помещает файл в `data/quarantine/YYYY-MM/`
-3. **Post-Import Processing** (только если был реальный импорт, не SKIP):
-   - **Wineries Catalog Update** — синхронизация метаданных поставщиков
-   - **Product Enrichment** — backfill region/site из wineries
-   - **Maintenance SQL** — нормализация и cleanup данных
-   - **Inventory Snapshot** — создание snapshot'а в `inventory_history`
-4. **Lock Release**
-
-### Inventory Tracking
-
-Daily import автоматически отслеживает изменения остатков:
-
-**Текущее состояние:** таблица `inventory`
-```sql
-SELECT code, stock_total, reserved, stock_free, asof_date
-FROM inventory
-WHERE stock_total > 0
-ORDER BY stock_total DESC
-LIMIT 10;
-```
-
-**Исторические snapshot'ы:** таблица `inventory_history`
-```sql
-SELECT code, as_of::date, stock_total, stock_free
-FROM inventory_history
-WHERE code = 'D010210'
-ORDER BY as_of DESC;
-```
-
-**Особенности:**
-- Идемпотентно: один snapshot на дату
-- Автоматический расчет: `stock_free = stock_total - reserved`
-- Нет snapshot'а при SKIP (файл уже импортирован)
-
-### Expected Output
-
-**Успешный импорт:**
-```
-=== IMPORT (load_csv) ===
->>> File: data\inbox\2025_12_12 Прайс_Легенда_Виноделия.xlsx
-[OK] Import completed successfully
-[daily-import] Moved: data\inbox\*.xlsx -> data\archive\2025-12\*.xlsx
-
-=== LOAD WINERIES CATALOG ===
-Готово. Вставлено новых записей: 0, обновлено существующих: 46
-
-=== ENRICH PRODUCTS ===
-Готово. Всего затронуто строк в products: 244
-
-=== MAINTENANCE SQL ===
-[daily-import] Maintenance SQL completed
-
-=== INVENTORY HISTORY SNAPSHOT ===
-[OK] Вставлено 270 записей в public.inventory_history
-
-=== SUMMARY ===
-- IMPORTED 2025_12_12 Прайс_Легенда_Виноделия.xlsx
-
-Exit code: 0
-```
-
-**Идемпотентный запуск (SKIP):**
-```
-=== IMPORT (load_csv) ===
->> SKIP: File already imported
-[daily-import] Moved: data\inbox\*.xlsx -> data\archive\2025-12\*.xlsx
-
-=== SUMMARY ===
-- SKIPPED (already imported)
-
-Exit code: 0
-```
-
-### Automation
-
-**Windows Task Scheduler:**
-```powershell
-# Daily import at 09:00
-$taskName = "wine-assistant daily import"
-$scriptPath = (Resolve-Path ".\scripts\run_daily_import.ps1").Path
-schtasks /Create /TN $taskName /SC DAILY /ST 09:00 `
-  /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`"" /F
-
-# Verify
-Get-ScheduledTaskInfo -TaskName "wine-assistant daily import"
-```
-
-**Linux Cron:**
-```bash
-# /etc/cron.d/wine-assistant
-0 9 * * * cd /opt/wine-assistant && .venv/bin/python -m scripts.daily_import
-```
-
-### Monitoring
-
-**Recent imports:**
-```sql
-SELECT run_id, supplier, as_of_date, status,
-       total_rows_processed, rows_skipped, created_at
-FROM import_runs
-ORDER BY created_at DESC
-LIMIT 10;
-```
-
-**Inventory snapshots:**
-```sql
-SELECT COUNT(*) as total_snapshots,
-       MAX(as_of) as latest_snapshot,
-       COUNT(DISTINCT code) as unique_products
-FROM inventory_history;
-```
-
-**Products with inventory:**
-```sql
-SELECT p.code, p.title_ru, p.supplier,
-       i.stock_total, i.reserved, i.stock_free
-FROM products p
-JOIN inventory i ON p.code = i.code
-WHERE i.stock_total > 0
-ORDER BY i.stock_total DESC
-LIMIT 10;
-```
-
-### Troubleshooting
-
-**UnicodeEncodeError on Windows:**
-```
-Symptom: 'charmap' codec can't encode character
-Solution: Verify v1.0.4 is installed with safe_print() in all 4 scripts
-Check: grep "def safe_print" scripts/*.py
-```
-
-**Import failed:**
-```bash
-# Check quarantine
-ls data/quarantine/
-
-# Check error in database
-docker compose exec -T db psql -U postgres -d wine_db -c "
-SELECT error_summary, error_details
-FROM import_runs
-WHERE status = 'failed'
-ORDER BY created_at DESC
-LIMIT 1;"
-```
-
-**Advisory lock stuck:**
-```sql
--- Check locks
-SELECT * FROM pg_locks WHERE locktype = 'advisory';
-
--- Release
-SELECT pg_advisory_unlock_all();
-```
-
-### Advanced Options
-
-**Custom directories:**
-```bash
-python -m scripts.daily_import \
-  --inbox D:\imports\inbox \
-  --archive D:\imports\archive \
-  --quarantine D:\imports\quarantine
-```
-
-**Skip inventory snapshot:**
-```bash
-python -m scripts.daily_import --no-snapshot
-```
-
-**Manual inventory snapshot:**
-```bash
-# Current date
-make sync-inventory-history
-
-# Custom date
-make sync-inventory-history AS_OF="2025-12-31"
-
-# Dry-run first
-make sync-inventory-history-dry-run AS_OF="2025-12-31"
-```
-
-### ETL Enhancements
-
-Daily import v1.0.4 включает расширенные возможности ETL:
-
-**Supplier Normalization:**
-- Новое поле `supplier` в таблице products
-- Нормализованные ключи через `norm_supplier_key()`
-- Fallback: supplier → producer
-
-**Extended Price Tracking:**
-- `price_list_rub` — прайсовая цена от поставщика
-- `price_final_rub` — финальная цена со скидкой
-- `price_rub` — текущая цена (обратная совместимость)
-- История цен с effective dates
-
-**Inventory Support:**
-- `stock_total` — общий доступный остаток
-- `reserved` — зарезервированный остаток
-- `stock_free` — свободный остаток (вычисляется если отсутствует)
-- Ежедневные snapshot'ы в `inventory_history`
-
-### Documentation
-
-- **Full Guide:** [docs/changes_daily_import.md](docs/changes_daily_import.md)
-- **Migration Guide:** [docs/MIGRATION_GUIDE_v1.0.4.md](docs/MIGRATION_GUIDE_v1.0.4.md)
-- **Quick Reference:** [QUICK_REFERENCE.md](QUICK_REFERENCE.md)
-- **Changelog:** [CHANGELOG.md](CHANGELOG.md)
-
-### Version History
-
-| Version | Status | Notes |
-|---------|--------|-------|
-| v1.0.4 | ✅ Production | Current stable release |
-| v1.0.3 | ⚠️ Incomplete | Missing sync fix |
-| v1.0.2 | ❌ Broken | TypeError |
-| v1.0.1 | ❌ Broken | RecursionError |
-
-**Always use v1.0.4 in production.**
-
----
-
-## 🔧 Fresh Deployment & Bootstrap
-
-### Bootstrap from Scratch
-
-Для initial setup или полного rebuild:
-
-```powershell
-# Full bootstrap (Windows)
-.\scripts\bootstrap_from_scratch.ps1 -RebuildImages
-
-# What it does:
-# 1. docker compose down -v (wipe volumes)
-# 2. docker compose build
-# 3. docker compose up -d
-# 4. Wait for API readiness
-# 5. Import all price lists from inbox (sorted by date)
-# 6. Load wineries catalog
-# 7. Enrich products (region/site)
-# 8. Backfill missing data
-# 9. Create inventory snapshot
-# 10. Run verification checks
-```
-
-**Expected duration:** 2-5 minutes (зависит от размера данных)
-
-### E2E Smoke Test
-
-Комплексная end-to-end валидация:
-
-```bash
-# Full test with fresh deployment
-make smoke-e2e SMOKE_SUPPLIER=dreemwine SMOKE_FRESH=1 SMOKE_BUILD=1
-
-# Test without rebuild
-make smoke-e2e SMOKE_SUPPLIER=dreemwine
-
-# With all options
-make smoke-e2e \
-  SMOKE_SUPPLIER=dreemwine \
-  SMOKE_FRESH=1 \
-  SMOKE_BUILD=1 \
-  SMOKE_STALE_MODE=run \
-  SMOKE_API_SMOKE=1
-```
-
-**Что валидируется:**
-- ✅ Container startup and readiness
-- ✅ Daily import workflow
-- ✅ Stale detector (optional)
-- ✅ SQL data integrity checks
-- ✅ API smoke tests (optional)
-
----
-
-## 📥 Import Operations (M1 Complete) 🎉
+### 📥 Импорт прайс-листов (M1 Complete) 🎉
 
 > **Production-ready импорт** с идемпотентностью, аудитом и автоматизацией
 
@@ -529,9 +194,7 @@ WHERE status = 'failed' AND created_at > NOW() - INTERVAL '7 days'
 ORDER BY created_at DESC;
 ```
 
----
-
-## 🤖 AI Capabilities (В разработке - Sprint 8)
+### 🤖 AI Capabilities (В разработке - Sprint 8)
 
 > ⚠️ **ВНИМАНИЕ:** AI-слой ещё не реализован. Ниже представлен дизайн и план работ Sprint 8.
 >
@@ -548,92 +211,118 @@ ORDER BY created_at DESC;
 - **AI Monitoring Dashboard** для отслеживания расходов (Issue #133)
 - **Cascade Model Architecture** (nano → mini → sonnet-4) для оптимизации затрат
 
----
-
-## 🛠️ Инфраструктура
+### 🛠️ Инфраструктура
 
 - **Docker Compose** окружение с PostgreSQL 16 + pgvector
 - **Автоматические миграции** БД с версионированием
 - **CI/CD Pipeline** с GitHub Actions
 - **Pre-commit hooks** для проверки кода
-- **Ruff** для линтинга и форматирования
-- **Pytest** с >80% coverage
-- **Structured logging** с JSON формированием
+- **Adminer** для управления БД
+- **MinIO** для S3-совместимого хранения бэкапов
 - **Grafana + Loki + Promtail** для observability
-- **MinIO** для backup storage
+- **Smoke-check скрипты** для быстрой проверки готовности системы
+- **DR smoke tests** для проверки disaster recovery
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Быстрый старт
 
-### Вариант A: Docker (рекомендуется)
+### Вариант 1: Docker Compose (рекомендуется)
 
 ```bash
-# 1. Клонирование репозитория
+# Клонирование репозитория
 git clone https://github.com/glinozem/wine-assistant.git
 cd wine-assistant
 
-# 2. Настройка окружения
+# Настройка окружения
 cp .env.example .env
-# Отредактируйте .env: установите API_KEY и другие параметры
+# Отредактируйте .env при необходимости
 
-# 3. Запуск (без observability)
-docker compose up -d
+# Запуск всего стека
+docker compose up -d --build
 
-# 4. Запуск с observability (Grafana/Loki/Promtail)
-docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d
-
-# 5. Проверка
-curl http://localhost:18000/health
-
-# 6. Открыть UI
-# http://localhost:18000/ui
-
-# 7. Открыть Swagger
-# http://localhost:18000/docs
+# Проверка готовности
+curl http://localhost:18000/ready
 ```
 
-### Вариант B: Локальная разработка
+**Доступные сервисы:**
+- API: http://localhost:18000
+- Swagger UI: http://localhost:18000/docs
+- Adminer (БД): http://localhost:18080
+- Grafana (Observability): http://localhost:15000 (admin/admin)
+- Static Images: http://localhost:18000/static/images/
+
+### Вариант 2: С Observability Stack
 
 ```bash
-# 1. Клонирование
-git clone https://github.com/glinozem/wine-assistant.git
-cd wine-assistant
+# Запуск с мониторингом
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d --build
 
-# 2. Виртуальное окружение
+# Или через Makefile
+make obs-up
+
+# Открыть Grafana
+open http://localhost:15000
+# Login: admin / Password: admin
+
+# Открыть Backup/DR Dashboard в браузере:
+# http://localhost:15000/d/wine-assistant-backup-dr/backup-dr
+```
+
+### Вариант 3: Локальная разработка
+
+```bash
+# Создание виртуального окружения
 python -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-.venv\Scripts\Activate     # Windows
 
-# 3. Установка зависимостей
+# Активация окружения
+# Linux/macOS:
+source .venv/bin/activate
+# Windows (PowerShell):
+.venv\Scripts\Activate
+
+# Установка зависимостей
 pip install -r requirements.txt
 
-# 4. Настройка .env
+# Настройка БД (требуется PostgreSQL 16+)
 cp .env.example .env
+# Настройте DB_* переменные в .env
 
-# 5. Запуск PostgreSQL
-docker compose up -d db
-
-# 6. Применение миграций
-docker compose exec -T db psql -U postgres -d wine_db < db/migrations/0001_*.sql
-# ... (применить все миграции по порядку)
-
-# 7. Запуск API
-flask run --host=0.0.0.0 --port=18000
-
-# 8. Запуск тестов
-pytest
+# Запуск в режиме разработки
+FLASK_ENV=development FLASK_APP=api.wsgi:app flask run
 ```
 
-### Первый импорт данных
+### Быстрая проверка работоспособности (Smoke Check)
 
-```bash
-# Bootstrap from scratch (recommended for first setup)
-.\scripts\bootstrap_from_scratch.ps1 -RebuildImages
+После запуска стека выполните быстрый smoke-check:
 
-# Or manual daily import
-make daily-import
+```powershell
+# Windows PowerShell
+# Установить API ключ
+$env:API_KEY = "ВАШ_API_КЛЮЧ"
+
+# Быстрый smoke-check
+.\scripts\quick_smoke_check.ps1
+
+# Или полный smoke-check с проверкой всех эндпоинтов
+.\scripts\manual_smoke_check.ps1
 ```
+
+Открыть UI (витрину):
+
+```text
+http://localhost:18000/ui
+```
+
+Вставьте `X-API-Key` в поле в шапке (ключ сохраняется в `localStorage`) и пролистайте список вниз для догрузки следующей страницы.
+
+
+Скрипты проверят:
+- Health endpoints (`/live`, `/ready`, `/health`)
+- Поиск по каталогу
+- Карточки SKU
+- Историю цен и остатков
+- Экспортные эндпоинты
 
 ### Проверка Backup/DR и Observability
 
@@ -670,7 +359,6 @@ make dr-smoke-truncate DR_BACKUP_KEEP=2 MANAGE_PROMTAIL=1
 │  • Inventory Management                      │
 │  • Export Services (JSON/XLSX/PDF)           │
 │  • Winery Management                         │
-│  • Daily Import v1.0.4 🎉                    │
 │  • Import Orchestrator (M1) 🎉               │
 └─────────────────┬────────────────────────────┘
                   │
@@ -681,7 +369,6 @@ make dr-smoke-truncate DR_BACKUP_KEEP=2 MANAGE_PROMTAIL=1
 │  • Automated Migrations                      │
 │  • Data Quality Gates                        │
 │  • Import Run Registry (import_runs)         │
-│  • Inventory History (inventory_history)     │
 └──────────────────────────────────────────────┘
 
          Observability Stack
@@ -710,8 +397,6 @@ make dr-smoke-truncate DR_BACKUP_KEEP=2 MANAGE_PROMTAIL=1
 - **[INDEX.md](INDEX.md)** — Навигация по документации
 - **[QUICK_REFERENCE.md](QUICK_REFERENCE.md)** — Шпаргалка по командам
 - **[CHANGELOG.md](CHANGELOG.md)** — История изменений
-- **[docs/changes_daily_import.md](docs/changes_daily_import.md)** — Daily Import v1.0.4 guide
-- **[docs/MIGRATION_GUIDE_v1.0.4.md](docs/MIGRATION_GUIDE_v1.0.4.md)** — Migration guide
 - **[docs/dev/import_flow.md](docs/dev/import_flow.md)** — Import Operations архитектура
 - **[docs/runbook_import.md](docs/runbook_import.md)** — Import Operations runbook
 - **[docs/dev/backup-dr-runbook.md](docs/dev/backup-dr-runbook.md)** — Backup/DR руководство
@@ -721,15 +406,6 @@ make dr-smoke-truncate DR_BACKUP_KEEP=2 MANAGE_PROMTAIL=1
 ---
 
 ## 🔧 Makefile команды
-
-### Daily Import (v1.0.4)
-```bash
-make daily-import                  # Auto-inbox (newest file)
-make daily-import-files FILES="..."  # Explicit files
-make daily-import-ps1              # PowerShell wrapper
-make sync-inventory-history AS_OF="2025-12-31"  # Manual snapshot
-make sync-inventory-history-dry-run  # Snapshot dry-run
-```
 
 ### Development
 ```bash
@@ -754,11 +430,6 @@ make restore-local          # Восстановить из локального
 make restore-remote-latest  # Восстановить из MinIO (latest)
 make dr-smoke-truncate      # DR тест (truncate mode)
 make dr-smoke-dropvolume    # DR тест (dropvolume mode)
-```
-
-### Testing & Bootstrap
-```bash
-make smoke-e2e SMOKE_SUPPLIER=dreemwine SMOKE_FRESH=1  # E2E smoke test
 ```
 
 ### Storage (MinIO)
@@ -791,12 +462,9 @@ pytest -v
 # Import Operations tests (requires DB) - PowerShell
 $env:RUN_DB_TESTS="1"; pytest tests/unit/test_import_run_registry.py
 $env:RUN_DB_TESTS="1"; pytest tests/unit/test_import_orchestrator_flow.py
-
-# Daily import smoke test
-make smoke-e2e SMOKE_SUPPLIER=dreemwine SMOKE_FRESH=1
 ```
 
-**Test Coverage:** 175+ тестов, >80% покрытие
+**Test Coverage:** 175 тестов, >80% покрытие
 
 ---
 
