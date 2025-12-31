@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import argparse
+import builtins
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -23,6 +24,19 @@ from dotenv import load_dotenv
 from scripts.load_utils import get_conn
 
 load_dotenv()
+
+
+def safe_print(*args, **kwargs):
+    """Safe print that handles UnicodeEncodeError on Windows console (CP1251)"""
+    try:
+        # Use builtins module to access the built-in print function
+        builtins.print(*args, **kwargs)
+    except UnicodeEncodeError:
+        # Fallback: encode with errors='replace' to avoid crashes
+        message = ' '.join(str(arg) for arg in args)
+        safe_message = message.encode('cp1251', errors='replace').decode('cp1251')
+        builtins.print(safe_message, **kwargs)
+
 
 REQUIRED_COLUMNS = [
     "supplier_key",
@@ -58,7 +72,7 @@ def load_excel(path: Path) -> List[Dict[str, Any]]:
 
 def dry_run(records: List[Dict[str, Any]]) -> None:
     """DRY-RUN: показываем, сколько строк может быть обогащено по site и по region."""
-    print(f"Загружено записей виноделен: {len(records)}\n")
+    safe_print(f"Загружено записей виноделен: {len(records)}\n")
 
     conn = get_conn()
     try:
@@ -74,7 +88,7 @@ def dry_run(records: List[Dict[str, Any]]) -> None:
                     # Нечего обогащать
                     continue
 
-                print(f"supplier = {supplier!r}")
+                safe_print(f"supplier = {supplier!r}")
 
                 if site:
                     cur.execute(
@@ -86,12 +100,12 @@ def dry_run(records: List[Dict[str, Any]]) -> None:
                         (supplier,),
                     )
                     count_site = cur.fetchone()[0]
-                    print(
+                    safe_print(
                         f"  [site]   producer_site -> {site!r}, "
                         f"строк с пустым producer_site: {count_site}"
                     )
                 else:
-                    print("  [site]   пропущено (нет значения в Excel)")
+                    safe_print("  [site]   пропущено (нет значения в Excel)")
 
                 if region_val:
                     cur.execute(
@@ -103,14 +117,14 @@ def dry_run(records: List[Dict[str, Any]]) -> None:
                         (supplier,),
                     )
                     count_region = cur.fetchone()[0]
-                    print(
+                    safe_print(
                         f"  [region] region -> {region_val!r}, "
                         f"строк с пустым region: {count_region}"
                     )
                 else:
-                    print("  [region] пропущено (нет значения в Excel)")
+                    safe_print("  [region] пропущено (нет значения в Excel)")
 
-                print()
+                safe_print()
 
     finally:
         conn.close()
@@ -165,14 +179,14 @@ def apply(records: List[Dict[str, Any]]) -> None:
                 updated = cur.rowcount
                 total_rows += updated
 
-                print(
+                safe_print(
                     f"[APPLY] supplier={supplier!r}: "
                     f"обновлено строк (по совокупности полей) = {updated}, "
                     f"site={site!r}, region={region_val!r}"
                 )
 
         conn.commit()
-        print(f"\nГотово. Всего затронуто строк в products: {total_rows}")
+        safe_print(f"\nГотово. Всего затронуто строк в products: {total_rows}")
 
     except Exception:
         conn.rollback()
