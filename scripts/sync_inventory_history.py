@@ -2,10 +2,22 @@
 from __future__ import annotations
 
 import argparse
+import builtins
 import os
 import sys
 from datetime import datetime, timezone
 from typing import Any
+
+
+def safe_print(*args, **kwargs):
+    """Safe print that handles UnicodeEncodeError on Windows console (CP1251)"""
+    try:
+        builtins.print(*args, **kwargs)
+    except UnicodeEncodeError:
+        # Fallback: encode with errors='replace' to avoid crashes
+        message = ' '.join(str(arg) for arg in args)
+        safe_message = message.encode('cp1251', errors='replace').decode('cp1251')
+        builtins.print(safe_message, **kwargs)
 
 # ────────────────────────────────────────────────────────────────
 # Настраиваем PYTHONPATH, чтобы можно было импортировать api.app
@@ -67,7 +79,7 @@ def sync_inventory_history(as_of: datetime, dry_run: bool = False) -> int:
 
     conn, err = db_connect()
     if err or not conn:
-        raise SystemExit(f"❌ Не удалось подключиться к БД: {err}")
+        raise SystemExit(f"[x] Не удалось подключиться к БД: {err}")
 
     try:
         as_of_date = as_of.date()
@@ -95,14 +107,14 @@ def sync_inventory_history(as_of: datetime, dry_run: bool = False) -> int:
         to_insert = int(rows[0]["cnt"]) if rows else 0
 
         if dry_run:
-            print(
+            safe_print(
                 f"[dry-run] as_of={as_of.isoformat()} — "
                 f"будет вставлено строк: {to_insert}"
             )
             return to_insert
 
         if to_insert == 0:
-            print(
+            safe_print(
                 f"as_of={as_of.isoformat()} — новых записей нет, "
                 "inventory_history уже синхронизирован на эту дату."
             )
@@ -141,8 +153,8 @@ def sync_inventory_history(as_of: datetime, dry_run: bool = False) -> int:
         inserted = cursor.rowcount or 0
         conn.commit()
 
-        print(
-            f"✅ Вставлено {inserted} записей в public.inventory_history "
+        safe_print(
+            f"[OK] Вставлено {inserted} записей в public.inventory_history "
             f"для as_of={as_of.isoformat()}"
         )
         return inserted

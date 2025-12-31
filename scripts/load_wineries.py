@@ -22,11 +22,24 @@ data/catalog/wineries_enrichment.xlsx.
 """
 
 import argparse
+import builtins
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from dotenv import load_dotenv
+
+
+def safe_print(*args, **kwargs):
+    """Safe print that handles UnicodeEncodeError on Windows console (CP1251)"""
+    try:
+        # Use builtins module to access the built-in print function
+        builtins.print(*args, **kwargs)
+    except UnicodeEncodeError:
+        # Fallback: encode with errors='replace' to avoid crashes
+        message = ' '.join(str(arg) for arg in args)
+        safe_message = message.encode('cp1251', errors='replace').decode('cp1251')
+        builtins.print(safe_message, **kwargs)
 
 from scripts.load_utils import get_conn
 
@@ -70,7 +83,7 @@ def load_excel(path: Path) -> List[Dict[str, Any]]:
 
 
 def dry_run(records: List[Dict[str, Any]]) -> None:
-    print(f"Загружено записей виноделен из Excel: {len(records)}\n")
+    safe_print(f"Загружено записей виноделен из Excel: {len(records)}\n")
 
     conn = get_conn()
     try:
@@ -91,16 +104,16 @@ def dry_run(records: List[Dict[str, Any]]) -> None:
                 row = cur.fetchone()
 
                 if row is None:
-                    print(f"[NEW]   supplier={supplier!r} будет ДОБАВЛЕН в таблицу wineries")
+                    safe_print(f"[NEW]   supplier={supplier!r} будет ДОБАВЛЕН в таблицу wineries")
                 else:
-                    print(f"[EXIST] supplier={supplier!r} уже есть (id={row[0]})")
+                    safe_print(f"[EXIST] supplier={supplier!r} уже есть (id={row[0]})")
 
-                print(
+                safe_print(
                     f"        supplier_ru={rec.get('supplier_key_ru')!r}, "
                     f"region={rec.get('region')!r}, "
                     f"site={rec.get('producer_site')!r}"
                 )
-                print()
+                safe_print()
     finally:
         conn.close()
 
@@ -148,13 +161,13 @@ def apply(records: List[Dict[str, Any]]) -> None:
                     updated += 1
                     action = "UPDATE"
 
-                print(
+                safe_print(
                     f"[{action}] supplier={supplier!r}, "
                     f"supplier_ru={supplier_ru!r}, region={region!r}, site={site!r}"
                 )
 
         conn.commit()
-        print(
+        safe_print(
             f"\nГотово. Вставлено новых записей: {inserted}, "
             f"обновлено существующих: {updated}"
         )
