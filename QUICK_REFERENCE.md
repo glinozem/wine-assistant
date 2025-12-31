@@ -16,77 +16,93 @@ echo $env:API_KEY
 
 ---
 
-## 📥 Import Operations (M1 Complete) 🎉
+## 📥 Daily Import v1.0.4 (Production Ready) 🎉
 
-### Ежедневный импорт (рекомендуется)
+### Инкрементный ежедневный импорт
 
-Wrapper скрипт автоматически:
-- Найдёт последний файл по дате в имени (`2025_12_24 Прайс...xlsx`)
-- Извлечёт `as_of_date` из имени файла
-- Запустит orchestrator
+**Новый workflow** — incremental imports без wipe volumes.
 
-```powershell
-# Простейший вариант
-.\scripts\run_daily_import.ps1 -Supplier "dreemwine"
+**Ключевые фичи:**
+- ✅ Auto-inbox: автоматический выбор новейшего файла
+- ✅ Idempotent: безопасен для повторного запуска
+- ✅ Inventory tracking: автоматические snapshot'ы
+- ✅ Windows-friendly: UnicodeEncodeError исправлен (v1.0.4)
 
-# С диагностикой (показывает топ-5 кандидатов + выбранный файл)
-.\scripts\run_daily_import.ps1 -Supplier "dreemwine" -Verbose
-
-# Dry-run (не запускает импорт, только показывает что будет сделано)
-.\scripts\run_daily_import.ps1 -Supplier "dreemwine" -Verbose -WhatIf
-
-# С явным указанием файла
-.\scripts\run_daily_import.ps1 `
-  -Supplier "dreemwine" `
-  -FilePath "data/inbox/2025_12_10 Прайс_Легенда_Виноделия.xlsx"
-
-# Override as_of_date (если бизнес-дата ≠ дата в имени)
-.\scripts\run_daily_import.ps1 `
-  -Supplier "dreemwine" `
-  -AsOfDate "2025-12-06"
-```
-
-**Диагностика файлов (пример вывода `-Verbose -WhatIf`):**
-```
-=== Wine Assistant - Daily Import ===
-Repo root:       D:\...\wine-assistant
-Supplier:        dreemwine
-
-PowerShell: 5.1.26100.7462
-Python: D:\...\wine-assistant\.venv\Scripts\python.exe
-Mode:            auto-discovery
-Inbox:           D:\...\wine-assistant\data\inbox
-
-Scanning inbox: D:\...\wine-assistant\data\inbox
-Top candidates (sorted):
- 1) 2025_12_10 Прайс_Легенда_Виноделия.xlsx | parsed_date=2025-12-10 | last_write=2025-12-24 13:42:00
- 2) 2025_12_03 Прайс_Легенда_Виноделия.xlsx | parsed_date=2025-12-03 | last_write=2025-12-03 11:00:00
- 3) 2025_12_02 Прайс_Легенда_Виноделия.xlsx | parsed_date=2025-12-02 | last_write=2025-12-24 13:42:00
-Chosen file: D:\...\2025_12_10 Прайс_Легенда_Виноделия.xlsx
-Selected file:   2025_12_10 Прайс_Легенда_Виноделия.xlsx
-Selected full path: D:\...\2025_12_10 Прайс_Легенда_Виноделия.xlsx
-as_of_date:      2025-12-10 (from filename)
-as_of_date source: filename (override via -AsOfDate to change)
-Command:        "D:\...\.venv\Scripts\python.exe" -m scripts.run_import_orchestrator --supplier dreemwine --file "..." --as-of-date 2025-12-10 --import-fn scripts.import_targets.run_daily_adapter:import_with_run_daily
-
-WHATIF: import orchestrator will NOT be executed.
-WHATIF: command       = "..." -m scripts.run_import_orchestrator ...
-WHATIF: supplier      = dreemwine
-WHATIF: selected file = D:\...\2025_12_10 Прайс_Легенда_Виноделия.xlsx
-WHATIF: as_of_date    = 2025-12-10
-```
-
-### Ручной запуск orchestrator
+### Простейший вариант (рекомендуется)
 
 ```powershell
-python -m scripts.run_import_orchestrator `
-  --supplier "dreemwine" `
-  --file "data/inbox/2025_12_10 Прайс_Легенда_Виноделия.xlsx" `
-  --as-of-date "2025-12-10" `
-  --import-fn "scripts.import_targets.run_daily_adapter:import_with_run_daily"
+# Auto-inbox: автоматически берет новейший .xlsx из data/inbox
+make daily-import
 
-# Expected output:
-# INFO import_run_success metrics={'total_rows_processed': 262, 'rows_skipped': 298}
+# Или через Python напрямую
+python -m scripts.daily_import --inbox data/inbox
+
+# Или PowerShell wrapper
+.\scripts\run_daily_import.ps1
+```
+
+### С параметрами
+
+```powershell
+# Explicit files list
+make daily-import-files FILES="data/inbox/2025_12_10.xlsx data/inbox/2025_12_17.xlsx"
+
+# Или через Python
+python -m scripts.daily_import --files data/inbox/2025_12_10.xlsx data/inbox/2025_12_17.xlsx
+
+# Или PowerShell
+.\scripts\run_daily_import.ps1 -Files data\inbox\2025_12_10.xlsx, data\inbox\2025_12_17.xlsx
+
+# Custom directories
+python -m scripts.daily_import `
+  --inbox D:\imports\inbox `
+  --archive D:\imports\archive `
+  --quarantine D:\imports\quarantine
+
+# Без inventory snapshot (редко)
+python -m scripts.daily_import --no-snapshot
+
+# Snapshot dry-run first (проверка перед применением)
+.\scripts\run_daily_import.ps1 -SnapshotDryRunFirst
+```
+
+### Expected Output
+
+**Успешный импорт:**
+```
+=== IMPORT (load_csv) ===
+>>> File: data\inbox\2025_12_12 Прайс_Легенда_Виноделия.xlsx
+[OK] Import completed successfully
+[daily-import] Moved: data\inbox\*.xlsx -> data\archive\2025-12\*.xlsx
+
+=== LOAD WINERIES CATALOG ===
+Готово. Вставлено новых записей: 0, обновлено существующих: 46
+
+=== ENRICH PRODUCTS ===
+Готово. Всего затронуто строк в products: 244
+
+=== MAINTENANCE SQL ===
+[daily-import] Maintenance SQL completed
+
+=== INVENTORY HISTORY SNAPSHOT ===
+[OK] Вставлено 270 записей в public.inventory_history
+
+=== SUMMARY ===
+- IMPORTED 2025_12_12 Прайс_Легенда_Виноделия.xlsx
+
+Exit code: 0
+```
+
+**Идемпотентность (SKIP):**
+```
+=== IMPORT (load_csv) ===
+>> SKIP: File already imported
+[daily-import] Moved: data\inbox\*.xlsx -> data\archive\2025-12\*.xlsx
+
+=== SUMMARY ===
+- SKIPPED (already imported)
+
+Exit code: 0
 ```
 
 ### Проверка в БД
@@ -99,6 +115,176 @@ SELECT run_id, supplier, as_of_date, status,
 FROM import_runs
 ORDER BY created_at DESC LIMIT 10;"
 
+# Inventory snapshots
+docker compose exec -T db psql -U postgres -d wine_db -c "
+SELECT COUNT(*) as total_snapshots,
+       MAX(as_of) as latest_snapshot,
+       COUNT(DISTINCT code) as unique_products
+FROM inventory_history;"
+
+# Current inventory
+docker compose exec -T db psql -U postgres -d wine_db -c "
+SELECT COUNT(*) as total_products,
+       SUM(stock_total) as total_stock,
+       SUM(stock_free) as free_stock,
+       MAX(asof_date) as snapshot_date
+FROM inventory;"
+
+# Products with inventory
+docker compose exec -T db psql -U postgres -d wine_db -c "
+SELECT p.code, p.title_ru, p.supplier,
+       i.stock_total, i.reserved, i.stock_free,
+       i.asof_date
+FROM products p
+JOIN inventory i ON p.code = i.code
+WHERE i.stock_total > 0
+ORDER BY i.stock_total DESC
+LIMIT 10;"
+```
+
+### Automation (Task Scheduler)
+
+```powershell
+# Daily import (09:00)
+$taskName = "wine-assistant daily import"
+$scriptPath = (Resolve-Path ".\scripts\run_daily_import.ps1").Path
+schtasks /Create /TN $taskName /SC DAILY /ST 09:00 `
+  /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`"" /F
+
+# Verify task
+Get-ScheduledTaskInfo -TaskName "wine-assistant daily import"
+
+# Manual trigger
+Start-ScheduledTask -TaskName "wine-assistant daily import"
+```
+
+### Inventory Snapshots
+
+```powershell
+# Manual snapshot with custom date
+make sync-inventory-history AS_OF="2025-12-31"
+
+# Dry-run first
+make sync-inventory-history-dry-run AS_OF="2025-12-31"
+
+# Via Python
+python -m scripts.sync_inventory_history --as-of "2025-12-31T23:59:59"
+python -m scripts.sync_inventory_history --dry-run --as-of "2025-12-31"
+```
+
+### Troubleshooting
+
+**Problem: UnicodeEncodeError**
+```powershell
+# Verify v1.0.4 safe_print() is present
+grep "def safe_print" scripts/daily_import.py
+grep "def safe_print" scripts/load_wineries.py
+grep "def safe_print" scripts/enrich_producers.py
+grep "def safe_print" scripts/sync_inventory_history.py
+
+# All 4 files should have the function
+# If not, update to v1.0.4
+```
+
+**Problem: Import failed**
+```powershell
+# Check quarantine directory
+Get-ChildItem data/quarantine -Recurse | Select-Object FullName, Length, LastWriteTime
+
+# Check error in database
+docker compose exec -T db psql -U postgres -d wine_db -c "
+SELECT run_id, supplier, error_summary, error_details, created_at
+FROM import_runs
+WHERE status = 'failed'
+ORDER BY created_at DESC
+LIMIT 1;"
+
+# Review file and fix issue
+# Move file back to inbox
+Move-Item data/quarantine/2025-12/problematic_file.xlsx data/inbox/
+
+# Retry import
+python -m scripts.daily_import --inbox data/inbox
+```
+
+**Problem: Wrong file selected (auto-inbox)**
+```powershell
+# Check what file will be selected
+Get-ChildItem data/inbox/*.xlsx |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object Name, LastWriteTime -First 5
+
+# Solution: Use explicit files mode
+python -m scripts.daily_import --files data/inbox/specific_file.xlsx
+```
+
+**Problem: Advisory lock stuck**
+```powershell
+# Check locks
+docker compose exec -T db psql -U postgres -d wine_db -c "
+SELECT * FROM pg_locks WHERE locktype = 'advisory';"
+
+# Release all advisory locks
+docker compose exec -T db psql -U postgres -d wine_db -c "
+SELECT pg_advisory_unlock_all();"
+
+# Retry import
+python -m scripts.daily_import
+```
+
+**Problem: Inventory snapshot not created**
+```powershell
+# Expected: snapshot only created on actual import, not on SKIP
+# Check if file was SKIP
+# Review output for ">> SKIP: File already imported"
+
+# Manual snapshot if needed
+make sync-inventory-history AS_OF="2025-12-31"
+```
+
+**Problem: Emoji shows as '?' in console**
+```
+Expected behavior on Windows CP1251 console
+Not an error - this is correct safe_print() behavior
+
+Workaround: Use UTF-8 terminal or run `chcp 65001` first
+```
+
+### Fresh Deployment & Testing
+
+```powershell
+# Bootstrap from scratch (wipe volumes + rebuild)
+.\scripts\bootstrap_from_scratch.ps1 -RebuildImages
+
+# E2E smoke test
+make smoke-e2e SMOKE_SUPPLIER=dreemwine SMOKE_FRESH=1
+
+# Or direct PowerShell
+.\scripts\smoke_e2e.ps1 -Supplier dreemwine -Fresh -Build
+```
+
+---
+
+## 📊 Import Operations (M1 Complete) 🎉
+
+### Legacy Import Orchestrator (Advanced)
+
+**Note:** For regular daily operations, use `make daily-import` above. The orchestrator is for advanced scenarios.
+
+```powershell
+python -m scripts.run_import_orchestrator `
+  --supplier "dreemwine" `
+  --file "data/inbox/2025_12_10 Прайс_Легенда_Виноделия.xlsx" `
+  --as-of-date "2025-12-10" `
+  --import-fn "scripts.import_targets.run_daily_adapter:import_with_run_daily"
+
+# Expected output:
+# INFO import_run_success metrics={'total_rows_processed': 262, 'rows_skipped': 298}
+```
+
+### Monitoring
+
+```powershell
 # Staleness check
 docker compose exec -T db psql -U postgres -d wine_db -c "
 SELECT supplier, hours_since_success, last_success_at,
@@ -121,149 +307,7 @@ SELECT run_id, supplier, started_at,
 FROM import_runs
 WHERE status='running'
 ORDER BY minutes_running DESC;"
-```
 
-### Автоматизация (Task Scheduler)
-
-```powershell
-# Daily import (09:00)
-$taskName = "wine-assistant daily import"
-$scriptPath = (Resolve-Path ".\scripts\run_daily_import.ps1").Path
-schtasks /Create /TN $taskName /SC DAILY /ST 09:00 `
-  /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" -Supplier dreemwine" /F
-
-# Stale detector (every 15 minutes)
-$taskName = "wine-assistant stale detector"
-$scriptPath = (Resolve-Path ".\scripts\run_stale_detector.ps1").Path
-schtasks /Create /TN $taskName /SC MINUTE /MO 15 `
-  /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`"" /F
-
-# Verify tasks
-Get-ScheduledTaskInfo -TaskName "wine-assistant daily import"
-Get-ScheduledTaskInfo -TaskName "wine-assistant stale detector"
-```
-
-### Troubleshooting
-
-**Problem: Import failed**
-```powershell
-# Check error details
-docker compose exec -T db psql -U postgres -d wine_db -c "
-SELECT run_id, supplier, error_summary, error_details
-FROM import_runs
-WHERE status = 'failed'
-ORDER BY created_at DESC LIMIT 1;"
-
-# Retry after fix (same command)
-python -m scripts.run_import_orchestrator ...
-```
-
-**Problem: Wrong file selected**
-```powershell
-# Диагностика: проверить какой файл будет выбран
-.\scripts\run_daily_import.ps1 -Supplier "dreemwine" -Verbose -WhatIf
-
-# Output покажет топ-5 кандидатов и выбранный файл (см. пример выше)
-
-# Решение: явно указать файл
-.\scripts\run_daily_import.ps1 -Supplier "dreemwine" -FilePath "data/inbox/specific_file.xlsx"
-```
-
-**Problem: Import stuck (running > 2 hours)**
-```powershell
-# Check stuck runs
-docker compose exec -T db psql -U postgres -d wine_db -c "
-SELECT run_id, supplier, started_at,
-       EXTRACT(EPOCH FROM (NOW() - started_at))/60 as minutes_stuck
-FROM import_runs
-WHERE status = 'running'
-  AND started_at < NOW() - INTERVAL '2 hours';"
-
-# Dry-run: проверить что будет сделано
-.\scripts\run_stale_detector.ps1 -RunningMinutes 120 -Verbose -WhatIf
-
-# Реальный запуск с диагностикой
-.\scripts\run_stale_detector.ps1 -RunningMinutes 120 -Verbose
-
-# Без диагностики (как раньше)
-.\scripts\run_stale_detector.ps1 -RunningMinutes 120
-```
-
-**Problem: Data staleness > 24h**
-```powershell
-# Check stale suppliers
-docker compose exec -T db psql -U postgres -d wine_db -c "
-SELECT supplier, hours_since_success, last_success_at
-FROM v_import_staleness
-WHERE hours_since_success > 24;"
-
-# Check file availability
-Get-ChildItem "data/inbox/*.xlsx" |
-  Sort-Object LastWriteTime -Descending | Select-Object -First 5
-
-# Trigger manual import
-.\scripts\run_daily_import.ps1 -Supplier "dreemwine"
-```
-
-### Stale Detector (зависшие импорты)
-
-```powershell
-# Dry-run: проверить параметры и команду без запуска
-.\scripts\run_stale_detector.ps1 -RunningMinutes 120 -PendingMinutes 15 -Verbose -WhatIf
-```
-
-**Expected output:**
-```
-=== Wine Assistant - Stale Import Runs Detector ===
-Repo root:       D:\...\wine-assistant
-RunningMinutes:  120
-PendingMinutes:  15
-
-PowerShell: 5.1.26100.7462
-Python: D:\...\wine-assistant\.venv\Scripts\python.exe
-Command:        "D:\...\.venv\Scripts\python.exe" -m scripts.mark_stale_import_runs --running-minutes 120 --pending-minutes 15
-WHATIF: stale detector will NOT be executed.
-WHATIF: command        = "..." -m scripts.mark_stale_import_runs --running-minutes 120 --pending-minutes 15
-WHATIF: RunningMinutes = 120
-WHATIF: PendingMinutes = 15
-```
-
-**Реальный запуск с диагностикой:**
-```powershell
-.\scripts\run_stale_detector.ps1 -RunningMinutes 120 -PendingMinutes 15 -Verbose
-```
-
-**Expected output:**
-```
-=== Wine Assistant - Stale Import Runs Detector ===
-Repo root:       D:\...\wine-assistant
-RunningMinutes:  120
-PendingMinutes:  15
-
-PowerShell: 5.1.26100.7462
-Python: D:\...\wine-assistant\.venv\Scripts\python.exe
-Command:        "..." -m scripts.mark_stale_import_runs --running-minutes 120 --pending-minutes 15
-Running stale detector...
-
-2025-12-26 08:58:57,299 INFO __main__ stale_import_runs_done rolled_back_running=0 rolled_back_pending=0
-
-Stale detector completed successfully.
-```
-
-**Тихий запуск (без диагностики):**
-```powershell
-.\scripts\run_stale_detector.ps1
-```
-
-**Диагностика stale detector:**
-- `-Verbose` — показывает версии PowerShell/Python, команду запуска
-- `-WhatIf` — не запускает detector, только показывает параметры
-- `-RunningMinutes` — порог для stuck "running" импортов (default: 120)
-- `-PendingMinutes` — порог для stuck "pending" импортов (default: 15)
-
-### Monitoring Queries
-
-```powershell
 # Success rate (last 7d)
 docker compose exec -T db psql -U postgres -d wine_db -c "
 SELECT supplier,
@@ -278,18 +322,19 @@ FROM import_runs
 WHERE created_at > NOW() - INTERVAL '7 days'
   AND status IN ('success', 'failed')
 GROUP BY supplier;"
+```
 
-# Import duration trend
-docker compose exec -T db psql -U postgres -d wine_db -c "
-SELECT DATE(finished_at) as import_date,
-       AVG(EXTRACT(EPOCH FROM (finished_at - started_at)))::INT as avg_duration_sec,
-       MAX(EXTRACT(EPOCH FROM (finished_at - started_at)))::INT as max_duration_sec
-FROM import_runs
-WHERE status = 'success'
-  AND finished_at > NOW() - INTERVAL '30 days'
-GROUP BY DATE(finished_at)
-ORDER BY import_date DESC
-LIMIT 10;"
+### Stale Detector (зависшие импорты)
+
+```powershell
+# Dry-run: проверить параметры и команду без запуска
+.\scripts\run_stale_detector.ps1 -RunningMinutes 120 -PendingMinutes 15 -Verbose -WhatIf
+
+# Реальный запуск с диагностикой
+.\scripts\run_stale_detector.ps1 -RunningMinutes 120 -PendingMinutes 15 -Verbose
+
+# Тихий запуск (без диагностики)
+.\scripts\run_stale_detector.ps1
 ```
 
 ---
@@ -376,6 +421,9 @@ make dr-smoke-truncate DR_BACKUP_KEEP=2 MANAGE_PROMTAIL=1
 
 # Полный smoke check
 .\scripts\manual_smoke_check.ps1
+
+# E2E smoke test
+make smoke-e2e SMOKE_SUPPLIER=dreemwine
 ```
 
 ---
@@ -434,6 +482,12 @@ Invoke-RestMethod "$baseUrl/api/v1/products/search?color=red&in_stock=true&limit
 # Полная карточка
 $code = "D010210"
 Invoke-RestMethod "$baseUrl/api/v1/sku/$code" -Headers $headers | ConvertTo-Json -Depth 10
+
+# Inventory history
+Invoke-RestMethod "$baseUrl/api/v1/sku/$code/inventory-history" -Headers $headers | ConvertTo-Json -Depth 5
+
+# Price history
+Invoke-RestMethod "$baseUrl/api/v1/sku/$code/price-history" -Headers $headers | ConvertTo-Json -Depth 5
 ```
 
 ---
@@ -466,6 +520,23 @@ docker compose ps
 docker compose up -d --force-recreate api
 ```
 
+### Проблема: Daily import fails
+
+```powershell
+# Check exit code
+echo $LASTEXITCODE  # Should be 0
+
+# Review output for errors
+python -m scripts.daily_import --inbox data/inbox
+
+# Check quarantine
+Get-ChildItem data/quarantine -Recurse
+
+# Review database
+docker compose exec -T db psql -U postgres -d wine_db -c "
+SELECT * FROM import_runs WHERE status = 'failed' ORDER BY created_at DESC LIMIT 1;"
+```
+
 ---
 
 ## 📚 Полезные ссылки
@@ -475,10 +546,12 @@ docker compose up -d --force-recreate api
 - **Grafana:** http://localhost:15000 (admin/admin)
 - **Backup/DR Dashboard:** http://localhost:15000/d/wine-assistant-backup-dr/backup-dr
 - **GitHub:** https://github.com/glinozem/wine-assistant
+- **Documentation:** docs/changes_daily_import.md
+- **Changelog:** CHANGELOG.md
 
 ---
 
 **Создано:** 04 декабря 2025
-**Обновлено:** 26 декабря 2025 (точные примеры вывода для Verbose/WhatIf)
-**Версия:** 1.4-final
-**Для:** Wine Assistant v0.5.0+ (M1 Complete)
+**Обновлено:** 31 декабря 2025 (Daily Import v1.0.4)
+**Версия:** 2.0
+**Для:** Wine Assistant v0.5.0+ (M1 Complete + Daily Import v1.0.4)

@@ -10,22 +10,59 @@
 - Быстрый старт (Docker, локальная разработка)
 - Архитектура системы
 - Import Operations (M1 Complete) 🎉
+- Daily Import v1.0.4 (Incremental) 🎉
 - Observability & Monitoring
 - AI Capabilities (планируется)
 
 ### [CHANGELOG.md](CHANGELOG.md)
 **История изменений**
-- Unreleased: Import Operations M1, Observability, Backup/DR
+- Unreleased: Daily Import v1.0.4, Import Operations M1, Observability, Backup/DR
 - Version history (v0.4.3+)
 - Bug fixes и improvements
+- **Latest:** v1.0.4 bugfix (UnicodeEncodeError) + infrastructure
 
 ### [QUICK_REFERENCE.md](QUICK_REFERENCE.md)
 **Шпаргалка команд**
-- Import Operations quick start
+- **Daily Import v1.0.4** — incremental import quick start
+- Import Operations (legacy orchestrator)
 - PowerShell примеры для API
 - Observability stack (Grafana/Loki/Promtail)
 - Backup/DR операции
 - Troubleshooting
+
+---
+
+## 📥 Daily Import v1.0.4 (Production Ready)
+
+### [docs/changes_daily_import.md](docs/changes_daily_import.md)
+**Полная документация daily import**
+- v1.0.4 bugfix: UnicodeEncodeError resolution
+- Incremental import architecture
+- Pipeline steps и workflow
+- ETL & inventory enhancements
+- Automation scripts (bootstrap, smoke tests)
+- Operational notes & troubleshooting
+- Migration guide from previous versions
+
+**Key Features:**
+- ✅ Auto-inbox mode (newest file only)
+- ✅ Idempotent (safe to re-run)
+- ✅ Inventory tracking with history
+- ✅ Windows CP1251 encoding fixed
+- ✅ Advisory lock (prevents concurrent runs)
+- ✅ Automatic archiving (SUCCESS/SKIP → archive/, ERROR → quarantine/)
+
+**Quick Start:**
+```bash
+# Auto-inbox (recommended)
+make daily-import
+
+# Explicit files
+make daily-import-files FILES="data/inbox/file1.xlsx data/inbox/file2.xlsx"
+
+# PowerShell wrapper
+.\scripts\run_daily_import.ps1
+```
 
 ---
 
@@ -123,6 +160,13 @@ pytest
 - `0013_*.sql` — Inventory history tables
 - `0012_*.sql` — Wineries reference data
 
+**Recent Schema Changes (v1.0.4):**
+- `products.supplier` — supplier normalization field
+- `products.price_list_rub` — list price
+- `products.price_final_rub` — final price with discount
+- `inventory.stock_total`, `inventory.reserved`, `inventory.stock_free`
+- `inventory_history` — idempotent daily snapshots
+
 ### Views
 - `v_import_runs_summary` — сводка по импортам
 - `v_import_staleness` — staleness check (hours_since_success)
@@ -140,9 +184,12 @@ pytest --cov=api --cov=scripts --cov-report=html
 
 # Import Operations tests (PowerShell)
 $env:RUN_DB_TESTS="1"; pytest tests/unit/test_import_run_registry.py
+
+# Daily import smoke test
+make smoke-e2e SMOKE_SUPPLIER=dreemwine SMOKE_FRESH=1
 ```
 
-**Coverage:** 175 тестов, >80% coverage
+**Coverage:** 175+ тестов, >80% coverage
 
 ---
 
@@ -178,7 +225,19 @@ pre-commit run --all-files
 
 ## 🛠️ Scripts
 
-### Import Operations
+### Daily Import (v1.0.4)
+- **`scripts/daily_import.py`** — orchestrator для incremental imports
+  - Auto-inbox mode
+  - Explicit files mode
+  - Advisory lock
+  - Archiving (SUCCESS/SKIP → archive/, ERROR → quarantine/)
+  - Full pipeline: import → wineries → enrichment → maintenance → inventory
+
+- **`scripts/run_daily_import.ps1`** — PowerShell wrapper (64 lines)
+- **`scripts/bootstrap_from_scratch.ps1`** — fresh deployment automation
+- **`scripts/smoke_e2e.ps1`** — E2E testing
+
+### Import Operations (Legacy)
 - `scripts/run_import_orchestrator.py` — CLI runner
 - `scripts/import_orchestrator.py` — core logic
 - `scripts/import_run_registry.py` — registry API
@@ -186,29 +245,49 @@ pre-commit run --all-files
 - `scripts/ingest_envelope.py` — file traceability
 - `scripts/mark_stale_import_runs.py` — stale detector
 
-### PowerShell Wrappers
-- `scripts/run_daily_import.ps1` — daily import automation
-- `scripts/run_stale_detector.ps1` — stale cleanup automation
-
 ### ETL
-- `etl/run_daily.py` — legacy daily import
+- `etl/run_daily.py` — daily import ETL (with inventory tracking)
 - `etl/mapping_template.json` — DreemWine mapping config
+
+### Common Scripts
+- `scripts/load_wineries.py` — wineries catalog (with safe_print v1.0.4)
+- `scripts/enrich_producers.py` — product enrichment (with safe_print v1.0.4)
+- `scripts/sync_inventory_history.py` — inventory snapshots (with safe_print v1.0.4)
 
 ---
 
 ## 📊 Makefile
 
+### Daily Import
 ```bash
-# Development
+make daily-import                  # Auto-inbox (newest file)
+make daily-import-files FILES="..."  # Explicit files
+make daily-import-ps1              # PowerShell wrapper
+make sync-inventory-history AS_OF="2025-12-31"  # Manual snapshot
+```
+
+### Development
+```bash
 make dev-up / dev-down / dev-logs
+```
 
-# Observability
+### Observability
+```bash
 make obs-up / obs-down / obs-restart / obs-logs
+```
 
-# Backup & DR
+### Backup & DR
+```bash
 make backup-local / restore-local / dr-smoke-truncate
+```
 
-# Storage
+### Testing
+```bash
+make smoke-e2e SMOKE_SUPPLIER=dreemwine SMOKE_FRESH=1
+```
+
+### Storage
+```bash
 make storage-up / backups-list-remote
 ```
 
@@ -220,22 +299,34 @@ make storage-up / backups-list-remote
 wine-assistant/
 ├── api/                          # Flask application
 ├── db/migrations/                # SQL migrations
+│   ├── 0014_import_runs.sql      # Import registry (M1)
+│   └── 0013_*.sql                # Inventory tables
 ├── docs/
+│   ├── changes_daily_import.md   # Daily Import v1.0.4 docs
 │   ├── dev/
 │   │   ├── import_flow.md        # Import architecture
 │   │   └── backup-dr-runbook.md  # Backup/DR guide
 │   └── runbook_import.md         # Import operations runbook
 ├── etl/
-│   ├── run_daily.py              # Legacy ETL
+│   ├── run_daily.py              # Daily ETL (inventory + supplier)
 │   └── mapping_template.json     # DreemWine mapping
 ├── scripts/
+│   ├── daily_import.py           # Daily import orchestrator ⭐ NEW
+│   ├── bootstrap_from_scratch.ps1  # Fresh deployment ⭐ NEW
+│   ├── smoke_e2e.ps1             # E2E testing ⭐ NEW
+│   ├── run_daily_import.ps1      # PowerShell wrapper (rewritten)
+│   ├── load_wineries.py          # Wineries (safe_print v1.0.4)
+│   ├── enrich_producers.py       # Enrichment (safe_print v1.0.4)
+│   ├── sync_inventory_history.py # Snapshots (safe_print v1.0.4)
 │   ├── import_orchestrator.py    # Import orchestrator core
-│   ├── run_daily_import.ps1      # Daily automation
 │   └── run_stale_detector.ps1    # Stale cleanup
 ├── tests/
 │   ├── unit/
 │   └── integration/
-└── README.md
+├── CHANGELOG.md                   # Updated with v1.0.4
+├── QUICK_REFERENCE.md             # Updated with daily import
+├── INDEX.md                       # This file
+└── README.md                      # Main documentation
 ```
 
 ---
@@ -245,6 +336,9 @@ wine-assistant/
 ### GitHub
 - **Repository:** https://github.com/glinozem/wine-assistant
 - **Issues:** https://github.com/glinozem/wine-assistant/issues
+- **Latest Release:** v1.0.4 (Daily Import Bugfix)
+- **PR #172:** UnicodeEncodeError fix
+- **PR #173:** Infrastructure + ETL + testing
 
 ### Local Services
 - **API:** http://localhost:18000
@@ -259,9 +353,10 @@ wine-assistant/
 
 | Document | Status | Last Updated | Version |
 |----------|--------|--------------|---------|
-| README.md | ✅ Current | 2025-12-25 | M1 Complete |
-| CHANGELOG.md | ✅ Current | 2025-12-25 | Unreleased |
-| QUICK_REFERENCE.md | ✅ Current | 2025-12-25 | v1.2 |
+| README.md | ✅ Current | 2025-12-31 | v1.0.4 |
+| CHANGELOG.md | ✅ Current | 2025-12-31 | v1.0.4 |
+| QUICK_REFERENCE.md | ✅ Current | 2025-12-31 | v2.0 |
+| changes_daily_import.md | ✅ Current | 2025-12-31 | v1.0.4 |
 | import_flow.md | ✅ Current | 2025-12-25 | PR-4 |
 | runbook_import.md | ✅ Current | 2025-12-25 | PR-4 |
 | backup-dr-runbook.md | ✅ Current | 2025-12-22 | v1.0 |
@@ -272,15 +367,17 @@ wine-assistant/
 
 ### For Developers
 1. [README.md](README.md) → Quick Start
-2. [docs/dev/windows-powershell-http.md](docs/dev/windows-powershell-http.md)
-3. Testing: `pytest` commands
-4. Pre-commit hooks
+2. [docs/changes_daily_import.md](docs/changes_daily_import.md) → Daily Import architecture
+3. [docs/dev/windows-powershell-http.md](docs/dev/windows-powershell-http.md)
+4. Testing: `pytest` commands
+5. Pre-commit hooks
 
 ### For Operators
 1. [README.md](README.md) → Quick Start
-2. [docs/runbook_import.md](docs/runbook_import.md) — Import Operations
-3. [docs/dev/backup-dr-runbook.md](docs/dev/backup-dr-runbook.md) — Backup/DR
-4. [QUICK_REFERENCE.md](QUICK_REFERENCE.md) — Commands
+2. [QUICK_REFERENCE.md](QUICK_REFERENCE.md) — Commands cheat sheet
+3. [docs/changes_daily_import.md](docs/changes_daily_import.md) — Daily Import guide
+4. [docs/runbook_import.md](docs/runbook_import.md) — Import Operations
+5. [docs/dev/backup-dr-runbook.md](docs/dev/backup-dr-runbook.md) — Backup/DR
 
 ### For Users
 1. UI: http://localhost:18000/ui
@@ -289,7 +386,55 @@ wine-assistant/
 
 ---
 
+## 🚀 What's New in v1.0.4
+
+### Bugfix: UnicodeEncodeError (PR #172)
+- ✅ Fixed Windows CP1251 console crashes
+- ✅ Added `safe_print()` to 4 scripts
+- ✅ 15+ successful production test runs
+- ✅ Tag: v1.0.4
+
+### Infrastructure & ETL (PR #173)
+- ✅ Daily import orchestrator (`scripts/daily_import.py`)
+- ✅ Inventory tracking (stock_total, reserved, stock_free)
+- ✅ Supplier normalization (`products.supplier` field)
+- ✅ Extended price tracking (list/final/current prices)
+- ✅ Bootstrap script (`bootstrap_from_scratch.ps1`)
+- ✅ E2E smoke test (`smoke_e2e.ps1`)
+- ✅ Makefile targets for daily import
+- ✅ PowerShell wrapper rewritten (214→64 lines)
+
+### Key Benefits
+- 📈 **Incremental imports** — no volume wiping
+- 🔄 **Idempotent** — safe to re-run
+- 📊 **Inventory history** — full tracking
+- 🖥️ **Windows-friendly** — encoding issues resolved
+- 🔒 **Concurrency protection** — advisory locks
+- 📁 **Smart archiving** — automatic file management
+
+---
+
+## 📖 Documentation Guides
+
+### Getting Started
+1. **Installation:** README.md → Quick Start
+2. **First Import:** QUICK_REFERENCE.md → Daily Import
+3. **Troubleshooting:** docs/changes_daily_import.md → Troubleshooting section
+
+### Daily Operations
+1. **Run Import:** `make daily-import`
+2. **Check Status:** SQL queries in QUICK_REFERENCE.md
+3. **Monitor:** Grafana dashboard
+
+### Advanced Topics
+1. **Import Architecture:** docs/dev/import_flow.md
+2. **ETL Details:** docs/changes_daily_import.md
+3. **Backup/DR:** docs/dev/backup-dr-runbook.md
+
+---
+
 **Wine Assistant Documentation Index**
-**Version:** 1.0
-**Last Updated:** 25 декабря 2025
-**Status:** M1 (Import Operations) Complete 🎉
+**Version:** 2.0
+**Last Updated:** 31 декабря 2025
+**Status:** Daily Import v1.0.4 Complete 🎉
+**Milestone:** M1 (Import Operations) + v1.0.4 (Incremental Daily Import)
