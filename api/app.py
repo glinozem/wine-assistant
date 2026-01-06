@@ -22,6 +22,7 @@ from werkzeug.exceptions import HTTPException
 
 from api.export import ExportService
 from api.logging_config import setup_logging
+from api.ops_daily_import import register_ops_daily_import
 from api.request_middleware import setup_request_logging
 from api.schemas import (
     CatalogSearchParams,
@@ -200,6 +201,10 @@ def _resolve_image_url(code: str, existing_url: Any = None) -> str | None:
 def ui_index():
     # позже сюда можно добавить передачу API-ключа из конфига
     return render_template("ui.html", api_key=API_KEY or "")
+
+@app.route("/daily-import")
+def daily_import_ui():
+    return render_template("daily_import.html", api_key=API_KEY or "")
 
 # CORS
 cors_origins = os.getenv("CORS_ORIGINS", "*")
@@ -528,6 +533,12 @@ def require_api_key(fn):
                 return jsonify({"error": "forbidden"}), 403
         return fn(*args, **kwargs)
     return wrapper
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Ops: Daily Import endpoints
+# ────────────────────────────────────────────────────────────────────────────────
+register_ops_daily_import(app, require_api_key, db_connect, db_query)
 
 
 # ────────────────────────────────────────────────────────────────────────────────

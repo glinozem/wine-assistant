@@ -1,0 +1,1301 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Wine Assistant — Daily Import</title>
+  <style>
+    :root{
+      --bg:#ffffff;
+      --panel:#ffffff;
+      --muted:#6b7280;
+      --text:#0f172a;
+      --line:#e5e7eb;
+      --line2:#f1f5f9;
+      --accent:#2563eb;
+      --accent2:#1d4ed8;
+      --success:#166534;
+      --warning:#854d0e;
+      --danger:#b91c1c;
+      --shadow: 0 1px 2px rgba(0,0,0,.06);
+      --radius: 10px;
+      --font: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    }
+    html,body{height:100%; background:var(--bg); color:var(--text); font-family:var(--font); margin:0;}
+    a{color:var(--accent); text-decoration:none;}
+    a:hover{text-decoration:underline;}
+    .page{
+      height:100%;
+      display:flex;
+      flex-direction:column;
+    }
+
+    /* Header */
+    .topbar{
+      background:var(--panel);
+      border-bottom:1px solid var(--line);
+      box-shadow: var(--shadow);
+      padding:14px 18px;
+    }
+    .topbar-row{
+      display:flex;
+      align-items:center;
+      gap:14px;
+      flex-wrap:wrap;
+    }
+    .brand{
+      font-size:20px;
+      font-weight:700;
+      letter-spacing:.2px;
+      margin-right:8px;
+    }
+    .chip{
+      font-size:12px;
+      padding:4px 8px;
+      border:1px solid var(--line);
+      border-radius:999px;
+      color:var(--muted);
+      background:#fff;
+    }
+    .controls{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      flex:1;
+      min-width: 320px;
+      flex-wrap:wrap;
+    }
+    .field{
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+      min-width: 160px;
+    }
+    .field label{
+      font-size:12px;
+      color:var(--muted);
+    }
+    .input, .select{
+      height:36px;
+      border-radius:10px;
+      border:1px solid var(--line);
+      padding:0 12px;
+      outline:none;
+      background:#fff;
+      color:var(--text);
+      min-width: 180px;
+    }
+    .input:focus, .select:focus{
+      border-color:#93c5fd;
+      box-shadow: 0 0 0 3px rgba(37,99,235,.12);
+    }
+    .btn{
+      height:36px;
+      padding:0 14px;
+      border-radius:10px;
+      border:1px solid var(--line);
+      background:#fff;
+      cursor:pointer;
+      color:var(--text);
+      font-weight:600;
+      font-size:14px;
+    }
+    .btn.primary{
+      background: var(--accent);
+      border-color: var(--accent);
+      color:#fff;
+    }
+    .btn.primary:hover{ background: var(--accent2); border-color: var(--accent2); }
+    .btn:disabled{
+      opacity:.55;
+      cursor:not-allowed;
+    }
+    .status{
+      font-size:12px;
+      color:var(--muted);
+    }
+    .status.error{ color: var(--danger); }
+    .status.ok{ color: var(--success); }
+    .status.warning{ color: var(--warning); }
+    .apiKeyWrap{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      flex-wrap:wrap;
+    }
+    .apiKeyWrap .input{ min-width: 260px; }
+    .hint{
+      font-size:12px;
+      color:var(--muted);
+      margin-left:auto;
+      white-space:nowrap;
+    }
+
+    /* Main layout */
+    .main{
+      flex:1;
+      display:grid;
+      grid-template-columns: 420px 1fr;
+      gap:16px;
+      padding:16px;
+      min-height:0;
+    }
+    @media (max-width: 1100px){
+      .main{ grid-template-columns: 1fr; }
+    }
+
+    .card{
+      background:var(--panel);
+      border:1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      min-height:0;
+    }
+
+    /* Left panel: Inbox files */
+    .listCard{
+      display:flex;
+      flex-direction:column;
+      min-height:0;
+      overflow:hidden;
+    }
+    .listHead{
+      padding:12px 14px;
+      border-bottom:1px solid var(--line);
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+    }
+    .listHead .title{
+      font-weight:700;
+    }
+    .listHead .meta{
+      font-size:12px;
+      color:var(--muted);
+      white-space:nowrap;
+    }
+    .rows{
+      overflow:auto;
+      min-height:0;
+      padding:8px;
+    }
+    .fileRow{
+      padding:10px 12px;
+      border:1px solid var(--line);
+      border-radius:10px;
+      margin-bottom:8px;
+      cursor:pointer;
+      background:#fff;
+      transition: all 0.2s;
+    }
+    .fileRow:hover{
+      background:#f8fafc;
+      border-color: #93c5fd;
+    }
+    .fileRow.selected{
+      background: rgba(37,99,235,.08);
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(37,99,235,.18);
+    }
+    .fileRow.latest{
+      border-left: 4px solid var(--success);
+    }
+    .fileName{
+      font-weight:650;
+      line-height:1.3;
+      margin-bottom:4px;
+      display:flex;
+      align-items:center;
+      gap:8px;
+    }
+    .badge{
+      font-size:10px;
+      padding:2px 6px;
+      border-radius:4px;
+      font-weight:700;
+      text-transform:uppercase;
+    }
+    .badge.newest{
+      background:#dcfce7;
+      color:var(--success);
+    }
+    .fileMeta{
+      font-size:11px;
+      color:var(--muted);
+      line-height:1.4;
+    }
+    .listFooter{
+      padding:10px 14px;
+      border-top:1px solid var(--line);
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      font-size:12px;
+      color:var(--muted);
+      background:#fff;
+    }
+
+    /* Right panel: Results */
+    .detailCard{
+      display:flex;
+      flex-direction:column;
+      min-height:0;
+      overflow:hidden;
+    }
+    .detailBody{
+      padding:14px;
+      overflow:auto;
+      min-height:0;
+    }
+
+    /* Summary card */
+    .summaryCard{
+      background: rgba(37,99,235,.05);
+      border:1px solid rgba(37,99,235,.15);
+      border-radius:10px;
+      padding:14px;
+      margin-bottom:16px;
+    }
+    .summaryRow{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      padding:6px 0;
+      border-bottom:1px solid rgba(37,99,235,.1);
+    }
+    .summaryRow:last-child{ border:none; }
+    .summaryLabel{
+      font-size:13px;
+      color:var(--muted);
+    }
+    .summaryValue{
+      font-weight:700;
+      font-size:14px;
+    }
+
+    /* Status badges */
+    .statusBadge{
+      display:inline-flex;
+      align-items:center;
+      gap:4px;
+      padding:4px 10px;
+      border-radius:999px;
+      font-size:12px;
+      font-weight:700;
+      text-transform:uppercase;
+    }
+    .statusBadge.IMPORTED{
+      background:#dcfce7;
+      color:var(--success);
+    }
+    .statusBadge.SKIPPED{
+      background:#fef3c7;
+      color:var(--warning);
+    }
+    .statusBadge.QUARANTINED,
+    .statusBadge.ERROR{
+      background:#fee2e2;
+      color:var(--danger);
+    }
+    .statusBadge.SUCCESS{
+      background:#dcfce7;
+      color:var(--success);
+    }
+    .statusBadge.FAILED{
+      background:#fee2e2;
+      color:var(--danger);
+    }
+    /* Run statuses */
+    .statusBadge.OK{
+      background:#dcfce7;
+      color:var(--success);
+    }
+    .statusBadge.OK_WITH_SKIPS{
+      background:#fef3c7;
+      color:var(--warning);
+    }
+    .statusBadge.UNKNOWN{
+      background:#e5e7eb;
+      color:var(--muted);
+     }
+    .statusBadge.STARTED,
+    .statusBadge.RUNNING,
+    .statusBadge.IN_PROGRESS{
+      background:#dbeafe;
+      color:#1d4ed8;
+    }
+
+    /* Results table */
+    .resultsTable{
+      width:100%;
+      border-collapse:separate;
+      border-spacing:0;
+      margin-top:16px;
+      font-size:13px;
+    }
+    .resultsTable th{
+      background:#f8fafc;
+      padding:10px 12px;
+      text-align:left;
+      font-weight:700;
+      border-bottom:2px solid var(--line);
+      position:sticky;
+      top:0;
+      z-index:1;
+    }
+    .resultsTable td{
+      padding:10px 12px;
+      border-bottom:1px solid var(--line2);
+    }
+    .resultsTable tr:hover{
+      background:#f8fafc;
+    }
+
+    /* Loader */
+    .loader{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      color:var(--muted);
+    }
+    .spinner{
+      width:14px;
+      height:14px;
+      border:2px solid var(--line);
+      border-top-color: var(--accent);
+      border-radius:50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin{ to { transform: rotate(360deg); } }
+
+    /* Progress bar */
+    .progress{
+      margin:16px 0;
+      padding:12px;
+      background:#f8fafc;
+      border-radius:10px;
+      border:1px solid var(--line);
+    }
+    .progressBar{
+      width:100%;
+      height:8px;
+      background:var(--line2);
+      border-radius:999px;
+      overflow:hidden;
+      margin-top:8px;
+    }
+    .progressFill{
+      height:100%;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      animation: progress 1.5s ease-in-out infinite;
+      border-radius:999px;
+    }
+    @keyframes progress{
+      0%{ transform: translateX(-100%); }
+      100%{ transform: translateX(400%); }
+    }
+
+    /* Toast */
+    .toast{
+      position:fixed;
+      bottom:20px;
+      right:20px;
+      min-width:300px;
+      max-width:500px;
+      background:var(--panel);
+      border:1px solid var(--line);
+      border-radius:10px;
+      box-shadow:0 10px 25px rgba(0,0,0,.1);
+      padding:14px 16px;
+      transform:translateY(120%);
+      opacity:0;
+      transition: all 0.3s;
+      z-index:9999;
+    }
+    .toast.show{
+      transform:translateY(0);
+      opacity:1;
+    }
+    .toast.error{
+      border-color:var(--danger);
+      background:#fef2f2;
+    }
+    .toast.success{
+      border-color:var(--success);
+      background:#f0fdf4;
+    }
+    .toast.warning{
+      border-color:var(--warning);
+      background:#fffbeb;
+    }
+    .tTitle{
+      font-weight:700;
+      margin-bottom:6px;
+    }
+    .tBody{
+      font-size:13px;
+      color:var(--muted);
+    }
+
+    /* Section divider */
+    .section{
+      margin-top:16px;
+      padding-top:14px;
+      border-top:1px solid var(--line2);
+    }
+    .sectionTitle{
+      font-weight:700;
+      margin-bottom:10px;
+    }
+
+    /* Empty state */
+    .emptyState{
+      text-align:center;
+      padding:40px 20px;
+      color:var(--muted);
+    }
+    .emptyIcon{
+      font-size:48px;
+      margin-bottom:12px;
+      opacity:0.3;
+    }
+
+    /* Action buttons in table */
+    .actionBtn{
+      padding:4px 10px;
+      font-size:11px;
+      height:auto;
+      margin-right:4px;
+    }
+
+    /* Checkbox styling */
+    input[type="checkbox"]{
+      width:16px;
+      height:16px;
+      cursor:pointer;
+    }
+  </style>
+</head>
+<body>
+<div class="page">
+  <header class="topbar">
+    <div class="topbar-row">
+      <div class="brand">🍷 Wine Assistant</div>
+      <span class="chip">Daily Import</span>
+
+      <div class="controls">
+        <div class="field">
+          <label for="importMode">Режим импорта</label>
+          <select id="importMode" class="select">
+            <option value="auto">Auto (newest file)</option>
+            <option value="files">Manual (selected files)</option>
+          </select>
+        </div>
+
+        <button id="refreshInboxBtn" class="btn">🔄 Обновить Inbox</button>
+        <button id="runImportBtn" class="btn primary">▶ Запустить импорт</button>
+        <button id="copyJsonBtn" class="btn" style="display:none;">📋 Copy JSON</button>
+        <a href="/ui" class="btn">← Назад к каталогу</a>
+      </div>
+
+      <div class="apiKeyWrap">
+        <div class="field" style="min-width:320px;">
+          <label for="apiKey">X-API-Key</label>
+          <input id="apiKey" class="input" placeholder="вставьте API ключ (сохранится локально)" value="{{ api_key }}" />
+        </div>
+        <div id="apiStatus" class="status">Ключ не проверен</div>
+      </div>
+
+      <div class="hint">💡 Совет: Auto режим берёт самый новый файл из inbox</div>
+    </div>
+  </header>
+
+  <main class="main">
+    <!-- Left: Inbox files -->
+    <section class="card listCard">
+      <div class="listHead">
+        <div class="title">📁 Inbox Files</div>
+        <div class="meta" id="inboxMeta">—</div>
+      </div>
+      <div class="rows" id="inboxFiles">
+        <div class="emptyState">
+          <div class="emptyIcon">📭</div>
+          <div>Нажмите "Обновить Inbox" для загрузки списка файлов</div>
+        </div>
+      </div>
+      <div class="listFooter">
+        <div id="inboxFooter">Готов к работе</div>
+      </div>
+    </section>
+
+    <!-- Right: Results -->
+    <section class="card detailCard">
+      <div class="listHead">
+        <div class="title">📊 Результаты импорта</div>
+        <div class="meta" id="resultMeta">—</div>
+      </div>
+      <div class="detailBody" id="resultsBody">
+        <div class="emptyState">
+          <div class="emptyIcon">📈</div>
+          <div>Результаты импорта появятся здесь после запуска</div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast">
+    <div class="tTitle" id="toastTitle"></div>
+    <div class="tBody" id="toastBody"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ========= Config ========= */
+  const API_PREFIX = "/api/v1/ops/daily-import";
+  const RUN_POLL_INTERVAL_MS = 1200;
+  const RUN_POLL_TIMEOUT_MS  = 5 * 60 * 1000;
+  const RUNNING_STATUSES = new Set(["STARTED","RUNNING","IN_PROGRESS"]);
+
+  function normalizeSelectedMode(obj, requestedMode){
+    if (!obj) return;
+    if (!obj.selected_mode && requestedMode) {
+      obj.selected_mode = (requestedMode === "auto")
+        ? "AUTO_INBOX_NEWEST"
+        : "MANUAL_LIST";
+    }
+  }
+
+  function selectedModeLabel(selected_mode){
+    if (selected_mode === "AUTO_INBOX_NEWEST") return "🤖 Auto (newest)";
+    if (selected_mode === "MANUAL_LIST") return "👤 Manual (selected)";
+    return "—";
+  }
+
+  async function fetchRunDetails(runId){
+    const rid = encodeURIComponent(runId);
+    return await apiFetch(`${API_PREFIX}/runs/${rid}`, { method: "GET" });
+  }
+
+  async function pollRunUntilDone(runId, requestedMode){
+    const t0 = Date.now();
+    while (true) {
+      if (Date.now() - t0 > RUN_POLL_TIMEOUT_MS) {
+        throw new Error(`Timeout: run ${runId} не завершился за ${Math.round(RUN_POLL_TIMEOUT_MS/1000)}s`);
+      }
+
+      await sleep(RUN_POLL_INTERVAL_MS);
+
+      let rj;
+      try {
+        rj = await fetchRunDetails(runId);
+      } catch (e) {
+        throw e;
+      }
+
+      normalizeSelectedMode(rj, requestedMode);
+      renderResults(rj);
+
+      const st = String(rj.status || "UNKNOWN").toUpperCase();
+      if (!RUNNING_STATUSES.has(st)) return rj;
+    }
+  }
+
+  /* ========= DOM ========= */
+  const elImportMode = document.getElementById("importMode");
+  const elRefreshInboxBtn = document.getElementById("refreshInboxBtn");
+  const elRunImportBtn = document.getElementById("runImportBtn");
+  const elCopyJsonBtn = document.getElementById("copyJsonBtn");
+  const elApiKey = document.getElementById("apiKey");
+  const elApiStatus = document.getElementById("apiStatus");
+
+  const elInboxFiles = document.getElementById("inboxFiles");
+  const elInboxMeta = document.getElementById("inboxMeta");
+  const elInboxFooter = document.getElementById("inboxFooter");
+
+  const elResultsBody = document.getElementById("resultsBody");
+  const elResultMeta = document.getElementById("resultMeta");
+
+  const elToast = document.getElementById("toast");
+  const elToastTitle = document.getElementById("toastTitle");
+  const elToastBody = document.getElementById("toastBody");
+
+  /* ========= State ========= */
+  let state = {
+    selectedFiles: new Set(),
+    inboxFiles: [],
+    currentResult: null,
+    loading: false,
+
+    // left panel note for empty inbox
+    inboxEmptyNote: "",
+
+    // last import context (post-import UX)
+    lastImport: null,
+  };
+
+  /* ========= Helpers ========= */
+  function showToast(title, message, kind){
+    elToastTitle.textContent = title || "";
+    // IMPORTANT: avoid XSS by treating toast body as plain text.
+    elToastBody.textContent = message || "";
+    elToast.className = "toast show " + (kind || "");
+    window.clearTimeout(showToast._t);
+    showToast._t = window.setTimeout(()=>{ elToast.className="toast"; }, 5500);
+  }
+
+  function isAlreadyImportedSkip(reason){
+    const r = String(reason || "").toUpperCase();
+    return r.includes("ALREADY_IMPORTED");
+  }
+
+  function isAllSkippedAlreadyImported(runObj){
+    const files = (runObj && runObj.files) ? runObj.files : [];
+    if (files.length === 0) return false;
+    return files.every(f =>
+      String(f.status || "").toUpperCase() === "SKIPPED" &&
+      isAlreadyImportedSkip(f.skip_reason)
+    );
+  }
+
+  function formatProcessedMovedToArchiveMessage(n){
+    const k = Number(n || 0);
+    if (k <= 1) return "Файл обработан и перемещён в archive.";
+    return `Файлы (${k}) обработаны и перемещены в archive.`;
+  }
+
+  // Build a Set of current inbox filenames (exact match to what backend expects)
+  function inboxNameSet(){
+    return new Set(
+      (state.inboxFiles || [])
+        .map(f => String((f && f.name) ? f.name : "").trim())
+        .filter(Boolean)
+    );
+  }
+
+  // Drop selections that are no longer present in inbox (prevents "stale selection")
+  function reconcileSelectedFiles(){
+    const allowed = inboxNameSet();
+    let removed = [];
+    for (const fn of Array.from(state.selectedFiles)) {
+      if (!allowed.has(fn)) {
+        state.selectedFiles.delete(fn);
+        removed.push(fn);
+      }
+    }
+    return removed;
+  }
+
+  function sleep(ms){
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function escapeHtml(value){
+    const s = String(value ?? "");
+    return s.replace(/[&<>"']/g, (ch) => {
+      switch (ch) {
+        case "&": return "&amp;";
+        case "<": return "&lt;";
+        case ">": return "&gt;";
+        case '"': return "&quot;";
+        case "'": return "&#39;";
+        default: return ch;
+      }
+    });
+  }
+
+  function formatBytes(bytes){
+    if (!bytes || bytes === 0) return "0 B";
+    const k = 1024;
+    const sizes = ["B", "KB", "MB", "GB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return Math.round(bytes / Math.pow(k, i) * 100) / 100 + " " + sizes[i];
+  }
+
+  function formatDate(isoString){
+    if (!isoString) return "—";
+    const date = new Date(isoString);
+    return date.toLocaleString("ru-RU");
+  }
+
+  function getApiKey(){
+    const v = elApiKey.value.trim();
+    if (v) return v;
+    const stored = localStorage.getItem("wine_assistant_api_key");
+    return stored ? stored.trim() : "";
+  }
+
+  function setApiStatus(text, kind){
+    elApiStatus.textContent = text;
+    elApiStatus.className = "status " + (kind || "");
+  }
+
+  async function apiFetch(path, options = {}){
+    const apiKey = getApiKey();
+    if (!apiKey) {
+      showToast("Ошибка", "Необходим API ключ", "error");
+      setApiStatus("Ключ отсутствует", "error");
+      throw new Error("No API key");
+    }
+
+    const headers = {
+      "X-API-Key": apiKey,
+      ...(options.headers || {})
+    };
+
+    const res = await fetch(path, { ...options, headers });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "Unknown error");
+      throw new Error(`HTTP ${res.status}: ${text}`);
+    }
+
+    const ctype = res.headers.get("content-type") || "";
+    if (ctype.includes("application/json")) {
+      return await res.json();
+    }
+    return res;
+  }
+
+  /* ========= Copy JSON ========= */
+  function copyJsonResult(){
+    if (!state.currentResult) {
+      showToast("Ошибка", "Нет результата для копирования", "error");
+      return;
+    }
+
+    const json = JSON.stringify(state.currentResult, null, 2);
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(json).then(() => {
+        showToast("✓ Скопировано", "JSON результат скопирован в буфер обмена", "success");
+      }).catch(() => {
+        fallbackCopyTextToClipboard(json);
+      });
+    } else {
+      fallbackCopyTextToClipboard(json);
+    }
+  }
+
+  function fallbackCopyTextToClipboard(text) {
+    const textArea = document.createElement("textarea");
+    textArea.value = text;
+    textArea.style.position = "fixed";
+    textArea.style.left = "-999999px";
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+
+    try {
+      document.execCommand("copy");
+      showToast("✓ Скопировано", "JSON результат скопирован в буфер обмена", "success");
+    } catch (err) {
+      showToast("Ошибка", "Не удалось скопировать: " + err, "error");
+    }
+
+    document.body.removeChild(textArea);
+  }
+
+  /* ========= Inbox Files ========= */
+  async function refreshInbox(opts = {}){
+    try {
+      setApiStatus("Загрузка...", "");
+      elInboxFooter.innerHTML = '<div class="loader"><span class="spinner"></span><span>Загрузка inbox...</span></div>';
+
+      const data = await apiFetch(API_PREFIX + "/inbox");
+
+      state.inboxFiles = data.files || [];
+
+      // IMPORTANT: prune stale selections after each refresh
+      const removed = reconcileSelectedFiles();
+
+      // Post-import: если после успешного импорта inbox стал пустым — показываем специальное сообщение
+      if (opts.afterImport) {
+        const li = state.lastImport;
+        const moved = !!(li && li.success && li.movedToArchive);
+        state.inboxEmptyNote = (state.inboxFiles.length === 0 && moved)
+          ? "Inbox пуст (последний файл перемещён в archive)."
+          : "";
+      } else {
+        if (state.inboxFiles.length > 0) state.inboxEmptyNote = "";
+      }
+
+      renderInboxFiles();
+
+      setApiStatus("✓ Подключено", "ok");
+      elInboxMeta.textContent = `${state.inboxFiles.length} файлов`;
+      elInboxFooter.textContent = `Обновлено: ${new Date().toLocaleTimeString("ru-RU")}`;
+
+      if (removed.length > 0) {
+        showToast(
+          "Выбор обновлён",
+          "Некоторые ранее выбранные файлы больше не в inbox и были сняты: " + removed.join(", "),
+          "warning"
+        );
+      }
+
+      // Generic empty toast only when not post-import moved-to-archive scenario
+      if (state.inboxFiles.length === 0) {
+        const li = state.lastImport;
+        const suppress = !!(opts.afterImport && li && li.success && li.movedToArchive);
+        if (!suppress) {
+          showToast("Inbox пуст", "В data/inbox/ нет файлов для импорта", "warning");
+        }
+      }
+
+    } catch (err) {
+      console.error("Error refreshing inbox:", err);
+      showToast("Ошибка", err.message, "error");
+      setApiStatus("Ошибка подключения", "error");
+      elInboxFooter.textContent = "Ошибка загрузки";
+    }
+  }
+
+  function renderInboxFiles(){
+    if (!state.inboxFiles || state.inboxFiles.length === 0) {
+      const note = state.inboxEmptyNote || "Inbox пуст. Добавьте .xlsx файлы в data/inbox/.";
+      elInboxFiles.innerHTML = `
+        <div class="emptyState">
+          <div class="emptyIcon">📭</div>
+          <div>${escapeHtml(note)}</div>
+        </div>
+      `;
+      return;
+    }
+
+    const mode = elImportMode.value;
+
+    elInboxFiles.innerHTML = state.inboxFiles.map(file => {
+      const isLatest = file.is_latest;
+      const isSelected = state.selectedFiles.has(file.name);
+      const safeName = escapeHtml(file.name || "");
+      const encName = encodeURIComponent(file.name || "");
+
+      return `
+        <div class="fileRow ${isLatest ? 'latest' : ''} ${isSelected ? 'selected' : ''}"
+             data-filename="${encName}">
+          ${mode === 'files' ? `
+            <input type="checkbox"
+                   class="fileCbx"
+                   data-filename="${encName}"
+                   ${isSelected ? 'checked' : ''}
+                   style="float:left; margin-right:10px;" />
+          ` : ''}
+          <div class="fileName">
+            ${safeName}
+            ${isLatest ? '<span class="badge newest">★ Newest</span>' : ''}
+          </div>
+          <div class="fileMeta">
+            Размер: ${formatBytes(file.size)} •
+            Изменён: ${formatDate(file.mtime)}
+          </div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  // Event delegation for inbox rows (avoids inline onclick + filename injection)
+  elInboxFiles.addEventListener("click", (ev) => {
+    const mode = elImportMode.value;
+    if (mode !== "files") return;
+
+    const cbx = ev.target && ev.target.closest && ev.target.closest("input.fileCbx");
+    const row = ev.target && ev.target.closest && ev.target.closest(".fileRow");
+    const holder = cbx || row;
+    if (!holder) return;
+
+    const enc = holder.getAttribute("data-filename") || "";
+    if (!enc) return;
+
+    let filename = "";
+    try { filename = decodeURIComponent(enc); } catch { filename = enc; }
+
+    if (state.selectedFiles.has(filename)) state.selectedFiles.delete(filename);
+    else state.selectedFiles.add(filename);
+
+    renderInboxFiles();
+  });
+
+  /* ========= Run Import ========= */
+  async function runImport(){
+    const mode = elImportMode.value;
+
+    // Best-effort: refresh inbox if UI hasn't loaded it yet or it might be stale
+    if (!state.inboxFiles) state.inboxFiles = [];
+    if (state.inboxFiles.length === 0) {
+      await refreshInbox();
+    }
+
+    if (mode === "auto") {
+      if (!state.inboxFiles || state.inboxFiles.length === 0) {
+        showToast(
+          "Inbox пуст",
+          "Нет файлов для Auto-импорта. Добавьте .xlsx в data/inbox/ и нажмите «Обновить Inbox».",
+          "warning"
+        );
+        return;
+      }
+    }
+
+    if (mode === "files") {
+      const allowed = inboxNameSet();
+      const missing = Array.from(state.selectedFiles).filter(fn => !allowed.has(fn));
+      if (missing.length > 0) {
+        for (const fn of missing) state.selectedFiles.delete(fn);
+        renderInboxFiles();
+        showToast(
+          "Ошибка",
+          "Выбранные файлы отсутствуют в inbox (возможно, уже архивированы прошлым запуском): " + missing.join(", "),
+          "error"
+        );
+        return;
+      }
+      if (state.selectedFiles.size === 0) {
+        showToast("Ошибка", "Выберите хотя бы один файл для импорта", "error");
+        return;
+      }
+    }
+
+    try {
+      state.loading = true;
+      elRunImportBtn.disabled = true;
+
+      // Show progress
+      elResultsBody.innerHTML = `
+        <div class="progress">
+          <div><strong>⏳ Импорт выполняется...</strong></div>
+          <div style="font-size:12px; color:var(--muted); margin-top:4px;">
+            Это может занять несколько минут
+          </div>
+          <div class="progressBar">
+            <div class="progressFill" style="width:30%;"></div>
+          </div>
+        </div>
+      `;
+
+      const payload = { mode };
+      if (mode === "files") {
+        payload.files = Array.from(state.selectedFiles);
+      }
+
+      const result = [];
+      const r0 = await apiFetch(API_PREFIX + "/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (!r0 || !r0.run_id) {
+        throw new Error("Backend не вернул run_id");
+      }
+
+      normalizeSelectedMode(r0, mode);
+      state.currentResult = r0;
+      renderResults(r0);
+
+      const st0 = String(r0.status || "UNKNOWN").toUpperCase();
+      let finalResult = r0;
+
+      if (RUNNING_STATUSES.has(st0)) {
+        showToast("Импорт запущен", "Ожидаем завершения и обновляем результат…", "");
+        finalResult = await pollRunUntilDone(r0.run_id, mode);
+      }
+
+      state.currentResult = finalResult;
+
+      const status = String(finalResult.status || "UNKNOWN").toUpperCase();
+      const sum = finalResult.summary || {};
+      const imported = Number(sum.files_imported || 0);
+      const skipped  = Number(sum.files_skipped || 0);
+      const total    = Number(sum.files_total || (finalResult.files || []).length || 0);
+
+      const movedToArchive = (finalResult.files || []).some(f => !!f.archive_path);
+      const allSkippedAlreadyImported = isAllSkippedAlreadyImported(finalResult);
+      const success = (status === "OK" || status === "OK_WITH_SKIPS");
+
+      // сохраняем контекст для refreshInbox(afterImport)
+      state.lastImport = {
+        ts: Date.now(),
+        mode,
+        status,
+        success,
+        imported,
+        skipped,
+        total,
+        movedToArchive,
+        allSkippedAlreadyImported,
+      };
+
+      if (success) {
+        // 3.2: "импорт прошёл, но всё было SKIPPED"
+        if (imported === 0 && skipped > 0) {
+          if (allSkippedAlreadyImported) {
+            showToast("Новых данных нет", "Всё уже импортировано: новых данных нет.", "warning");
+          } else {
+            showToast("Импорт завершён", "Новых данных нет: все файлы были пропущены (см. детали).", "warning");
+          }
+        } else if (movedToArchive) {
+          // 2) после успешного импорта: тост про перемещение в archive
+          showToast("✓ Импорт завершён", formatProcessedMovedToArchiveMessage(total), "success");
+        } else {
+          showToast(
+            "✓ Импорт завершён",
+            status === "OK" ? "Все файлы обработаны успешно" : "Есть пропущенные файлы (см. детали)",
+            status === "OK" ? "success" : "warning"
+          );
+        }
+
+        // 3.1: После успешного завершения MANUAL_LIST очищать выбор
+        if (mode === "files") {
+          state.selectedFiles.clear();
+          renderInboxFiles();
+        }
+
+      } else if (RUNNING_STATUSES.has(status)) {
+        showToast("Импорт выполняется", "Статус ещё не финальный", "");
+      } else {
+        showToast("⚠ Импорт завершён с ошибками", "Проверьте детали ниже", "error");
+      }
+
+      // Refresh inbox after import (with context for empty-state message)
+      setTimeout(() => refreshInbox({ afterImport: true }), 800);
+
+    } catch (err) {
+      console.error("Error running import:", err);
+      showToast("Ошибка импорта", err.message, "error");
+
+      elResultsBody.innerHTML = `
+        <div class="emptyState">
+          <div class="emptyIcon">❌</div>
+          <div style="color:var(--danger); font-weight:600;">Ошибка импорта</div>
+          <div style="margin-top:8px; font-size:13px;">${escapeHtml(err.message)}</div>
+        </div>
+      `;
+    } finally {
+      state.loading = false;
+      elRunImportBtn.disabled = false;
+    }
+  }
+
+  function renderResults(result){
+    if (!result) return;
+
+    const { run_id, selected_mode, status, files, summary, duration_ms } = result;
+
+    // Save result for copy
+    state.currentResult = result;
+
+    // Show Copy JSON button
+    elCopyJsonBtn.style.display = "inline-block";
+
+    const effectiveSelectedMode =
+      selected_mode || (elImportMode.value === "auto" ? "AUTO_INBOX_NEWEST" : "MANUAL_LIST");
+    const smLabel = selectedModeLabel(effectiveSelectedMode);
+    const safeStatus = escapeHtml(status || "UNKNOWN");
+
+    let html = `
+      <!-- Summary -->
+      <div class="summaryCard">
+        <div class="summaryRow">
+          <span class="summaryLabel">Run ID</span>
+          <span class="summaryValue" style="font-family:monospace; font-size:12px;">${escapeHtml(run_id || "—")}</span>
+        </div>
+        <div class="summaryRow">
+          <span class="summaryLabel">Selected Mode</span>
+          <span class="summaryValue">${smLabel}</span>
+        </div>
+        <div class="summaryRow">
+          <span class="summaryLabel">Статус</span>
+          <span class="statusBadge ${safeStatus}">${safeStatus}</span>
+        </div>
+        <div class="summaryRow">
+          <span class="summaryLabel">Длительность</span>
+          <span class="summaryValue">${duration_ms ? (duration_ms/1000).toFixed(1) + " сек (" + duration_ms + " ms)" : "—"}</span>
+        </div>
+      </div>
+
+      <!-- Aggregate Stats -->
+      <div class="section">
+        <div class="sectionTitle">Статистика</div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:10px; margin-top:10px;">
+          <div style="padding:10px; background:#f8fafc; border-radius:8px; text-align:center;">
+            <div style="font-size:24px; font-weight:700; color:var(--success);">${summary?.files_imported || 0}</div>
+            <div style="font-size:11px; color:var(--muted);">Imported</div>
+          </div>
+          <div style="padding:10px; background:#f8fafc; border-radius:8px; text-align:center;">
+            <div style="font-size:24px; font-weight:700; color:var(--warning);">${summary?.files_skipped || 0}</div>
+            <div style="font-size:11px; color:var(--muted);">Skipped</div>
+          </div>
+          <div style="padding:10px; background:#f8fafc; border-radius:8px; text-align:center;">
+            <div style="font-size:24px; font-weight:700; color:var(--danger);">${(summary?.files_quarantined || 0) + (summary?.files_failed || 0)}</div>
+            <div style="font-size:11px; color:var(--muted);">Errors</div>
+          </div>
+          <div style="padding:10px; background:#f8fafc; border-radius:8px; text-align:center;">
+            <div style="font-size:24px; font-weight:700;">${summary?.rows_good_total || 0}</div>
+            <div style="font-size:11px; color:var(--muted);">Rows Good</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Inventory Snapshot -->
+      ${summary && summary.inventory_snapshot ? `
+        <div class="section">
+          <div class="sectionTitle">Inventory Snapshot</div>
+          <div style="font-size:13px; margin-top:6px;">
+            <span class="statusBadge ${escapeHtml(summary.inventory_snapshot.status)}">
+              ${escapeHtml(summary.inventory_snapshot.status)}
+            </span>
+            ${summary.inventory_snapshot.as_of ? `
+              <span style="color:var(--muted); margin-left:10px;">
+                As of: ${formatDate(summary.inventory_snapshot.as_of)}
+              </span>
+            ` : ""}
+          </div>
+        </div>
+      ` : ""}
+
+      <!-- Files Table -->
+      <div class="section">
+        <div class="sectionTitle">Детали по файлам (${files?.length || 0})</div>
+        ${files && files.length > 0 ? `
+          <table class="resultsTable">
+            <thead>
+              <tr>
+                <th>Файл</th>
+                <th>Mode</th>
+                <th>Статус</th>
+                <th>Skip Reason</th>
+                <th>Envelope ID</th>
+                <th>Rows (good/quar)</th>
+                <th>Duration</th>
+                <th>Действия</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${files.map(f => `
+                <tr>
+                  <td>
+                    <div style="font-weight:600; margin-bottom:4px;">${escapeHtml(f.original_name || f.file_name || "—")}</div>
+                    ${f.effective_date ? `<div style="font-size:11px; color:var(--muted);">Дата: ${escapeHtml(f.effective_date)}</div>` : ""}
+                    ${f.error ? `<div style="font-size:11px; color:var(--danger);">Ошибка: ${escapeHtml(f.error)}</div>` : ""}
+                    ${f.sha256 ? `<div style="font-size:10px; color:var(--muted); font-family:monospace;">SHA-256: ${escapeHtml(String(f.sha256).substring(0,16))}...</div>` : ""}
+                  </td>
+                  <td style="font-size:11px;">
+                    ${f.selected_mode === "AUTO_INBOX_NEWEST" ? "🤖 Auto" : "👤 Manual"}
+                  </td>
+                  <td>
+                    <span class="statusBadge ${escapeHtml(f.status || "UNKNOWN")}">${escapeHtml(f.status || "UNKNOWN")}</span>
+                  </td>
+                  <td style="font-size:11px; color:var(--muted);">
+                    ${escapeHtml(f.skip_reason || "—")}
+                  </td>
+                  <td style="font-family:monospace; font-size:11px;">
+                    ${f.envelope_id ? f.envelope_id.substring(0, 8) + "..." : "—"}
+                  </td>
+                  <td style="font-size:12px;">
+                    ${f.rows_good || 0} / ${f.rows_quarantine || 0}
+                  </td>
+                  <td style="font-size:11px;">
+                    ${f.duration_ms ? (f.duration_ms/1000).toFixed(1) + "s" : "—"}
+                  </td>
+                  <td>
+                    ${f.archive_path ? `<button class="btn actionBtn dlBtn" data-kind="archive" data-relpath="${encodeURIComponent(f.archive_path)}">📥 Archive</button>` : ""}
+                    ${f.quarantine_path ? `<button class="btn actionBtn dlBtn" data-kind="quarantine" data-relpath="${encodeURIComponent(f.quarantine_path)}">⚠️ Quarantine</button>` : ""}
+                  </td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        ` : '<div style="color:var(--muted); margin-top:10px;">Нет данных</div>'}
+      </div>
+    `;
+
+    elResultsBody.innerHTML = html;
+    elResultMeta.textContent = `Run: ${(run_id || "").substring(0, 8) || "—"} • Mode: ${effectiveSelectedMode || "—"}`;
+  }
+
+  /* ========= Download Files ========= */
+  window.downloadFile = async function(kind, relpath){
+    const apiKey = getApiKey();
+    const url = `/api/v1/ops/files/${kind}/${encodeURI(relpath)}`;
+
+    try {
+      const res = await fetch(url, {
+        headers: { "X-API-Key": apiKey }
+      });
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const blob = await res.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = downloadUrl;
+      a.download = relpath.split("/").pop();
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(downloadUrl);
+
+      showToast("✓ Скачано", `Файл ${a.download} сохранён`, "success");
+    } catch (err) {
+      console.error("Error downloading file:", err);
+      showToast("Ошибка", err.message, "error");
+    }
+  };
+
+  // Event delegation for download buttons (avoids inline onclick + relpath injection)
+  elResultsBody.addEventListener("click", (ev) => {
+    const btn = ev.target && ev.target.closest && ev.target.closest("button.dlBtn");
+    if (!btn) return;
+
+    const kind = btn.getAttribute("data-kind") || "";
+    const enc = btn.getAttribute("data-relpath") || "";
+    if (!kind || !enc) return;
+
+    let relpath = "";
+    try { relpath = decodeURIComponent(enc); } catch { relpath = enc; }
+    window.downloadFile(kind, relpath);
+  });
+
+  /* ========= Event Listeners ========= */
+  elRefreshInboxBtn.addEventListener("click", () => refreshInbox());
+  elRunImportBtn.addEventListener("click", runImport);
+  elCopyJsonBtn.addEventListener("click", copyJsonResult);
+
+  elImportMode.addEventListener("change", () => {
+    state.selectedFiles.clear();
+    renderInboxFiles();
+  });
+
+  // Save API key to localStorage when changed
+  elApiKey.addEventListener("change", () => {
+    const key = elApiKey.value.trim();
+    if (key) {
+      localStorage.setItem("wine_assistant_api_key", key);
+      setApiStatus("Ключ сохранён", "ok");
+    }
+  });
+
+  /* ========= Init ========= */
+  (function init(){
+    // Load API key from localStorage
+    const stored = localStorage.getItem("wine_assistant_api_key");
+    if (stored && !elApiKey.value) {
+      elApiKey.value = stored;
+    }
+
+    // Auto-refresh inbox on load if API key is present
+    if (getApiKey()) {
+      refreshInbox();
+    } else {
+      setApiStatus("Ключ отсутствует", "warning");
+    }
+  })();
+})();
+</script>
+</body>
+</html>

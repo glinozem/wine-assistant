@@ -16,255 +16,43 @@ echo $env:API_KEY
 
 ---
 
-## 📥 Daily Import v1.0.4 (Production Ready) 🎉
+## 📥 Daily Import (Ops)
 
-### Инкрементный ежедневный импорт
+### 1) Web UI
 
-**Новый workflow** — incremental imports без wipe volumes.
+```text
+http://localhost:18000/daily-import
+```
 
-**Ключевые фичи:**
-- ✅ Auto-inbox: автоматический выбор новейшего файла
-- ✅ Idempotent: безопасен для повторного запуска
-- ✅ Inventory tracking: автоматические snapshot'ы
-- ✅ Windows-friendly: UnicodeEncodeError исправлен (v1.0.4)
-
-### Простейший вариант (рекомендуется)
+### 2) Makefile
 
 ```powershell
-# Auto-inbox: автоматически берет новейший .xlsx из data/inbox
+make inbox-ls
 make daily-import
 
-# Или через Python напрямую
-python -m scripts.daily_import --inbox data/inbox
+# manual list (простые имена)
+make daily-import-files FILES="file1.xlsx file2.xlsx"
 
-# Или PowerShell wrapper
-.\scripts\run_daily_import.ps1
+# Windows-friendly (пробелы/кириллица) — через PowerShell wrapper
+make daily-import-files-ps FILES="2025_12_24 Прайс.xlsx,2025_12_25 Другой прайс.xlsx"
+
+make daily-import-history
+make daily-import-show RUN_ID=<uuid>
 ```
 
-### С параметрами
+### 3) PowerShell wrapper (Windows)
 
 ```powershell
-# Explicit files list
-make daily-import-files FILES="data/inbox/2025_12_10.xlsx data/inbox/2025_12_17.xlsx"
-
-# Или через Python
-python -m scripts.daily_import --files data/inbox/2025_12_10.xlsx data/inbox/2025_12_17.xlsx
-
-# Или PowerShell
-.\scripts\run_daily_import.ps1 -Files data\inbox\2025_12_10.xlsx, data\inbox\2025_12_17.xlsx
-
-# Custom directories
-python -m scripts.daily_import `
-  --inbox D:\imports\inbox `
-  --archive D:\imports\archive `
-  --quarantine D:\imports\quarantine
-
-# Без inventory snapshot (редко)
-python -m scripts.daily_import --no-snapshot
-
-# Snapshot dry-run first (проверка перед применением)
-.\scripts\run_daily_import.ps1 -SnapshotDryRunFirst
+.\scripts\run_daily_import.ps1 -Mode auto
+.\scripts\run_daily_import.ps1 -Mode files -Files "2025_12_24 Прайс.xlsx,2025_12_25 Другой прайс.xlsx"
 ```
 
-### Expected Output
-
-**Успешный импорт:**
-```
-=== IMPORT (load_csv) ===
->>> File: data\inbox\2025_12_12 Прайс_Легенда_Виноделия.xlsx
-[OK] Import completed successfully
-[daily-import] Moved: data\inbox\*.xlsx -> data\archive\2025-12\*.xlsx
-
-=== LOAD WINERIES CATALOG ===
-Готово. Вставлено новых записей: 0, обновлено существующих: 46
-
-=== ENRICH PRODUCTS ===
-Готово. Всего затронуто строк в products: 244
-
-=== MAINTENANCE SQL ===
-[daily-import] Maintenance SQL completed
-
-=== INVENTORY HISTORY SNAPSHOT ===
-[OK] Вставлено 270 записей в public.inventory_history
-
-=== SUMMARY ===
-- IMPORTED 2025_12_12 Прайс_Легенда_Виноделия.xlsx
-
-Exit code: 0
-```
-
-**Идемпотентность (SKIP):**
-```
-=== IMPORT (load_csv) ===
->> SKIP: File already imported
-[daily-import] Moved: data\inbox\*.xlsx -> data\archive\2025-12\*.xlsx
-
-=== SUMMARY ===
-- SKIPPED (already imported)
-
-Exit code: 0
-```
-
-### Проверка в БД
+### 4) Direct docker-compose exec (debug)
 
 ```powershell
-# Последние импорты
-docker compose exec -T db psql -U postgres -d wine_db -c "
-SELECT run_id, supplier, as_of_date, status,
-       total_rows_processed, rows_skipped, envelope_id, created_at
-FROM import_runs
-ORDER BY created_at DESC LIMIT 10;"
-
-# Inventory snapshots
-docker compose exec -T db psql -U postgres -d wine_db -c "
-SELECT COUNT(*) as total_snapshots,
-       MAX(as_of) as latest_snapshot,
-       COUNT(DISTINCT code) as unique_products
-FROM inventory_history;"
-
-# Current inventory
-docker compose exec -T db psql -U postgres -d wine_db -c "
-SELECT COUNT(*) as total_products,
-       SUM(stock_total) as total_stock,
-       SUM(stock_free) as free_stock,
-       MAX(asof_date) as snapshot_date
-FROM inventory;"
-
-# Products with inventory
-docker compose exec -T db psql -U postgres -d wine_db -c "
-SELECT p.code, p.title_ru, p.supplier,
-       i.stock_total, i.reserved, i.stock_free,
-       i.asof_date
-FROM products p
-JOIN inventory i ON p.code = i.code
-WHERE i.stock_total > 0
-ORDER BY i.stock_total DESC
-LIMIT 10;"
+docker-compose exec -T api python -m scripts.daily_import_ops --mode auto
+docker-compose exec -T api python -m scripts.daily_import_ops --mode files --files "file1.xlsx" "file2.xlsx"
 ```
-
-### Automation (Task Scheduler)
-
-```powershell
-# Daily import (09:00)
-$taskName = "wine-assistant daily import"
-$scriptPath = (Resolve-Path ".\scripts\run_daily_import.ps1").Path
-schtasks /Create /TN $taskName /SC DAILY /ST 09:00 `
-  /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`"" /F
-
-# Verify task
-Get-ScheduledTaskInfo -TaskName "wine-assistant daily import"
-
-# Manual trigger
-Start-ScheduledTask -TaskName "wine-assistant daily import"
-```
-
-### Inventory Snapshots
-
-```powershell
-# Manual snapshot with custom date
-make sync-inventory-history AS_OF="2025-12-31"
-
-# Dry-run first
-make sync-inventory-history-dry-run AS_OF="2025-12-31"
-
-# Via Python
-python -m scripts.sync_inventory_history --as-of "2025-12-31T23:59:59"
-python -m scripts.sync_inventory_history --dry-run --as-of "2025-12-31"
-```
-
-### Troubleshooting
-
-**Problem: UnicodeEncodeError**
-```powershell
-# Verify v1.0.4 safe_print() is present
-grep "def safe_print" scripts/daily_import.py
-grep "def safe_print" scripts/load_wineries.py
-grep "def safe_print" scripts/enrich_producers.py
-grep "def safe_print" scripts/sync_inventory_history.py
-
-# All 4 files should have the function
-# If not, update to v1.0.4
-```
-
-**Problem: Import failed**
-```powershell
-# Check quarantine directory
-Get-ChildItem data/quarantine -Recurse | Select-Object FullName, Length, LastWriteTime
-
-# Check error in database
-docker compose exec -T db psql -U postgres -d wine_db -c "
-SELECT run_id, supplier, error_summary, error_details, created_at
-FROM import_runs
-WHERE status = 'failed'
-ORDER BY created_at DESC
-LIMIT 1;"
-
-# Review file and fix issue
-# Move file back to inbox
-Move-Item data/quarantine/2025-12/problematic_file.xlsx data/inbox/
-
-# Retry import
-python -m scripts.daily_import --inbox data/inbox
-```
-
-**Problem: Wrong file selected (auto-inbox)**
-```powershell
-# Check what file will be selected
-Get-ChildItem data/inbox/*.xlsx |
-  Sort-Object LastWriteTime -Descending |
-  Select-Object Name, LastWriteTime -First 5
-
-# Solution: Use explicit files mode
-python -m scripts.daily_import --files data/inbox/specific_file.xlsx
-```
-
-**Problem: Advisory lock stuck**
-```powershell
-# Check locks
-docker compose exec -T db psql -U postgres -d wine_db -c "
-SELECT * FROM pg_locks WHERE locktype = 'advisory';"
-
-# Release all advisory locks
-docker compose exec -T db psql -U postgres -d wine_db -c "
-SELECT pg_advisory_unlock_all();"
-
-# Retry import
-python -m scripts.daily_import
-```
-
-**Problem: Inventory snapshot not created**
-```powershell
-# Expected: snapshot only created on actual import, not on SKIP
-# Check if file was SKIP
-# Review output for ">> SKIP: File already imported"
-
-# Manual snapshot if needed
-make sync-inventory-history AS_OF="2025-12-31"
-```
-
-**Problem: Emoji shows as '?' in console**
-```
-Expected behavior on Windows CP1251 console
-Not an error - this is correct safe_print() behavior
-
-Workaround: Use UTF-8 terminal or run `chcp 65001` first
-```
-
-### Fresh Deployment & Testing
-
-```powershell
-# Bootstrap from scratch (wipe volumes + rebuild)
-.\scripts\bootstrap_from_scratch.ps1 -RebuildImages
-
-# E2E smoke test
-make smoke-e2e SMOKE_SUPPLIER=dreemwine SMOKE_FRESH=1
-
-# Or direct PowerShell
-.\scripts\smoke_e2e.ps1 -Supplier dreemwine -Fresh -Build
-```
-
----
-
 ## 📊 Import Operations (M1 Complete) 🎉
 
 ### Legacy Import Orchestrator (Advanced)
@@ -522,23 +310,39 @@ docker compose up -d --force-recreate api
 
 ### Проблема: Daily import fails
 
+1) Убедитесь, что сервисы запущены:
+
 ```powershell
-# Check exit code
-echo $LASTEXITCODE  # Should be 0
-
-# Review output for errors
-python -m scripts.daily_import --inbox data/inbox
-
-# Check quarantine
-Get-ChildItem data/quarantine -Recurse
-
-# Review database
-docker compose exec -T db psql -U postgres -d wine_db -c "
-SELECT * FROM import_runs WHERE status = 'failed' ORDER BY created_at DESC LIMIT 1;"
+docker-compose up -d --build db api
 ```
 
----
+2) Проверьте, что в `data/inbox/` реально есть `.xlsx` файлы:
 
+```powershell
+Get-ChildItem .\data\inbox
+docker-compose exec api ls -la /app/data/inbox
+```
+
+3) Запустите импорт в debug‑режиме (внутри контейнера):
+
+```powershell
+docker-compose exec -T api python -m scripts.daily_import_ops --mode auto
+```
+
+4) Если запуск был через UI/PS/Make — возьмите `run_id` из ответа и запросите детали по API:
+
+```powershell
+$k = (Get-Content .\.env | Where-Object { $_ -match '^API_KEY=' } | Select-Object -First 1) -replace '^API_KEY=', ''
+$k = $k.Trim()
+$rid = "<run_id>"
+
+irm "http://localhost:18000/api/v1/ops/daily-import/runs/$rid" -Headers @{ "X-API-Key" = $k } | ConvertTo-Json -Depth 10
+```
+
+5) Частые причины:
+- **NO_FILES_IN_INBOX** — inbox пуст.
+- **File not found** в manual list — выбран файл, который уже был перемещён в archive прошлым запуском; обновите inbox и выберите актуальные имена.
+- **403** — неверный/пустой `X-API-Key`.
 ## 📚 Полезные ссылки
 
 - **API Swagger:** http://localhost:18000/docs
@@ -552,6 +356,61 @@ SELECT * FROM import_runs WHERE status = 'failed' ORDER BY created_at DESC LIMIT
 ---
 
 **Создано:** 04 декабря 2025
-**Обновлено:** 31 декабря 2025 (Daily Import v1.0.4)
+**Обновлено:** 31 декабря 2025 (Ops Daily Import)
 **Версия:** 2.0
-**Для:** Wine Assistant v0.5.0+ (M1 Complete + Daily Import v1.0.4)
+**Для:** Wine Assistant v0.4.0+ (M1 Complete + Ops Daily Import)
+
+## Daily Import (Ops) — current
+
+### 0) Поднять сервисы
+
+```bash
+docker compose up -d --build db api
+```
+
+### 1) Положить файл в inbox
+
+Скопируйте `.xlsx` в `./data/inbox/` на хосте (в контейнере это `/app/data/inbox/`).
+
+### 2) Запуск (3 способа)
+
+**A. Web UI**
+
+- `http://localhost:18000/daily-import`
+- `X-API-Key` берётся из `.env` (header `X-API-Key`).
+
+**B. PowerShell wrapper (Windows-friendly)**
+
+```powershell
+.\scripts\run_daily_import.ps1 -Mode auto
+.\scripts\run_daily_import.ps1 -Mode files -Files "2025_12_24 Прайс_Легенда_Виноделия.xlsx"
+```
+
+**C. Makefile**
+
+```bash
+make daily-import
+make daily-import-ps
+```
+
+Manual list:
+
+```bash
+make daily-import-files FILES="file1.xlsx file2.xlsx"
+make daily-import-files-ps FILES="2025_12_24 Прайс_Легенда_Виноделия.xlsx"
+```
+
+### 3) Ожидаемый результат
+
+- Успех: файл перемещается в `data/archive/<YYYY-MM>/...`
+- Проблемы по качеству/валидации: файл перемещается в `data/quarantine/...` (если включено в пайплайне)
+- Если всё уже импортировано: статус `OK_WITH_SKIPS`, причина `ALREADY_IMPORTED_SAME_HASH`
+
+### Legacy заметка
+
+Если в старых документах/issue встречается `scripts.daily_import` или `scripts/daily_import.py`, это **устаревшие** названия.
+Текущий оркестратор: `scripts/daily_import_ops.py` и запуск как:
+
+```powershell
+docker-compose exec -T api python -m scripts.daily_import_ops --mode auto
+```

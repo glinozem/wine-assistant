@@ -1,7 +1,17 @@
 # Wine Assistant - Документация
 
-> **Навигация по документации проекта Wine Assistant**
 
+## 📥 Ops Daily Import (Current)
+
+- UI: `/daily-import`
+- API:
+  - `GET /api/v1/ops/daily-import/inbox`
+  - `POST /api/v1/ops/daily-import/run`
+  - `GET /api/v1/ops/daily-import/runs/<run_id>`
+- CLI / Dev:
+  - Makefile: `make daily-import`, `make daily-import-files`, `make daily-import-files-ps`, `make daily-import-history`
+  - PowerShell: `scripts/run_daily_import.ps1`
+- Runbook: `runbook_import.md`
 ## 📚 Основные документы
 
 ### [README.md](README.md)
@@ -10,59 +20,25 @@
 - Быстрый старт (Docker, локальная разработка)
 - Архитектура системы
 - Import Operations (M1 Complete) 🎉
-- Daily Import v1.0.4 (Incremental) 🎉
+- Ops Daily Import (Incremental) 🎉
 - Observability & Monitoring
 - AI Capabilities (планируется)
 
 ### [CHANGELOG.md](CHANGELOG.md)
 **История изменений**
-- Unreleased: Daily Import v1.0.4, Import Operations M1, Observability, Backup/DR
+- Unreleased: Ops Daily Import, Import Operations M1, Observability, Backup/DR
 - Version history (v0.4.3+)
 - Bug fixes и improvements
 - **Latest:** v1.0.4 bugfix (UnicodeEncodeError) + infrastructure
 
 ### [QUICK_REFERENCE.md](QUICK_REFERENCE.md)
 **Шпаргалка команд**
-- **Daily Import v1.0.4** — incremental import quick start
+- **Ops Daily Import** — incremental import quick start
 - Import Operations (legacy orchestrator)
 - PowerShell примеры для API
 - Observability stack (Grafana/Loki/Promtail)
 - Backup/DR операции
 - Troubleshooting
-
----
-
-## 📥 Daily Import v1.0.4 (Production Ready)
-
-### [docs/changes_daily_import.md](docs/changes_daily_import.md)
-**Полная документация daily import**
-- v1.0.4 bugfix: UnicodeEncodeError resolution
-- Incremental import architecture
-- Pipeline steps и workflow
-- ETL & inventory enhancements
-- Automation scripts (bootstrap, smoke tests)
-- Operational notes & troubleshooting
-- Migration guide from previous versions
-
-**Key Features:**
-- ✅ Auto-inbox mode (newest file only)
-- ✅ Idempotent (safe to re-run)
-- ✅ Inventory tracking with history
-- ✅ Windows CP1251 encoding fixed
-- ✅ Advisory lock (prevents concurrent runs)
-- ✅ Automatic archiving (SUCCESS/SKIP → archive/, ERROR → quarantine/)
-
-**Quick Start:**
-```bash
-# Auto-inbox (recommended)
-make daily-import
-
-# Explicit files
-make daily-import-files FILES="data/inbox/file1.xlsx data/inbox/file2.xlsx"
-
-# PowerShell wrapper
-.\scripts\run_daily_import.ps1
-```
 
 ---
 
@@ -225,18 +201,14 @@ pre-commit run --all-files
 
 ## 🛠️ Scripts
 
-### Daily Import (v1.0.4)
-- **`scripts/daily_import.py`** — orchestrator для incremental imports
-  - Auto-inbox mode
-  - Explicit files mode
-  - Advisory lock
-  - Archiving (SUCCESS/SKIP → archive/, ERROR → quarantine/)
-  - Full pipeline: import → wineries → enrichment → maintenance → inventory
+### Daily Import (Ops)
 
-- **`scripts/run_daily_import.ps1`** — PowerShell wrapper (64 lines)
-- **`scripts/bootstrap_from_scratch.ps1`** — fresh deployment automation
-- **`scripts/smoke_e2e.ps1`** — E2E testing
-
+- **`scripts/daily_import_ops.py`** — orchestrator для Ops Daily Import
+  - `--mode auto`: берёт самый новый `.xlsx` из `data/inbox/`
+  - `--mode files --files ...`: обрабатывает выбранные имена файлов (точное совпадение с inbox)
+  - Ведение run JSON + summary, архивация в `data/archive/`, quarantine в `data/quarantine/`
+- **`scripts/run_daily_import.ps1`** — Windows-friendly wrapper (mode auto/files)
+- **`api/templates/daily_import.html`** — UI страница (`/daily-import`)
 ### Import Operations (Legacy)
 - `scripts/run_import_orchestrator.py` — CLI runner
 - `scripts/import_orchestrator.py` — core logic
@@ -302,7 +274,7 @@ wine-assistant/
 │   ├── 0014_import_runs.sql      # Import registry (M1)
 │   └── 0013_*.sql                # Inventory tables
 ├── docs/
-│   ├── changes_daily_import.md   # Daily Import v1.0.4 docs
+│   ├── changes_daily_import.md   # Ops Daily Import docs
 │   ├── dev/
 │   │   ├── import_flow.md        # Import architecture
 │   │   └── backup-dr-runbook.md  # Backup/DR guide
@@ -311,7 +283,7 @@ wine-assistant/
 │   ├── run_daily.py              # Daily ETL (inventory + supplier)
 │   └── mapping_template.json     # DreemWine mapping
 ├── scripts/
-│   ├── daily_import.py           # Daily import orchestrator ⭐ NEW
+│   ├── daily_import_ops.py           # Daily import orchestrator ⭐ NEW
 │   ├── bootstrap_from_scratch.ps1  # Fresh deployment ⭐ NEW
 │   ├── smoke_e2e.ps1             # E2E testing ⭐ NEW
 │   ├── run_daily_import.ps1      # PowerShell wrapper (rewritten)
@@ -436,5 +408,5 @@ wine-assistant/
 **Wine Assistant Documentation Index**
 **Version:** 2.0
 **Last Updated:** 31 декабря 2025
-**Status:** Daily Import v1.0.4 Complete 🎉
+**Status:** Ops Daily Import available ✅
 **Milestone:** M1 (Import Operations) + v1.0.4 (Incremental Daily Import)
