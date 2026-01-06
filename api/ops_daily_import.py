@@ -273,18 +273,19 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
             import uuid
             run_id = str(uuid.uuid4())
 
-            # Use sys.executable + pass run_id
-            cmd = [
-                sys.executable, "-m", "scripts.daily_import_ops",
-                "--mode", mode,
-                "--run-id", run_id,      # POLISH P1: Consistency!
-                "--no-log-file"           # API will write log
-            ]
+            # Build command with explicit whitelist approach
+            base_cmd = [sys.executable, "-m", "scripts.daily_import_ops"]
 
-            if mode == "files" and files:
-                cmd.extend(["--files"] + files)
+            # Explicit whitelist for mode (Semgrep-friendly)
+            if mode == "auto":
+                cmd = base_cmd + ["--mode", "auto", "--run-id", run_id,
+                                  "--no-log-file"]
+            elif mode == "files":
+                cmd = base_cmd + ["--mode", "files", "--run-id", run_id,
+                                  "--no-log-file", "--files"] + files
+            else:
+                return jsonify({"error": "Invalid mode"}), 400
 
-            # nosemgrep: python.flask.security.injection.subprocess-injection
             result = subprocess.run(
                 cmd,
                 cwd=str(BASE_DIR),
