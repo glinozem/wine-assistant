@@ -143,3 +143,23 @@ wine-assistant_analysis_bundle_*.zip
 
 /backups/
 /restore_tmp/
+
+############################
+# Daily Import runtime artifacts
+############################
+payload.json
+/payload*.json
+/tmp/
+
+# Keep directories in repo, ignore runtime contents
+data/inbox/*
+!data/inbox/.gitkeep
+
+data/archive/*
+!data/archive/.gitkeep
+
+data/quarantine/*
+!data/quarantine/.gitkeep
+
+data/logs/*
+!data/logs/.gitkeep

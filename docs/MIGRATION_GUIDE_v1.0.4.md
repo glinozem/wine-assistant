@@ -1,19 +1,23 @@
-# Migration Guide: Upgrading to Daily Import v1.0.4
+# Migration Guide: Upgrading to Daily Import (Ops) v1.0.4
 
-**Target Audience:** Users upgrading from previous import implementations
-**Effective Date:** December 31, 2025
-**Version:** v1.0.4
+**Target Audience:** Developers/operators upgrading from the legacy import scripts to the **Ops Daily Import** workflow
+**Effective Date:** January 2026
+**Version:** v1.0.4 (Ops)
 
 ---
 
 ## Overview
 
-This guide helps you migrate to Daily Import v1.0.4, which includes:
-- ✅ UnicodeEncodeError fix (Windows CP1251)
-- ✅ Incremental import infrastructure
-- ✅ Inventory tracking with history
-- ✅ Supplier normalization
-- ✅ Extended price tracking
+This guide helps you migrate to the current **Daily Import (Ops)** implementation, which includes:
+
+- ✅ **Ops API + Web UI** for Daily Import (`/daily-import`)
+- ✅ **Deterministic run logs** per run (`data/logs/daily-import/<run_id>.json`)
+- ✅ **Two import modes**
+  - `auto` — import the newest `.xlsx` from `data/inbox/`
+  - `files` — import an explicit list of filenames from `data/inbox/`
+- ✅ **Idempotency / SKIP support** (e.g., `ALREADY_IMPORTED_SAME_HASH`)
+- ✅ **Windows-friendly UTF-8 runtime** (container locale/env set to UTF-8)
+- ✅ Optional **inventory snapshot** post-run (reported in run summary)
 
 ---
 
@@ -22,11 +26,11 @@ This guide helps you migrate to Daily Import v1.0.4, which includes:
 Before upgrading, verify:
 
 - [ ] Current Git branch: `master`
-- [ ] All local changes committed
-- [ ] Database backup created
-- [ ] .env file configured
-- [ ] Python 3.11+ installed
-- [ ] Docker and Docker Compose available
+- [ ] All local changes committed (or stashed)
+- [ ] `.env` configured (at minimum: `API_KEY`, `API_URL`/`API_BASE_URL` if used by tooling)
+- [ ] Docker + Docker Compose installed
+- [ ] Python 3.11+ installed (for local tools; import itself runs in container)
+- [ ] You understand which folder is the **Inbox**: `data/inbox/`
 
 ---
 
@@ -35,219 +39,235 @@ Before upgrading, verify:
 ### Step 1: Update Code
 
 ```bash
-# Pull latest changes
 git checkout master
 git pull origin master
-
-# Verify you have the latest
 git log --oneline -5
-# Should show commits for v1.0.4 and PR #172, #173
 ```
 
-**Expected commits:**
-```
-<hash> feat(scripts): add bootstrap and smoke test scripts
-<hash> feat(daily-import): add incremental import infrastructure
-<hash> fix(daily-import): resolve UnicodeEncodeError (v1.0.4)
-```
+If your repository previously used `scripts.daily_import` or related legacy wrappers, note that the current workflow uses **`scripts.daily_import_ops`** and/or the **Ops API**.
 
-### Step 2: Verify File Changes
+---
 
-**Check that all 4 files have safe_print():**
+### Step 2: Start the Stack
+
+Bring up DB + API:
+
 ```bash
-# Windows (PowerShell)
-Get-ChildItem scripts\daily_import.py, scripts\load_wineries.py, scripts\enrich_producers.py, scripts\sync_inventory_history.py | ForEach-Object { Select-String -Path $_.FullName -Pattern "def safe_print" }
-
-# Linux/Mac
-grep -l "def safe_print" scripts/daily_import.py scripts/load_wineries.py scripts/enrich_producers.py scripts/sync_inventory_history.py
+docker compose up -d db api
 ```
 
-**Should return all 4 files.** If not, you don't have v1.0.4.
+Or via Makefile (recommended):
 
-### Step 3: Database Schema Updates
-
-**Check if migrations are needed:**
 ```bash
-# Connect to database
-docker compose exec -T db psql -U postgres -d wine_db
-
-# Check for new columns
-\d products
-# Should have: supplier, price_list_rub, price_final_rub
-
-\d inventory
-# Should have: stock_total, reserved, stock_free, asof_date
-
-\d inventory_history
-# Should have: as_of, code, stock_total, reserved, stock_free
+make dev-up
 ```
 
-**If columns are missing**, apply migrations:
-```bash
-# Apply pending migrations
-docker compose exec -T db psql -U postgres -d wine_db -f /migrations/0013_inventory_tables.sql
-# (Adjust migration files as needed)
-```
+Confirm API is healthy:
 
-### Step 4: Update ETL Configuration
-
-**Verify mapping template:**
-```bash
-cat etl/mapping_template.json
-```
-
-**Should include:**
-```json
-{
-  "supplier": "Поставщик",
-  "price_list_rub": "Цена\nпрайс",
-  "price_final_rub": "Цена со скидкой",
-  "stock_total": "остатки",
-  "reserved": "резерв",
-  "stock_free": "свободный остаток"
-}
-```
-
-**If missing**, update `etl/mapping_template.json` with new fields.
-
-### Step 5: Test Daily Import
-
-**Dry-run test (no actual import):**
-```bash
-# Check file selection
-python -m scripts.daily_import --inbox data/inbox --help
-
-# Verify command works
-python -m scripts.daily_import --files data/inbox/test_file.xlsx
-# (Use an already-imported file to test SKIP behavior)
-```
-
-**Expected output for SKIP:**
-```
-=== IMPORT (load_csv) ===
->> SKIP: File already imported
-[daily-import] Moved: data\inbox\*.xlsx -> data\archive\2025-12\*.xlsx
-
-Exit code: 0
-```
-
-### Step 6: Test Inventory Snapshot
-
-**Create a snapshot:**
-```bash
-# Dry-run first
-python -m scripts.sync_inventory_history --dry-run
-
-# Actual snapshot
-python -m scripts.sync_inventory_history
-```
-
-**Expected output:**
-```
-[OK] Вставлено <N> записей в public.inventory_history для as_of=<timestamp>
-```
-
-**Verify in database:**
-```sql
-SELECT COUNT(*), MAX(as_of), MIN(as_of)
-FROM inventory_history;
-```
-
-### Step 7: Update Automation Scripts
-
-**If you have scheduled tasks**, update them:
-
-**Windows Task Scheduler:**
 ```powershell
-# Remove old task (if exists)
-schtasks /Delete /TN "wine-assistant old import" /F
-
-# Create new task
-$taskName = "wine-assistant daily import"
-$scriptPath = (Resolve-Path ".\scripts\run_daily_import.ps1").Path
-schtasks /Create /TN $taskName /SC DAILY /ST 09:00 `
-  /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`"" /F
+irm http://localhost:18000/ready | ConvertTo-Json -Depth 5
 ```
 
-**Linux Cron:**
-```bash
-# Edit crontab
-crontab -e
+---
 
-# Replace old line with:
-0 9 * * * cd /opt/wine-assistant && .venv/bin/python -m scripts.daily_import
+### Step 3: Verify the Ops Daily Import UI & API
+
+#### Web UI
+Open in browser:
+
+- `http://localhost:18000/daily-import`
+
+#### Ops API endpoints (require `X-API-Key`)
+- `GET /api/v1/ops/daily-import/inbox`
+- `POST /api/v1/ops/daily-import/run`
+- `GET /api/v1/ops/daily-import/runs/<run_id>`
+
+**PowerShell example:**
+```powershell
+$k = (Get-Content .\.env | ? { $_ -match '^API_KEY=' } | Select -First 1) -replace '^API_KEY=', ''
+$k = $k.Trim()
+
+irm "http://localhost:18000/api/v1/ops/daily-import/inbox" -Headers @{ "X-API-Key" = $k } |
+  ConvertTo-Json -Depth 10
 ```
 
-### Step 8: Verify Full Pipeline
+---
 
-**Run complete pipeline:**
+### Step 4: Place Files in Inbox
+
+Put one or more `.xlsx` price lists into:
+
+- `data/inbox/` (host)
+- `/app/data/inbox/` (inside `api` container)
+
+Example verification:
+
+```powershell
+Get-ChildItem .\data\inbox
+docker compose exec api ls -la /app/data/inbox
+```
+
+---
+
+### Step 5: Run Daily Import (3 supported methods)
+
+Below are **three** supported ways to execute import operations. On Windows, method **(B)** or **(C)** is recommended for filenames with spaces and Cyrillic.
+
+#### (A) Web UI (recommended for manual ops)
+
+1. Open `http://localhost:18000/daily-import`
+2. Paste `X-API-Key` (stored in browser localStorage)
+3. Click **Обновить Inbox**
+4. Choose import mode and run
+
+Pros:
+- Best UX for operators
+- Shows run status, per-file results, skip reasons, downloads
+
+---
+
+#### (B) Makefile targets
+
+**Auto mode (newest file):**
 ```bash
-# Place a new file in inbox
-cp /path/to/new_price_list.xlsx data/inbox/
-
-# Run daily import
 make daily-import
+```
 
-# Verify exit code
-echo $?  # Should be 0
+**Files mode (explicit list):**
+```bash
+make daily-import-files FILES="file1.xlsx file2.xlsx"
+```
 
-# Check results
-docker compose exec -T db psql -U postgres -d wine_db -c "
-SELECT run_id, supplier, as_of_date, status, total_rows_processed
-FROM import_runs
-ORDER BY created_at DESC
-LIMIT 1;"
+Important notes:
+- This target is best for filenames without spaces.
+- For Windows and/or filenames with spaces/Cyrillic, use the PowerShell targets below (if present in your Makefile):
+
+```bash
+make daily-import-ps
+make daily-import-files-ps FILES="2025_12_24 Прайс.xlsx,2025_12_25 Другой прайс.xlsx"
 ```
 
 ---
 
-## Breaking Changes
+#### (C) PowerShell wrapper: `scripts/run_daily_import.ps1` (Windows-friendly)
 
-**None.** v1.0.4 is fully backward compatible.
+**Auto mode:**
+```powershell
+.\scripts\run_daily_import.ps1 -Mode auto
+```
 
-**Behavioral Changes:**
-1. **Emoji display:** On Windows CP1251 console, emoji shows as `?` (expected)
-2. **File archiving:** Now archives even on SKIP (was: only on success)
-3. **Inventory snapshots:** Created automatically after successful import
+**Files mode (array):**
+```powershell
+.\scripts\run_daily_import.ps1 -Mode files -Files "2025_12_24 Прайс.xlsx","2025_12_25 Другой прайс.xlsx"
+```
+
+**Files mode (single CSV string):**
+```powershell
+.\scripts\run_daily_import.ps1 -Mode files -Files "2025_12_24 Прайс.xlsx,2025_12_25 Другой прайс.xlsx"
+```
+
+This wrapper runs the import inside the `api` container via `docker-compose exec` and:
+- prints the final JSON (run result),
+- returns meaningful exit codes (e.g., non-zero on FAILED/quarantine/no-files/parse error).
 
 ---
 
-## Rollback Procedure
+### Step 6: Review Run History & Details
 
-If you need to rollback:
+Run logs are stored in:
 
-### Option 1: Git Revert
+- `data/logs/daily-import/<run_id>.json`
 
-```bash
-# Revert to previous commit
-git log --oneline -5
-git revert <commit_hash_of_v1.0.4>
-git push origin master
-```
-
-### Option 2: Restore from Backup
+Makefile helpers:
 
 ```bash
-# Restore database
-make restore-local FILE=backups/wine_db_before_v1.0.4.dump
-
-# Restore code
-git checkout <previous_commit_hash>
+make daily-import-history
+make daily-import-show RUN_ID=<uuid>
 ```
 
-### Option 3: Manual Rollback
+API-based review (PowerShell):
+
+```powershell
+$rid = "<uuid>"
+irm "http://localhost:18000/api/v1/ops/daily-import/runs/$rid" -Headers @{ "X-API-Key" = $k } |
+  ConvertTo-Json -Depth 20
+```
+
+---
+
+### Step 7: Verify Inventory Snapshot (if enabled)
+
+The Ops run summary may include:
+
+- `summary.inventory_snapshot.status` (e.g., `DONE`)
+- `summary.inventory_snapshot.as_of`
+
+If you need to recompute inventory history manually, use the existing tooling (if available in your project), for example:
 
 ```bash
-# Restore old scripts (if you have backups)
-cp backups/load_wineries.py.old scripts/load_wineries.py
-cp backups/enrich_producers.py.old scripts/enrich_producers.py
-cp backups/sync_inventory_history.py.old scripts/sync_inventory_history.py
-
-# Remove new files
-rm scripts/daily_import.py
-rm scripts/bootstrap_from_scratch.ps1
-rm scripts/smoke_e2e.ps1
+docker compose exec api python -m scripts.sync_inventory_history --dry-run
+docker compose exec api python -m scripts.sync_inventory_history
 ```
+
+---
+
+## Breaking / Behavioral Changes
+
+### 1) Legacy CLI replaced
+
+- **Old:** `python -m scripts.daily_import ...`
+- **New:** `python -m scripts.daily_import_ops --mode auto|files ...`, plus Ops API/UI
+
+If you have old scheduled tasks, update them (see below).
+
+### 2) SKIP is first-class
+
+If a file was already imported (same hash), it will be marked `SKIPPED` with a `skip_reason` (e.g., `ALREADY_IMPORTED_SAME_HASH`).
+
+### 3) Files are managed by workflow
+
+Files are expected to be in `data/inbox/` before processing; after processing they may be moved to `data/archive/...` (and/or `data/quarantine/...` if quarantined).
+
+---
+
+## Updating Scheduled Jobs (Windows Task Scheduler)
+
+Example: run **auto mode** daily at 09:00.
+
+```powershell
+$taskName = "wine-assistant daily import"
+$repoRoot = (Resolve-Path ".").Path
+$scriptPath = (Resolve-Path ".\scripts\run_daily_import.ps1").Path
+
+schtasks /Create /TN $taskName /SC DAILY /ST 09:00 /F `
+  /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command `"cd `'$repoRoot`'; & `'$scriptPath`' -Mode auto`""
+```
+
+---
+
+## Common Migration Issues
+
+### Issue: `File not found` for a selected file (MANUAL_LIST)
+
+Cause: the UI (or operator) selected a filename that is no longer present in `data/inbox/` (e.g., it was moved to archive by a previous run).
+
+Fix:
+- Click **Обновить Inbox** and reselect from the current list
+- Prefer the UI, or use the wrapper which is more resilient with filenames
+
+### Issue: Docker orphan containers warning
+
+If you see warnings like “Found orphan containers…”, clean up with:
+
+```bash
+docker compose down --remove-orphans
+```
+
+### Issue: API returns 403 / unauthorized
+
+Cause: missing/incorrect `X-API-Key`.
+
+Fix: load `API_KEY` from `.env` (see examples above) and retry.
 
 ---
 
@@ -255,193 +275,15 @@ rm scripts/smoke_e2e.ps1
 
 After migration, verify:
 
-- [ ] `make daily-import` completes successfully (exit code 0)
-- [ ] No UnicodeEncodeError on Windows console
-- [ ] Inventory snapshots created in `inventory_history`
-- [ ] Files archived correctly to `data/archive/YYYY-MM/`
-- [ ] Idempotency works (re-running shows SKIP)
-- [ ] Products have `supplier` field populated
-- [ ] Inventory has `stock_total`, `reserved`, `stock_free`
-- [ ] Price history tracking works
-- [ ] Scheduled tasks updated (if using automation)
+- [ ] `/daily-import` UI loads
+- [ ] `GET /api/v1/ops/daily-import/inbox` returns files list with your key
+- [ ] `make daily-import` works (auto mode) when inbox has files
+- [ ] Manual list mode imports selected files (or clearly reports missing)
+- [ ] Re-running the same file shows `SKIPPED` with a skip reason
+- [ ] Archive/quarantine paths are produced as expected
+- [ ] Run logs appear in `data/logs/daily-import/`
 
 ---
 
-## Common Migration Issues
-
-### Issue: UnicodeEncodeError still occurs
-
-**Cause:** Not all 4 files updated to v1.0.4
-
-**Solution:**
-```bash
-# Verify all 4 files
-grep -c "def safe_print" scripts/daily_import.py
-grep -c "def safe_print" scripts/load_wineries.py
-grep -c "def safe_print" scripts/enrich_producers.py
-grep -c "def safe_print" scripts/sync_inventory_history.py
-
-# Each should return: 1
-# If not, git pull and check again
-```
-
-### Issue: Missing columns in database
-
-**Cause:** Migrations not applied
-
-**Solution:**
-```bash
-# Apply migrations
-docker compose exec -T db psql -U postgres -d wine_db
-
-# Add missing columns (example)
-ALTER TABLE products ADD COLUMN IF NOT EXISTS supplier TEXT;
-ALTER TABLE products ADD COLUMN IF NOT EXISTS price_list_rub NUMERIC(10,2);
-ALTER TABLE products ADD COLUMN IF NOT EXISTS price_final_rub NUMERIC(10,2);
-
-ALTER TABLE inventory ADD COLUMN IF NOT EXISTS stock_total NUMERIC(10,2) NOT NULL DEFAULT 0;
-ALTER TABLE inventory ADD COLUMN IF NOT EXISTS reserved NUMERIC(10,2) NOT NULL DEFAULT 0;
-ALTER TABLE inventory ADD COLUMN IF NOT EXISTS stock_free NUMERIC(10,2) NOT NULL DEFAULT 0;
-ALTER TABLE inventory ADD COLUMN IF NOT EXISTS asof_date DATE;
-```
-
-### Issue: Advisory lock stuck
-
-**Cause:** Previous import crashed without releasing lock
-
-**Solution:**
-```sql
--- Release all advisory locks
-SELECT pg_advisory_unlock_all();
-```
-
-### Issue: Inventory snapshot fails
-
-**Cause:** Table structure mismatch
-
-**Solution:**
-```bash
-# Verify table exists
-docker compose exec -T db psql -U postgres -d wine_db -c "\d inventory_history"
-
-# If missing, create table
-docker compose exec -T db psql -U postgres -d wine_db -c "
-CREATE TABLE IF NOT EXISTS inventory_history (
-    id SERIAL PRIMARY KEY,
-    as_of TIMESTAMPTZ NOT NULL,
-    code TEXT NOT NULL,
-    stock_total NUMERIC(10,2) NOT NULL DEFAULT 0,
-    reserved NUMERIC(10,2) NOT NULL DEFAULT 0,
-    stock_free NUMERIC(10,2) NOT NULL DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_inventory_history_code_asof
-ON inventory_history(code, as_of);
-
-CREATE INDEX IF NOT EXISTS idx_inventory_history_asof
-ON inventory_history(as_of);
-"
-```
-
----
-
-## Post-Migration Tasks
-
-### 1. Monitor First Imports
-
-```bash
-# Watch logs during first import
-python -m scripts.daily_import --inbox data/inbox 2>&1 | tee first_import.log
-
-# Review log
-cat first_import.log
-```
-
-### 2. Verify Data Integrity
-
-```sql
--- Products with inventory
-SELECT COUNT(*) FROM products WHERE supplier IS NOT NULL;
-
--- Inventory snapshots
-SELECT COUNT(*), MAX(as_of) FROM inventory_history;
-
--- Price history
-SELECT COUNT(*) FROM product_prices;
-```
-
-### 3. Update Documentation
-
-```bash
-# Update team wiki/docs
-# Add new daily import procedures
-# Share QUICK_REFERENCE.md with team
-```
-
-### 4. Set Up Monitoring
-
-```sql
--- Create view for daily monitoring
-CREATE OR REPLACE VIEW v_daily_import_health AS
-SELECT
-    DATE(created_at) as import_date,
-    COUNT(*) as total_runs,
-    COUNT(*) FILTER (WHERE status = 'success') as successful,
-    COUNT(*) FILTER (WHERE status = 'failed') as failed,
-    COUNT(*) FILTER (WHERE status = 'skipped') as skipped,
-    SUM(total_rows_processed) as total_rows
-FROM import_runs
-WHERE created_at > NOW() - INTERVAL '7 days'
-GROUP BY DATE(created_at)
-ORDER BY import_date DESC;
-
--- Query it daily
-SELECT * FROM v_daily_import_health;
-```
-
----
-
-## Support
-
-If you encounter issues during migration:
-
-1. **Check Logs:** Review `first_import.log`
-2. **Verify Files:** Ensure all 4 files have v1.0.4
-3. **Database Schema:** Verify all columns exist
-4. **Test Isolation:** Test on a copy/staging environment first
-5. **Rollback:** Use rollback procedure if needed
-6. **Documentation:** Review [docs/changes_daily_import.md](docs/changes_daily_import.md)
-
----
-
-## Success Criteria
-
-Migration is successful when:
-
-- ✅ `make daily-import` completes with exit code 0
-- ✅ No encoding errors on Windows
-- ✅ Inventory snapshots created automatically
-- ✅ Files archived correctly
-- ✅ Database queries return expected results
-- ✅ Automation (cron/scheduled tasks) works
-- ✅ Team trained on new workflow
-
----
-
-## Next Steps
-
-After successful migration:
-
-1. **Run Daily:** Use `make daily-import` for daily operations
-2. **Monitor:** Check inventory_history daily
-3. **Maintain:** Keep wineries catalog updated
-4. **Optimize:** Review and adjust as needed
-5. **Document:** Share learnings with team
-
----
-
-**Migration Guide Version:** 1.0
-**Last Updated:** December 31, 2025
-**For:** Wine Assistant v1.0.4
-**Contact:** Wine Assistant Development Team
+**Migration Guide Version:** v1.0.4 (Ops)
+**Last Updated:** January 2026

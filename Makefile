@@ -312,21 +312,70 @@ smoke-e2e:
 	$(POWERSHELL) $(POWERSHELL_ARGS) scripts/smoke_e2e.ps1 -Supplier "$(SMOKE_SUPPLIER)" -BaseUrl "$(SMOKE_BASE_URL)" -StaleDetectorMode "$(SMOKE_STALE_MODE)" $(if $(filter 1,$(SMOKE_FRESH)),-Fresh) $(if $(filter 1,$(SMOKE_BUILD)),-Build) $(if $(filter 1,$(SMOKE_API_SMOKE)),-RunApiSmoke)
 
 
-# --- Daily incremental import ----------------------------------------------
+# ===================================================================
+# Daily Import Targets
+# ===================================================================
 
-.PHONY: daily-import daily-import-files daily-import-ps1
+.PHONY: inbox-ls daily-import daily-import-files daily-import-history daily-import-show daily-import-cleanup-archive daily-import-quarantine-stats
+.PHONY: daily-import-ps daily-import-files-ps
 
-# Auto-inbox: take ONLY the newest .xlsx from data/inbox and process it.
+# Показать список файлов в data/inbox (внутри контейнера)
+inbox-ls:
+	@echo "=== Files in data/inbox ==="
+	@$(DOCKER_COMPOSE) exec -T api sh -lc 'ls -lh data/inbox/*.xlsx 2>/dev/null || echo "No files"'
+
+# Запустить daily import (auto mode - newest file)
 daily-import:
-	$(PY) -m scripts.daily_import --inbox "data/inbox"
+	@echo "=== Running daily import (auto mode) ==="
+	@$(DOCKER_COMPOSE) exec -T api python -m scripts.daily_import_ops --mode auto
 
-# Explicit files list:
-#   make daily-import-files FILES="data/inbox/a.xlsx data/inbox/b.xlsx"
+# Запустить daily import с явным списком файлов
+# ВАЖНО: этот таргет НЕ подходит для имён с пробелами (см. daily-import-files-ps ниже)
+# Usage (safe): make daily-import-files FILES="file1.xlsx file2.xlsx"
 daily-import-files:
-	$(PY) -m scripts.daily_import --files $(FILES)
+ifeq ($(strip $(FILES)),)
+	$(error FILES parameter required. Example: make daily-import-files FILES="file1.xlsx file2.xlsx")
+endif
+	@echo "=== Running daily import (files mode) ==="
+	@$(DOCKER_COMPOSE) exec -T api python -m scripts.daily_import_ops --mode files --files $(FILES)
 
-# Windows PowerShell wrapper (alternative):
-#   make daily-import-ps1
-#   make daily-import-ps1 FILES="data\\inbox\\a.xlsx"  (space-separated)
-daily-import-ps1:
-	$(POWERSHELL) $(POWERSHELL_ARGS) scripts/run_daily_import.ps1 $(if $(FILES),-Files $(FILES))
+# Windows-friendly: использовать PowerShell wrapper, который умеет CSV/пробелы/кириллицу
+# Usage (recommended on Windows):
+#   make daily-import-ps
+#   make daily-import-files-ps FILES="2025_12_24 Прайс.xlsx,2025_12_25 Другой прайс.xlsx"
+daily-import-ps:
+	@echo "=== Running daily import via PowerShell wrapper (auto) ==="
+	@$(POWERSHELL) $(POWERSHELL_ARGS) scripts/run_daily_import.ps1 -Mode auto
+
+daily-import-files-ps:
+ifeq ($(strip $(FILES)),)
+	$(error FILES parameter required. Example: make daily-import-files-ps FILES="a.xlsx,b.xlsx")
+endif
+	@echo "=== Running daily import via PowerShell wrapper (files) ==="
+	@$(POWERSHELL) $(POWERSHELL_ARGS) scripts/run_daily_import.ps1 -Mode files -Files "$(FILES)"
+
+# Показать последние 10 запусков daily import
+daily-import-history:
+	@echo "=== Daily import history (last 10 runs) ==="
+	@$(DOCKER_COMPOSE) exec -T api sh -lc 'ls -lt data/logs/daily-import/*.json 2>/dev/null | head -10 || echo "No runs"'
+
+# Показать детали конкретного запуска
+# Usage: make daily-import-show RUN_ID=uuid
+daily-import-show:
+ifeq ($(strip $(RUN_ID)),)
+	$(error RUN_ID parameter required. Usage: make daily-import-show RUN_ID=<uuid>)
+endif
+	@$(DOCKER_COMPOSE) exec -T api sh -lc 'cat data/logs/daily-import/$(RUN_ID).json | python -m json.tool'
+
+# Очистить архив старее N дней (по умолчанию 90)
+# Usage: make daily-import-cleanup-archive DAYS=90
+DAYS ?= 90
+daily-import-cleanup-archive:
+	@echo "=== Cleaning archive older than $(DAYS) days ==="
+	@$(DOCKER_COMPOSE) exec -T api sh -lc 'find data/archive -type f -mtime +$(DAYS) -delete'
+
+# Показать статистику по карантину
+daily-import-quarantine-stats:
+	@echo "=== Quarantine statistics ==="
+	@$(DOCKER_COMPOSE) exec -T api sh -lc 'find data/quarantine -type f -name "*.xlsx" 2>/dev/null | wc -l | xargs echo "Total quarantined files:"'
+	@$(DOCKER_COMPOSE) exec -T api sh -lc 'ls -lh data/quarantine/*/*.xlsx 2>/dev/null | tail -5 || echo "No files"'

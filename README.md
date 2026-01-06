@@ -8,7 +8,7 @@
 
 Изначально учебный проект, Wine Assistant вырос в полноценное решение, демонстрирующее best practices современной backend-разработки на Python.
 
-**Текущий статус:** Production-ready • 175+ тестов • M1 (Import Operations) Complete 🎉 • **Daily Import v1.0.4 Ready** 🎉 • Observability & Monitoring ready ✅ • AI Integration планируется (Sprint 8) 🔜
+**Текущий статус:** Production-ready • 175+ тестов • M1 (Import Operations) Complete 🎉 • **Daily Import (Ops) Ready** 🎉 • Observability & Monitoring ready ✅ • AI Integration планируется (Sprint 8) 🔜
 
 ---
 
@@ -16,7 +16,7 @@
 
 ### 📊 Управление данными и ETL
 
-- **Daily Import v1.0.4** — incremental imports без wipe volumes, Windows-friendly 🎉
+- **Daily Import (Ops)** — incremental imports без wipe volumes, Windows-friendly 🎉
 - **Import Orchestrator** — production-grade система импорта с полным аудитом
 - **Автоматический импорт прайс-листов** (Excel/CSV) с интеллектуальным парсингом
 - **Идемпотентность импортов** по ключу `(supplier, as_of_date, file_sha256)`
@@ -115,278 +115,250 @@ make obs-logs        # Просмотр логов
 
 ---
 
-## 📥 Daily Import v1.0.4 (Production Ready) 🎉
+## 📥 Daily Import (Ops)
 
-> **Incremental daily imports** без wipe volumes, с inventory tracking и Windows CP1251 support
+Daily Import — это операционный импорт Excel‑прайсов из `data/inbox/` с последующим перемещением обработанных файлов в `data/archive/` (или `data/quarantine/` при проблемах качества данных). Процесс идемпотентный: если файл уже был импортирован (тот же SHA‑256), он будет помечен как `SKIPPED` с причиной `ALREADY_IMPORTED_SAME_HASH`.
 
-### Overview
+### Ключевые свойства
 
-Daily Import v1.0.4 обеспечивает production-ready решение для ежедневного обновления прайс-листов без необходимости очистки volumes.
+- **Два режима запуска**
+  - **Auto** (`--mode auto`): берётся *самый новый* `.xlsx` из `data/inbox/`.
+  - **Manual list** (`--mode files`): обрабатываются *ровно выбранные* файлы (имена должны совпадать с тем, что возвращает inbox/показывает UI).
+- **После обработки файл уходит из inbox**
+  - При `IMPORTED` и при `SKIPPED` файл обычно перемещается в `data/archive/...` (в результате `inbox` может стать пустым).
+- **Результат всегда фиксируется как “run”** (run_id + список файлов + summary) и может быть запрошен по API.
 
-**Ключевые фичи:**
-- ✅ **Incremental imports** — no volume wiping required
-- ✅ **Idempotent** — safe to run multiple times on same data
-- ✅ **Inventory tracking** — automatic snapshots with full history
-- ✅ **Windows-friendly** — UnicodeEncodeError fixed (CP1251 encoding)
-- ✅ **Concurrency protection** — advisory locks prevent parallel runs
-- ✅ **Smart archiving** — SUCCESS/SKIP → archive/, ERROR → quarantine/
-- ✅ **Full pipeline** — import → wineries → enrichment → maintenance → inventory
+---
 
-### Quick Start
+### Способ 1: Web UI (рекомендуется для ручных запусков)
 
-**Auto-inbox mode (рекомендуется):**
-```bash
-# Automatically selects newest .xlsx file from data/inbox
+1. Откройте страницу: `http://localhost:18000/daily-import`
+2. Введите `X-API-Key` (можно взять из `.env`: `API_KEY=...`)
+3. Нажмите **«Обновить Inbox»**, выберите режим и запускайте импорт.
+
+UI показывает:
+- список файлов в inbox;
+- итоговый статус run + детализацию по каждому файлу (IMPORTED / SKIPPED / ERROR / QUARANTINED);
+- ссылки для скачивания архивного/карантинного файла (если доступно).
+
+---
+
+### Способ 2: Makefile
+
+Поддерживаемые таргеты (см. `Makefile`):
+
+```powershell
+# показать inbox (внутри контейнера api)
+make inbox-ls
+
+# Auto: обработать самый новый файл
 make daily-import
 
-# Or via Python
-python -m scripts.daily_import --inbox data/inbox
+# Manual list: обработать выбранные файлы (ВАЖНО: имена без пробелов/кавычки могут быть неудобны для make)
+make daily-import-files FILES="2025_12_24.xlsx 2025_12_25.xlsx"
 
-# Or via PowerShell
-.\scripts\run_daily_import.ps1
+# Windows-friendly: через PowerShell wrapper (поддерживает пробелы/кириллицу)
+make daily-import-ps
+make daily-import-files-ps FILES="2025_12_24 Прайс.xlsx,2025_12_25 Другой прайс.xlsx"
+
+# история последних run’ов и просмотр конкретного
+make daily-import-history
+make daily-import-show RUN_ID=<uuid>
+
+# housekeeping
+make daily-import-cleanup-archive DAYS=90
+make daily-import-quarantine-stats
 ```
 
-**Explicit files mode:**
-```bash
-# Process specific files
-make daily-import-files FILES="data/inbox/file1.xlsx data/inbox/file2.xlsx"
+---
 
-# Or via Python
-python -m scripts.daily_import --files data/inbox/file1.xlsx data/inbox/file2.xlsx
+### Способ 3: PowerShell wrapper (Windows-friendly)
 
-# Or via PowerShell
-.\scripts\run_daily_import.ps1 -Files data\inbox\file1.xlsx, data\inbox\file2.xlsx
-```
+Скрипт: `scripts\run_daily_import.ps1` — удобен на Windows, т.к. проще управлять quoting (пробелы/кириллица).
 
-### Pipeline Steps
-
-Когда вы запускаете daily import, выполняются следующие шаги:
-
-1. **Advisory Lock Acquisition** — предотвращает параллельные импорты
-2. **File Import** (`load_csv`)
-   - Импорт данных из Excel
-   - Idempotent: пропускает уже импортированные файлы (по SHA-256)
-   - Архивирует файл в `data/archive/YYYY-MM/` (даже при SKIP)
-   - При ошибке: помещает файл в `data/quarantine/YYYY-MM/`
-3. **Post-Import Processing** (только если был реальный импорт, не SKIP):
-   - **Wineries Catalog Update** — синхронизация метаданных поставщиков
-   - **Product Enrichment** — backfill region/site из wineries
-   - **Maintenance SQL** — нормализация и cleanup данных
-   - **Inventory Snapshot** — создание snapshot'а в `inventory_history`
-4. **Lock Release**
-
-### Inventory Tracking
-
-Daily import автоматически отслеживает изменения остатков:
-
-**Текущее состояние:** таблица `inventory`
-```sql
-SELECT code, stock_total, reserved, stock_free, asof_date
-FROM inventory
-WHERE stock_total > 0
-ORDER BY stock_total DESC
-LIMIT 10;
-```
-
-**Исторические snapshot'ы:** таблица `inventory_history`
-```sql
-SELECT code, as_of::date, stock_total, stock_free
-FROM inventory_history
-WHERE code = 'D010210'
-ORDER BY as_of DESC;
-```
-
-**Особенности:**
-- Идемпотентно: один snapshot на дату
-- Автоматический расчет: `stock_free = stock_total - reserved`
-- Нет snapshot'а при SKIP (файл уже импортирован)
-
-### Expected Output
-
-**Успешный импорт:**
-```
-=== IMPORT (load_csv) ===
->>> File: data\inbox\2025_12_12 Прайс_Легенда_Виноделия.xlsx
-[OK] Import completed successfully
-[daily-import] Moved: data\inbox\*.xlsx -> data\archive\2025-12\*.xlsx
-
-=== LOAD WINERIES CATALOG ===
-Готово. Вставлено новых записей: 0, обновлено существующих: 46
-
-=== ENRICH PRODUCTS ===
-Готово. Всего затронуто строк в products: 244
-
-=== MAINTENANCE SQL ===
-[daily-import] Maintenance SQL completed
-
-=== INVENTORY HISTORY SNAPSHOT ===
-[OK] Вставлено 270 записей в public.inventory_history
-
-=== SUMMARY ===
-- IMPORTED 2025_12_12 Прайс_Легенда_Виноделия.xlsx
-
-Exit code: 0
-```
-
-**Идемпотентный запуск (SKIP):**
-```
-=== IMPORT (load_csv) ===
->> SKIP: File already imported
-[daily-import] Moved: data\inbox\*.xlsx -> data\archive\2025-12\*.xlsx
-
-=== SUMMARY ===
-- SKIPPED (already imported)
-
-Exit code: 0
-```
-
-### Automation
-
-**Windows Task Scheduler:**
 ```powershell
-# Daily import at 09:00
-$taskName = "wine-assistant daily import"
-$scriptPath = (Resolve-Path ".\scripts\run_daily_import.ps1").Path
-schtasks /Create /TN $taskName /SC DAILY /ST 09:00 `
-  /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`"" /F
+# Auto
+.\scripts\run_daily_import.ps1 -Mode auto
 
-# Verify
-Get-ScheduledTaskInfo -TaskName "wine-assistant daily import"
+# Manual list: можно массивом
+.\scripts\run_daily_import.ps1 -Mode files -Files "2025_12_24 Прайс_Легенда_Виноделия.xlsx","2025_12_25 Другой прайс.xlsx"
+
+# Manual list: можно одной строкой CSV
+.\scripts\run_daily_import.ps1 -Mode files -Files "2025_12_24 Прайс_Легенда_Виноделия.xlsx,2025_12_25 Другой прайс.xlsx"
 ```
 
-**Linux Cron:**
+Скрипт возвращает ненулевой exit code при `FAILED/TIMEOUT` и при наличии `QUARANTINED` файлов (это удобно для CI/smoke).
+
+---
+
+### Дополнительно: прямой запуск внутри контейнера (debug)
+
+```powershell
+# Auto
+docker-compose exec -T api python -m scripts.daily_import_ops --mode auto
+
+# Manual list (имена файлов должны совпадать с inbox)
+docker-compose exec -T api python -m scripts.daily_import_ops --mode files --files "2025_12_24 Прайс.xlsx" "2025_12_25 Другой прайс.xlsx"
+```
+
+---
+
+### Проверка результата по API (PowerShell)
+
+```powershell
+$k = (Get-Content .\.env | Where-Object { $_ -match '^API_KEY=' } | Select-Object -First 1) -replace '^API_KEY=', ''
+$k = $k.Trim()
+
+# список inbox (требует X-API-Key)
+irm "http://localhost:18000/api/v1/ops/daily-import/inbox" -Headers @{ "X-API-Key" = $k } | ConvertTo-Json -Depth 5
+
+# детали конкретного run (run_id берите из вывода/логов/UI)
+$rid = "<run_id>"
+irm "http://localhost:18000/api/v1/ops/daily-import/runs/$rid" -Headers @{ "X-API-Key" = $k } | ConvertTo-Json -Depth 10
+```
+
+Примечание: используйте `docker compose ...` вместо `docker-compose ...`, если в вашей среде нет алиаса `docker-compose` (в проекте есть заметки по этой теме в документации).
+
+## 🧑‍💻 Developer Docs (для разработчиков)
+
+Этот блок — краткий “how-to” для локальной разработки и поддержки проекта: поднять окружение, быстро проверить изменения, запустить импорт/ops-процессы и провести базовую диагностику.
+
+### 1) Предварительные требования
+
+- **Docker + Docker Compose v2** (команда `docker compose`).
+- **Python 3.11+** (если запускаете что-то вне контейнеров).
+- (Опционально) **Make** — удобно, но не обязательно (на Windows можно через PowerShell).
+
+---
+
+### 2) Быстрый dev-цикл (Docker-first)
+
+1. Поднимите сервисы (как минимум `db` и `api`):
+   ```bash
+   docker compose up -d --build
+   ```
+
+2. Проверьте, что API “живой”:
+   ```bash
+   curl http://localhost:18000/health
+   ```
+
+3. Откройте:
+   - UI: `http://localhost:18000/ui`
+   - Swagger/OpenAPI: `http://localhost:18000/docs`
+
+4. Просмотр логов:
+   ```bash
+   docker compose logs -f api
+   docker compose logs -f db
+   ```
+
+Если вы используете Makefile, то для повседневной разработки ориентируйтесь на цели в разделе “Makefile команды” ниже.
+
+---
+
+### 3) Переменные окружения и доступ к защищённым endpoints
+
+- Основные значения лежат в `.env` (локально создаётся из `.env.example`).
+- Для защищённых ops/API endpoints используйте заголовок:
+  - `X-API-Key: <API_KEY из .env>`
+
+Проверка через PowerShell:
+```powershell
+$k = (Get-Content .\.env | Where-Object { $_ -match '^API_KEY=' } | Select-Object -First 1) -replace '^API_KEY=', ''
+$k = $k.Trim()
+irm "http://localhost:18000/health" -Headers @{ "X-API-Key" = $k }
+```
+
+---
+
+### 4) Тесты и базовые проверки качества
+
+1. Запуск тестов:
+   ```bash
+   pytest
+   ```
+
+2. Тесты с coverage:
+   ```bash
+   pytest --cov=api --cov=scripts --cov-report=html
+   ```
+
+Если у вас есть DB‑зависимые unit/integration тесты — поднимите `db` и запускайте тесты после прогрева.
+
+---
+
+### 5) E2E smoke (проверка “всё работает вместе”)
+
+Полный сквозной сценарий проверок обычно оформлен как Make‑цель (если в проекте есть):
 ```bash
-# /etc/cron.d/wine-assistant
-0 9 * * * cd /opt/wine-assistant && .venv/bin/python -m scripts.daily_import
+make smoke-e2e
 ```
 
-### Monitoring
+---
 
-**Recent imports:**
-```sql
-SELECT run_id, supplier, as_of_date, status,
-       total_rows_processed, rows_skipped, created_at
-FROM import_runs
-ORDER BY created_at DESC
-LIMIT 10;
+### 6) Daily Import / Ops Daily Import (inbox → archive/quarantine)
+
+> Примечание: в некоторых ветках/релизах импорт описан как **Daily Import v1.0.4**, в более новых — как **Ops Daily Import**. Логика одинакова: берём `.xlsx` из `data/inbox/`, импортируем, затем переносим файл в `data/archive/` или `data/quarantine/`.
+
+#### Предварительные условия
+
+1. Поднимите сервисы:
+   ```bash
+   docker compose up -d --build db api
+   ```
+2. Положите `.xlsx` в `./data/inbox/` на хосте (volume в контейнер: `/app/data/inbox/`).
+3. Возьмите `API_KEY` из `.env` и используйте как `X-API-Key` (для UI / API).
+
+#### Способ 1 — Web UI (удобно для ручных запусков)
+
+- Для веток с Daily Import v1.x обычно: `http://localhost:18000/daily-import` (или страница из раздела UI документации).
+- Для веток с Ops Daily Import: отдельная UI‑форма “Daily Import”.
+
+Общий сценарий:
+1. Откройте страницу импорта.
+2. Вставьте `X-API-Key`.
+3. Обновите список inbox и запустите импорт (auto/manual).
+
+Ожидаемое поведение: при **успешной обработке** файл исчезает из inbox и появляется в `data/archive/...`.
+
+#### Способ 2 — PowerShell wrapper (Windows-friendly)
+
+Auto (самый новый файл):
+```powershell
+.\scripts\run_daily_import.ps1 -Mode auto
 ```
 
-**Inventory snapshots:**
-```sql
-SELECT COUNT(*) as total_snapshots,
-       MAX(as_of) as latest_snapshot,
-       COUNT(DISTINCT code) as unique_products
-FROM inventory_history;
+Manual (список файлов; пробелы/кириллица поддерживаются; можно одной строкой CSV):
+```powershell
+.\scripts\run_daily_import.ps1 -Mode files -Files "2025_12_24 Прайс.xlsx, 2025_12_25 Другой прайс.xlsx"
 ```
 
-**Products with inventory:**
-```sql
-SELECT p.code, p.title_ru, p.supplier,
-       i.stock_total, i.reserved, i.stock_free
-FROM products p
-JOIN inventory i ON p.code = i.code
-WHERE i.stock_total > 0
-ORDER BY i.stock_total DESC
-LIMIT 10;
-```
+#### Способ 3 — Makefile
 
-### Troubleshooting
-
-**UnicodeEncodeError on Windows:**
-```
-Symptom: 'charmap' codec can't encode character
-Solution: Verify v1.0.4 is installed with safe_print() in all 4 scripts
-Check: grep "def safe_print" scripts/*.py
-```
-
-**Import failed:**
+Auto:
 ```bash
-# Check quarantine
-ls data/quarantine/
-
-# Check error in database
-docker compose exec -T db psql -U postgres -d wine_db -c "
-SELECT error_summary, error_details
-FROM import_runs
-WHERE status = 'failed'
-ORDER BY created_at DESC
-LIMIT 1;"
+make daily-import
 ```
 
-**Advisory lock stuck:**
-```sql
--- Check locks
-SELECT * FROM pg_locks WHERE locktype = 'advisory';
-
--- Release
-SELECT pg_advisory_unlock_all();
-```
-
-### Advanced Options
-
-**Custom directories:**
+Windows-friendly (в разных версиях цели могут называться по‑разному):
 ```bash
-python -m scripts.daily_import \
-  --inbox D:\imports\inbox \
-  --archive D:\imports\archive \
-  --quarantine D:\imports\quarantine
+make daily-import-ps1        # встречается в Daily Import v1.0.4
+make daily-import-ps         # встречается в Ops Daily Import
 ```
 
-**Skip inventory snapshot:**
+Manual list:
 ```bash
-python -m scripts.daily_import --no-snapshot
+make daily-import-files FILES="file1.xlsx file2.xlsx"
+make daily-import-files-ps1 FILES="file1.xlsx,file2.xlsx"   # вариант для ps1-обёртки
+make daily-import-files-ps  FILES="file1.xlsx,file2.xlsx"   # вариант для ops-обёртки
 ```
 
-**Manual inventory snapshot:**
-```bash
-# Current date
-make sync-inventory-history
+---
 
-# Custom date
-make sync-inventory-history AS_OF="2025-12-31"
+### 7) `docker compose` vs `docker-compose`
 
-# Dry-run first
-make sync-inventory-history-dry-run AS_OF="2025-12-31"
-```
-
-### ETL Enhancements
-
-Daily import v1.0.4 включает расширенные возможности ETL:
-
-**Supplier Normalization:**
-- Новое поле `supplier` в таблице products
-- Нормализованные ключи через `norm_supplier_key()`
-- Fallback: supplier → producer
-
-**Extended Price Tracking:**
-- `price_list_rub` — прайсовая цена от поставщика
-- `price_final_rub` — финальная цена со скидкой
-- `price_rub` — текущая цена (обратная совместимость)
-- История цен с effective dates
-
-**Inventory Support:**
-- `stock_total` — общий доступный остаток
-- `reserved` — зарезервированный остаток
-- `stock_free` — свободный остаток (вычисляется если отсутствует)
-- Ежедневные snapshot'ы в `inventory_history`
-
-### Documentation
-
-- **Full Guide:** [docs/changes_daily_import.md](docs/changes_daily_import.md)
-- **Migration Guide:** [docs/MIGRATION_GUIDE_v1.0.4.md](docs/MIGRATION_GUIDE_v1.0.4.md)
-- **Quick Reference:** [QUICK_REFERENCE.md](QUICK_REFERENCE.md)
-- **Changelog:** [CHANGELOG.md](CHANGELOG.md)
-
-### Version History
-
-| Version | Status | Notes |
-|---------|--------|-------|
-| v1.0.4 | ✅ Production | Current stable release |
-| v1.0.3 | ⚠️ Incomplete | Missing sync fix |
-| v1.0.2 | ❌ Broken | TypeError |
-| v1.0.1 | ❌ Broken | RecursionError |
-
-**Always use v1.0.4 in production.**
+В проекте рекомендуется **Compose v2** (`docker compose`). Если в вашей среде доступен только `docker-compose`, используйте его эквивалентно.
 
 ---
 
@@ -670,7 +642,7 @@ make dr-smoke-truncate DR_BACKUP_KEEP=2 MANAGE_PROMTAIL=1
 │  • Inventory Management                      │
 │  • Export Services (JSON/XLSX/PDF)           │
 │  • Winery Management                         │
-│  • Daily Import v1.0.4 🎉                    │
+│  • Daily Import (Ops) 🎉                    │
 │  • Import Orchestrator (M1) 🎉               │
 └─────────────────┬────────────────────────────┘
                   │
@@ -710,7 +682,7 @@ make dr-smoke-truncate DR_BACKUP_KEEP=2 MANAGE_PROMTAIL=1
 - **[INDEX.md](INDEX.md)** — Навигация по документации
 - **[QUICK_REFERENCE.md](QUICK_REFERENCE.md)** — Шпаргалка по командам
 - **[CHANGELOG.md](CHANGELOG.md)** — История изменений
-- **[docs/changes_daily_import.md](docs/changes_daily_import.md)** — Daily Import v1.0.4 guide
+- **[docs/changes_daily_import.md](docs/changes_daily_import.md)** — Daily Import (Ops) guide
 - **[docs/MIGRATION_GUIDE_v1.0.4.md](docs/MIGRATION_GUIDE_v1.0.4.md)** — Migration guide
 - **[docs/dev/import_flow.md](docs/dev/import_flow.md)** — Import Operations архитектура
 - **[docs/runbook_import.md](docs/runbook_import.md)** — Import Operations runbook
@@ -722,13 +694,23 @@ make dr-smoke-truncate DR_BACKUP_KEEP=2 MANAGE_PROMTAIL=1
 
 ## 🔧 Makefile команды
 
-### Daily Import (v1.0.4)
+### Daily Import (Ops)
 ```bash
-make daily-import                  # Auto-inbox (newest file)
-make daily-import-files FILES="..."  # Explicit files
-make daily-import-ps1              # PowerShell wrapper
-make sync-inventory-history AS_OF="2025-12-31"  # Manual snapshot
-make sync-inventory-history-dry-run  # Snapshot dry-run
+make inbox-ls
+make daily-import
+
+# manual list (простые имена)
+make daily-import-files FILES="file1.xlsx file2.xlsx"
+
+# Windows-friendly (пробелы/кириллица) — через PowerShell wrapper
+make daily-import-ps
+make daily-import-files-ps FILES="2025_12_24 Прайс.xlsx,2025_12_25 Другой прайс.xlsx"
+
+# история и просмотр run по id
+make daily-import-history
+make daily-import-show RUN_ID=<uuid>
+```
+
 ```
 
 ### Development
@@ -874,3 +856,93 @@ make smoke-e2e SMOKE_SUPPLIER=dreemwine SMOKE_FRESH=1
 ---
 
 **Made with ❤️ and 🍷**
+
+
+
+## Developer docs: Ops Daily Import (inbox → archive/quarantine)
+
+Ниже — практические способы запустить **Ops Daily Import** (обработка Excel-прайсов из `data/inbox/` с перемещением в `data/archive/` или `data/quarantine/`).
+
+### Предварительные условия
+
+1. Поднимите сервисы:
+   - `docker compose up -d --build db api`
+2. Положите `.xlsx` в `./data/inbox/` на хосте (это volume в контейнер: `/app/data/inbox/`).
+3. (Для UI / API) Возьмите `API_KEY` из `.env` и используйте как `X-API-Key`.
+
+### Способ 1 — Web UI (Windows-friendly)
+
+1. Откройте страницу: `http://localhost:18000/daily-import`
+2. Вставьте `X-API-Key` (можно сохранить в `localStorage`).
+3. Нажмите **Обновить Inbox**, затем выберите:
+   - **Auto** — обработать самый новый файл в inbox
+   - **Manual** — отметить конкретные файлы галочками
+4. Нажмите **Запустить импорт** и дождитесь результата.
+
+Ожидаемое поведение: при **успешной обработке** файл исчезает из inbox и появляется в `data/archive/...`.
+
+### Способ 2 — PowerShell wrapper (через контейнер)
+
+Auto (самый новый файл):
+
+```powershell
+.\scripts\run_daily_import.ps1 -Mode auto
+```
+
+Manual (список файлов; поддерживаются пробелы и кириллица; можно через запятую):
+
+```powershell
+.\scripts\run_daily_import.ps1 -Mode files -Files "2025_12_24 Прайс_Легенда_Виноделия.xlsx"
+```
+
+Несколько файлов:
+
+```powershell
+.\scripts\run_daily_import.ps1 -Mode files -Files "file 1.xlsx,file 2.xlsx"
+```
+
+Скрипт печатает JSON результата и выставляет exit code:
+- `0` — OK / OK_WITH_SKIPS без карантина
+- `1` — есть QUARANTINED
+- `2` — FAILED / TIMEOUT
+- `4` — inbox пуст (NO_FILES_IN_INBOX)
+- `5` — не удалось распарсить JSON
+
+### Способ 3 — Makefile (кросс-платформенно)
+
+Auto:
+
+```powershell
+make daily-import
+```
+
+Manual (внимание: Makefile-таргет **не дружит** с именами файлов, содержащими пробелы; для Windows предпочтительнее wrapper ниже):
+
+```powershell
+make daily-import-files FILES="file1.xlsx file2.xlsx"
+```
+
+Windows-friendly (через wrapper):
+
+```powershell
+make daily-import-ps
+make daily-import-files-ps FILES="2025_12_24 Прайс_Легенда_Виноделия.xlsx"
+```
+
+Дополнительно:
+
+```powershell
+make inbox-ls
+make daily-import-history
+make daily-import-show RUN_ID=<uuid>
+make daily-import-quarantine-stats
+```
+
+### Примечание про `docker compose` vs `docker-compose`
+
+В документации и Makefile допускаются оба варианта. В проекте рекомендуется `docker compose` (Compose V2). Если у вас установлен только `docker-compose`, задайте переменную:
+
+```powershell
+$env:DOCKER_COMPOSE="docker-compose"
+make dev-up
+```

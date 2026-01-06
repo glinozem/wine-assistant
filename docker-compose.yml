@@ -54,6 +54,10 @@ services:
         condition: service_completed_successfully
     environment:
       TZ: Europe/Moscow
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
       # Тоже жёстко db:5432, чтобы не зависеть от внешних DB_HOST/DB_PORT
       DB_HOST: db
       DB_PORT: 5432

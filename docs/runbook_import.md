@@ -1,351 +1,152 @@
-# Runbook: импорт прайс-листов (операционный)
+# Runbook: Ops Daily Import (inbox → archive/quarantine)
+
+Этот runbook описывает **текущий** поток импорта прайс‑листов через Ops Daily Import:
+- вход: `data/inbox/*.xlsx`
+- выход: `data/archive/YYYY-MM/...` (и/или `data/quarantine/...` при проблемах)
+
+Импорт идемпотентный: если файл уже был импортирован ранее (тот же SHA‑256), он будет помечен `SKIPPED` с причиной `ALREADY_IMPORTED_SAME_HASH` и, как правило, перемещён в archive.
+
+---
 
 ## 0) Предварительные условия
 
-- `docker compose up -d` поднял сервисы, включая `db`.
-- Активировано виртуальное окружение (или `python` указывает на venv):
-  ```powershell
-  .\.venv\Scripts\Activate.ps1
-  ```
-- В `data/inbox/` лежит прайс поставщика в формате Excel.
-  Рекомендованный формат имени: `YYYY_MM_DD ... .xlsx`.
-
-## 1) Стандартный путь (дежурный запуск)
+1. Запущены сервисы:
 
 ```powershell
-# Простейший вариант
-.\scripts\run_daily_import.ps1 -Supplier "dreemwine"
-
-# С диагностикой (показывает топ-5 кандидатов + выбранный файл)
-.\scripts\run_daily_import.ps1 -Supplier "dreemwine" -Verbose
-
-# Dry-run (не запускает импорт, только показывает что будет сделано)
-.\scripts\run_daily_import.ps1 -Supplier "dreemwine" -Verbose -WhatIf
+docker-compose up -d --build db api
 ```
 
-Скрипт:
-- выберет последний файл по **дате в имени** `YYYY_MM_DD`,
-- определит `as_of_date` из имени,
-- запустит orchestrator.
+2. Есть API key (в `.env`):
 
-**Диагностика файлов (пример вывода `-Verbose -WhatIf`):**
-```
-=== Wine Assistant - Daily Import ===
-Repo root:       D:\...\wine-assistant
-Supplier:        dreemwine
-
-PowerShell: 5.1.26100.7462
-Python: D:\...\wine-assistant\.venv\Scripts\python.exe
-Mode:            auto-discovery
-Inbox:           D:\...\wine-assistant\data\inbox
-
-Scanning inbox: D:\...\wine-assistant\data\inbox
-Top candidates (sorted):
- 1) 2025_12_10 Прайс_Легенда_Виноделия.xlsx | parsed_date=2025-12-10 | last_write=2025-12-24 13:42:00
- 2) 2025_12_03 Прайс_Легенда_Виноделия.xlsx | parsed_date=2025-12-03 | last_write=2025-12-03 11:00:00
- 3) 2025_12_02 Прайс_Легенда_Виноделия.xlsx | parsed_date=2025-12-02 | last_write=2025-12-24 13:42:00
-Chosen file: D:\...\2025_12_10 Прайс_Легенда_Виноделия.xlsx
-Selected file:   2025_12_10 Прайс_Легенда_Виноделия.xlsx
-Selected full path: D:\...\2025_12_10 Прайс_Легенда_Виноделия.xlsx
-as_of_date:      2025-12-10 (from filename)
-as_of_date source: filename (override via -AsOfDate to change)
-Command:        "D:\...\.venv\Scripts\python.exe" -m scripts.run_import_orchestrator --supplier dreemwine --file "..." --as-of-date 2025-12-10 --import-fn scripts.import_targets.run_daily_adapter:import_with_run_daily
-
-WHATIF: import orchestrator will NOT be executed.
-WHATIF: command       = "..." -m scripts.run_import_orchestrator ...
-WHATIF: supplier      = dreemwine
-WHATIF: selected file = D:\...\2025_12_10 Прайс_Легенда_Виноделия.xlsx
-WHATIF: as_of_date    = 2025-12-10
+```env
+API_KEY=...
 ```
 
-Обратите внимание:
-- Команда выводится в **одну строку** (без переносов) для удобства копирования
-- Топ-5 кандидатов отсортированы по дате из имени (desc), затем по LastWriteTime
-- `as_of_date source: filename` показывает откуда взята дата
+3. В `data/inbox/` лежит один или несколько `.xlsx` файлов.
 
-## 2) Типовые SQL-проверки
-
-### 2.1 Последние прогоны
+Проверка с хоста и из контейнера:
 
 ```powershell
-docker compose exec -T db psql -U postgres -d wine_db -c `
-  "select run_id, status, supplier, as_of_date, file_sha256, envelope_id,
-          total_rows_processed, rows_skipped, created_at
-   from import_runs
-   order by created_at desc
-   limit 20;"
-```
+Get-ChildItem .\data\inbox
 
-### 2.2 Проверка «idempotency-скипа»
-
-Ожидаемое поведение: при повторе **того же файла** (тот же sha256) для того же `as_of_date`
-создаётся `status=skipped`, при этом `envelope_id` совпадает с последним `success`.
-
-```powershell
-docker compose exec -T db psql -U postgres -d wine_db -c `
-  "select run_id, status, as_of_date, file_sha256, envelope_id, created_at
-   from import_runs
-   where supplier='dreemwine' and as_of_date='2025-12-10'
-   order by created_at desc;"
-```
-
-**Пример результата:**
-```
-                run_id                | status  | as_of_date |            file_sha256            |             envelope_id
---------------------------------------+---------+------------+-----------------------------------+--------------------------------------
- 7273eabf-ac5c-4a1f-9b59-982eef6c7520 | skipped | 2025-12-10 | e8b0...                          | 6a8a99ff-e01d-412e-8ebd-60da5defd2f6
- 153a53b0-4002-41e8-9111-a33d9b0b5333 | success | 2025-12-10 | e8b0...                          | 6a8a99ff-e01d-412e-8ebd-60da5defd2f6
-```
-
-Обратите внимание: `envelope_id` одинаковый, что подтверждает идемпотентность.
-
-## 3) Частые проблемы и что делать
-
-### 3.1 Ошибка partition: `effective_from = null`
-
-Симптом (раньше встречалось): `no partition ... effective_from = (null)`.
-
-Причина: ETL писал цену без `effective_from`.
-Решение уже внесено в `etl/run_daily.py`: `effective_from` всегда вычисляется из `as_of_date` (или `as_of_datetime`).
-
-### 3.2 ETL produced 0 valid rows
-
-Симптом: `ETL produced 0 valid rows. Check sheet name and mapping_template.json ...`
-
-Чаще всего:
-- неверное имя sheet,
-- неправильный `header_row`,
-- колонки в прайсе поменялись и mapping не «сходится».
-
-Действия:
-1) проверить `etl/mapping_template.json` (sheet/header_row/columns),
-2) вывести колонки через pandas (см. QUICK_REFERENCE),
-3) при необходимости обновить mapping.
-
-### 3.3 Неправильный файл выбран
-
-Симптом: скрипт выбирает не тот файл, который вы ожидали.
-
-Диагностика:
-```powershell
-# Посмотреть какой файл будет выбран (без запуска импорта)
-.\scripts\run_daily_import.ps1 -Supplier "dreemwine" -Verbose -WhatIf
-```
-
-Output покажет (см. пример в разделе 1):
-- Топ-5 кандидатов с датами
-- Выбранный файл
-- Извлечённый as_of_date
-
-Решение:
-```powershell
-# Явно указать нужный файл
-.\scripts\run_daily_import.ps1 `
-  -Supplier "dreemwine" `
-  -FilePath "data/inbox/2025_12_03 Прайс_Легенда_Виноделия.xlsx"
-
-# Или override as_of_date
-.\scripts\run_daily_import.ps1 `
-  -Supplier "dreemwine" `
-  -AsOfDate "2025-12-03"
-```
-
-### 3.4 Envelope не создаётся / падает вставка
-
-Envelope создаётся best-effort.
-Если `public.ingest_envelope` отсутствует или schema требует NOT NULL без defaults — envelope будет `None`, но импорт продолжится.
-
-Если envelope существует, но файл уже был загружен ранее, возможен `UniqueViolation(file_sha256)`.
-В этом случае код делает lookup по sha256 и возвращает существующий `envelope_id`.
-
-## 4) Детектор «зависших» импортов
-
-### Dry-run (проверка без запуска)
-
-```powershell
-# Проверить параметры и команду без запуска
-.\scripts\run_stale_detector.ps1 -RunningMinutes 120 -PendingMinutes 15 -Verbose -WhatIf
-```
-
-**Expected output:**
-```
-=== Wine Assistant - Stale Import Runs Detector ===
-Repo root:       D:\...\wine-assistant
-RunningMinutes:  120
-PendingMinutes:  15
-
-PowerShell: 5.1.26100.7462
-Python: D:\...\wine-assistant\.venv\Scripts\python.exe
-Command:        "D:\...\.venv\Scripts\python.exe" -m scripts.mark_stale_import_runs --running-minutes 120 --pending-minutes 15
-WHATIF: stale detector will NOT be executed.
-WHATIF: command        = "..." -m scripts.mark_stale_import_runs --running-minutes 120 --pending-minutes 15
-WHATIF: RunningMinutes = 120
-WHATIF: PendingMinutes = 15
-```
-
-### Реальный запуск с диагностикой
-
-```powershell
-# Запуск с диагностикой
-.\scripts\run_stale_detector.ps1 -RunningMinutes 120 -PendingMinutes 15 -Verbose
-```
-
-**Expected output:**
-```
-=== Wine Assistant - Stale Import Runs Detector ===
-Repo root:       D:\...\wine-assistant
-RunningMinutes:  120
-PendingMinutes:  15
-
-PowerShell: 5.1.26100.7462
-Python: D:\...\wine-assistant\.venv\Scripts\python.exe
-Command:        "..." -m scripts.mark_stale_import_runs --running-minutes 120 --pending-minutes 15
-Running stale detector...
-
-2025-12-26 08:58:57,299 INFO __main__ stale_import_runs_done rolled_back_running=0 rolled_back_pending=0
-
-Stale detector completed successfully.
-```
-
-### Тихий запуск (без диагностики)
-
-```powershell
-# Defaults: RunningMinutes=120, PendingMinutes=15
-.\scripts\run_stale_detector.ps1
-```
-
-**Назначение:** найти `import_runs` со статусом `running` или `pending`, которые висят дольше порога, и перевести в `rolled_back`.
-
-**Параметры:**
-- `-RunningMinutes` — порог для stuck "running" импортов (default: 120)
-- `-PendingMinutes` — порог для stuck "pending" импортов (default: 15)
-- `-Verbose` — показывает версии PowerShell/Python, команду запуска (однострочный формат)
-- `-WhatIf` — не запускает detector, только показывает параметры
-
-**Важно:** Команда выводится в одну строку для удобства копирования и логирования.
-
-## 5) Примечание по семантике `as_of_date`
-
-`as_of_date` — бизнес-дата «эффективности» цен (используется как `effective_from` в `product_prices`).
-
-По умолчанию `run_daily_import.ps1` берёт её из имени файла (`YYYY_MM_DD` → `YYYY-MM-DD`), но вы можете override'ить `-AsOfDate`.
-
-**Пример:**
-```powershell
-# Файл: 2025_12_10 Прайс...xlsx
-# as_of_date автоматически: 2025-12-10
-
-# Override (если бизнес-дата отличается от даты в имени):
-.\scripts\run_daily_import.ps1 -Supplier "dreemwine" -AsOfDate "2025-12-06"
-```
-
-## 6) Типичные сценарии
-
-### 6.1 Первый импорт новой даты
-
-```powershell
-# 1. Проверить что файл появился
-Get-ChildItem "data/inbox/2025_12_24*.xlsx"
-
-# 2. Dry-run для проверки
-.\scripts\run_daily_import.ps1 -Supplier "dreemwine" -Verbose -WhatIf
-
-# Output покажет:
-# - Топ-5 кандидатов
-# - Выбранный файл: 2025_12_24 Прайс...
-# - as_of_date: 2025-12-24 (from filename)
-# - WHATIF: import orchestrator will NOT be executed.
-
-# 3. Запустить импорт
-.\scripts\run_daily_import.ps1 -Supplier "dreemwine"
-
-# 4. Проверить результат
-docker compose exec -T db psql -U postgres -d wine_db -c "
-SELECT run_id, status, total_rows_processed, rows_skipped
-FROM import_runs
-ORDER BY created_at DESC LIMIT 1;"
-```
-
-### 6.2 Повторный импорт (идемпотентность)
-
-```powershell
-# Повторный запуск той же команды
-.\scripts\run_daily_import.ps1 -Supplier "dreemwine"
-
-# Expected output:
-# INFO import_orchestrator: skip. reason=SKIP_ALREADY_SUCCESS
-# INFO Created skipped attempt ... (SKIP_ALREADY_SUCCESS: ...)
-
-# Проверка в БД - должно быть 2 записи: success + skipped
-docker compose exec -T db psql -U postgres -d wine_db -c "
-SELECT status, COUNT(*) as count
-FROM import_runs
-WHERE supplier='dreemwine' AND as_of_date='2025-12-10'
-GROUP BY status;"
-```
-
-**Expected result:**
-```
-  status  | count
-----------+-------
- success  |     1
- skipped  |     1
-```
-
-### 6.3 Retry failed импорта
-
-```powershell
-# 1. Проверить ошибку
-docker compose exec -T db psql -U postgres -d wine_db -c "
-SELECT run_id, error_summary, error_details
-FROM import_runs
-WHERE status = 'failed'
-ORDER BY created_at DESC LIMIT 1;"
-
-# 2. Исправить проблему (например, обновить mapping)
-
-# 3. Retry (той же командой)
-.\scripts\run_daily_import.ps1 -Supplier "dreemwine"
-# Orchestrator создаст новую попытку для той же (supplier, as_of_date, file_sha256)
-```
-
-### 6.4 Cleanup зависших импортов
-
-```powershell
-# 1. Найти зависшие импорты
-docker compose exec -T db psql -U postgres -d wine_db -c "
-SELECT run_id, supplier, status, started_at,
-       EXTRACT(EPOCH FROM (NOW() - started_at))/60 as minutes_running
-FROM import_runs
-WHERE status IN ('running', 'pending')
-ORDER BY started_at;"
-
-# 2. Dry-run stale detector
-.\scripts\run_stale_detector.ps1 -RunningMinutes 120 -PendingMinutes 15 -Verbose -WhatIf
-
-# Output:
-# WHATIF: stale detector will NOT be executed.
-# WHATIF: RunningMinutes = 120
-# WHATIF: PendingMinutes = 15
-
-# 3. Запустить cleanup
-.\scripts\run_stale_detector.ps1 -RunningMinutes 120 -PendingMinutes 15 -Verbose
-
-# Output:
-# Running stale detector...
-# 2025-12-26 08:58:57,299 INFO stale_import_runs_done rolled_back_running=0 rolled_back_pending=0
-# Stale detector completed successfully.
-
-# 4. Проверить результат
-docker compose exec -T db psql -U postgres -d wine_db -c "
-SELECT status, COUNT(*) as count
-FROM import_runs
-WHERE created_at > NOW() - INTERVAL '1 day'
-GROUP BY status;"
+docker-compose exec api ls -la /app/data/inbox
 ```
 
 ---
 
-**Обновлено:** 26 декабря 2025
-**Версия:** 1.2-final
-**Добавлено:** Точные примеры вывода, однострочный формат команд
+## 1) Быстрый старт (Windows)
+
+### Вариант A: Web UI
+
+1. Откройте `http://localhost:18000/daily-import`
+2. Введите `X-API-Key`
+3. Нажмите **«Обновить Inbox»**
+4. Запустите импорт в режиме **Auto** или **Manual (selected files)**
+
+### Вариант B: PowerShell wrapper
+
+```powershell
+# Auto: обработать самый новый файл
+.\scripts\run_daily_import.ps1 -Mode auto
+
+# Manual list (имена должны совпадать с inbox)
+.\scripts\run_daily_import.ps1 -Mode files -Files "2025_12_24 Прайс.xlsx,2025_12_25 Другой прайс.xlsx"
+```
+
+---
+
+## 2) Makefile команды
+
+```powershell
+# inbox
+make inbox-ls
+
+# auto
+make daily-import
+
+# manual list (простые имена)
+make daily-import-files FILES="file1.xlsx file2.xlsx"
+
+# manual list (Windows-friendly, пробелы/кириллица)
+make daily-import-files-ps FILES="2025_12_24 Прайс.xlsx,2025_12_25 Другой прайс.xlsx"
+
+# просмотр истории и run по id
+make daily-import-history
+make daily-import-show RUN_ID=<uuid>
+```
+
+---
+
+## 3) Проверка результата и интерпретация статусов
+
+### 3.1 Получить список inbox по API
+
+```powershell
+$k = (Get-Content .\.env | Where-Object { $_ -match '^API_KEY=' } | Select-Object -First 1) -replace '^API_KEY=', ''
+$k = $k.Trim()
+
+irm "http://localhost:18000/api/v1/ops/daily-import/inbox" `
+  -Headers @{ "X-API-Key" = $k } | ConvertTo-Json -Depth 5
+```
+
+### 3.2 Посмотреть детали run
+
+```powershell
+$rid = "<run_id>"
+irm "http://localhost:18000/api/v1/ops/daily-import/runs/$rid" `
+  -Headers @{ "X-API-Key" = $k } | ConvertTo-Json -Depth 10
+```
+
+### 3.3 Статусы
+
+**Run status** (верхний уровень):
+- `OK` — все файлы обработаны успешно
+- `OK_WITH_SKIPS` — есть `SKIPPED` файлы, но ошибок нет
+- `FAILED` — есть `ERROR`/падение обработки хотя бы одного файла
+- `TIMEOUT` — оркестратор не дождался завершения
+
+**File status** (по каждому файлу):
+- `IMPORTED` — импорт выполнен
+- `SKIPPED` — импорт не нужен (часто `ALREADY_IMPORTED_SAME_HASH`)
+- `QUARANTINED` — файл/часть данных попали в карантин
+- `ERROR` — ошибка по файлу (например, файл не найден в inbox)
+
+---
+
+## 4) Частые проблемы
+
+### 4.1 “File not found …”
+
+Причина: в manual list передано имя файла, которого нет в `data/inbox/` (часто — **устаревший выбор**: файл уже был перемещён в archive прошлым запуском).
+
+Что делать:
+1. Нажать **«Обновить Inbox»** в UI или выполнить `make inbox-ls`
+2. Запускать импорт, передавая **точное имя** из inbox
+
+### 4.2 “NO_FILES_IN_INBOX” (Auto)
+
+Причина: `data/inbox/` пуст.
+
+Что делать: добавить `.xlsx` в `data/inbox/`, затем повторить запуск.
+
+### 4.3 “Forbidden / 403”
+
+Причина: отсутствует или неверный `X-API-Key`.
+
+Что делать: убедиться, что API key берётся из `.env` и передаётся в запросе / введён в UI.
+
+---
+
+## 5) Housekeeping
+
+### 5.1 Очистка архива
+
+```powershell
+make daily-import-cleanup-archive DAYS=90
+```
+
+### 5.2 Статистика по quarantine
+
+```powershell
+make daily-import-quarantine-stats
+```
