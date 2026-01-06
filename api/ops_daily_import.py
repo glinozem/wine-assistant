@@ -24,7 +24,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Blueprint, jsonify, request, send_file
+from flask import jsonify, request, send_file
 
 # Paths
 BASE_DIR = Path(__file__).parent.parent
@@ -34,6 +34,63 @@ ARCHIVE_DIR = BASE_DIR / "data" / "archive"
 QUARANTINE_DIR = BASE_DIR / "data" / "quarantine"
 
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
+ALLOWED_MODES = {"auto", "files"}
+MAX_FILES = 50
+
+
+def _normalize_payload(payload: dict) -> tuple[str, list[str]]:
+    """
+    Validate and normalize user payload for subprocess execution.
+    Key goals:
+    - allowlist mode
+    - prevent argparse option-injection via filenames starting with '-'
+    - prevent path traversal / absolute paths (only basenames)
+    - ensure files exist in INBOX_DIR
+    """
+    if not isinstance(payload, dict):
+        raise ValueError("payload must be a JSON object")
+
+    mode = payload.get("mode", "auto")
+    if mode not in ALLOWED_MODES:
+        raise ValueError(f"Invalid mode: {mode}")
+
+    # If not explicit files-mode, ignore files completely
+    if mode != "files":
+        return mode, []
+
+    files = payload.get("files", []) or []
+    if not isinstance(files, list):
+        raise ValueError("files must be a list")
+    if len(files) > MAX_FILES:
+        raise ValueError(f"Too many files (max {MAX_FILES})")
+
+    safe_files: list[str] = []
+    for f in files:
+        if not isinstance(f, str):
+            raise ValueError("files must contain only strings")
+
+        name = Path(f).name
+        # Reject any path components (e.g. subdir/file.xlsx, .., absolute paths)
+        if name != f:
+            raise ValueError(f"Invalid filename: {f}")
+        # Reject option-like args (argparse injection)
+        if not name or name.startswith("-"):
+            raise ValueError(f"Invalid filename: {f}")
+        if not name.lower().endswith(".xlsx"):
+            raise ValueError(f"Only .xlsx allowed: {name}")
+
+        candidate = INBOX_DIR / name
+        if not candidate.exists():
+            raise ValueError(f"File not found in inbox: {name}")
+
+        safe_files.append(name)
+
+    if not safe_files:
+        raise ValueError("mode=files requires non-empty files list")
+
+    return mode, safe_files
+
 
 def register_ops_daily_import(app, require_api_key, db_connect, db_query):
     """Register ops daily-import endpoints"""
@@ -45,8 +102,8 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
         tmp_file = LOGS_DIR / f"{run_id}.json.tmp"
 
         try:
-            with open(tmp_file, 'w') as f:
-                json.dump(data, f, indent=2)
+            with open(tmp_file, "w", encoding="utf-8") as f:
+               json.dump(data, f, indent=2, ensure_ascii=False)
 
             os.replace(str(tmp_file), str(log_file))
         except Exception as e:
@@ -54,15 +111,13 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
             if tmp_file.exists():
                 tmp_file.unlink()
 
-    def execute_import_background(run_id, payload):
+    def execute_import_background(run_id, mode, files):
         """
         Execute import in background.
 
         NOTE: RUNNING log already written by POST /run (FIX R1)
         This just executes and updates the log.
         """
-        mode = payload.get("mode", "auto")
-        files = payload.get("files", [])
 
         # Build command (pass --run-id, use sys.executable)
         cmd = [
@@ -72,16 +127,17 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
             "--no-log-file"
         ]
 
-        if mode == "files" and files:
-            cmd.extend(["--files"] + files)
+        if mode == "files":
+            cmd.extend(["--files", *files])
 
         try:
-            proc = subprocess.Popen(
+            proc = subprocess.Popen(  # nosemgrep: python.flask.security.injection.subprocess-injection.subprocess-injection
                 cmd,
                 cwd=str(BASE_DIR),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True
+                text=True,
+                shell=False,
             )
 
             # FIX R2 + POLISH P2: Catch TimeoutExpired separately
@@ -176,6 +232,10 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
         """
         try:
             payload = request.get_json() or {}
+            try:
+                mode, files = _normalize_payload(payload)
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 400
 
             import uuid
             run_id = str(uuid.uuid4())
@@ -185,6 +245,8 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
             initial_status = {
                 "run_id": run_id,
                 "status": "RUNNING",
+                "mode": mode,
+                "files": files,
                 "started_at": datetime.now(timezone.utc).isoformat(),  # FIX R3
                 "message": "Import in progress..."
             }
@@ -194,7 +256,7 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
             # Now start background process (daemon=False - survives worker restart)
             proc = multiprocessing.Process(
                 target=execute_import_background,
-                args=(run_id, payload),
+                args=(run_id, mode, files),
                 daemon=False
             )
             proc.start()
@@ -220,8 +282,10 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
         """
         try:
             payload = request.get_json() or {}
-            mode = payload.get("mode", "auto")
-            files = payload.get("files", [])
+            try:
+                mode, files = _normalize_payload(payload)
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 400
 
             # POLISH P1: Generate run_id for sync too (consistent history)
             import uuid
@@ -238,15 +302,32 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
             if mode == "files" and files:
                 cmd.extend(["--files"] + files)
 
-            result = subprocess.run(
+            result = subprocess.run(  # nosemgrep: python.flask.security.injection.subprocess-injection.subprocess-injection
                 cmd,
                 cwd=str(BASE_DIR),
                 capture_output=True,
                 text=True,
-                timeout=900
+                timeout=900,
+                shell=False,
             )
 
-            import_result = json.loads(result.stdout)
+            try:
+                import_result = json.loads(result.stdout) if result.stdout else None
+            except json.JSONDecodeError:
+                import_result = None
+
+            if not isinstance(import_result, dict):
+                import_result = {
+                    "run_id": run_id,
+                    "status": "FAILED",
+                    "error": f"Invalid JSON from orchestrator (exit={result.returncode})",
+                    "stdout": (result.stdout or "")[:1000],
+                    "stderr": (result.stderr or "")[:1000],
+                    "finished_at": datetime.now(timezone.utc).isoformat(),
+                }
+
+            if import_result.get("run_id") != run_id:
+                import_result["run_id"] = run_id
 
             # POLISH P1: Write to history for consistency
             write_log_atomic(run_id, import_result)
