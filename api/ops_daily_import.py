@@ -76,15 +76,12 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
             cmd.extend(["--files"] + files)
 
         try:
-            # nosemgrep: python.flask.security.injection.subprocess-injection
-            # Justification: inputs validated in caller (ops_daily_import_run)
             proc = subprocess.Popen(
                 cmd,
                 cwd=str(BASE_DIR),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,
-                shell=False
+                text=True
             )
 
             # FIX R2 + POLISH P2: Catch TimeoutExpired separately
@@ -180,29 +177,6 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
         try:
             payload = request.get_json() or {}
 
-            # SECURITY: Validate payload before passing to background process
-            mode = payload.get("mode", "auto")
-            files = payload.get("files", [])
-
-            if mode not in ("auto", "files"):
-                return jsonify({"error": "Invalid mode",
-                                "allowed_values": ["auto", "files"]}), 400
-
-            if mode == "files":
-                if not files or not isinstance(files, list):
-                    return jsonify(
-                        {"error": "mode=files requires files array"}), 400
-                for fname in files:
-                    if not isinstance(fname, str):
-                        return jsonify(
-                            {"error": f"Invalid filename type"}), 400
-                    if "/" in fname or "\\" in fname or ".." in fname:
-                        return jsonify(
-                            {"error": f"Path traversal blocked: {fname}"}), 400
-                    if not fname.lower().endswith(".xlsx"):
-                        return jsonify(
-                            {"error": f"Must be .xlsx: {fname}"}), 400
-
             import uuid
             run_id = str(uuid.uuid4())
 
@@ -249,50 +223,27 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
             mode = payload.get("mode", "auto")
             files = payload.get("files", [])
 
-            # SECURITY: Validate inputs
-            if mode not in ("auto", "files"):
-                return jsonify({"error": "Invalid mode",
-                                "allowed_values": ["auto", "files"]}), 400
-
-            if mode == "files":
-                if not files or not isinstance(files, list):
-                    return jsonify(
-                        {"error": "mode=files requires files array"}), 400
-                for fname in files:
-                    if not isinstance(fname, str):
-                        return jsonify(
-                            {"error": f"Invalid filename type"}), 400
-                    if "/" in fname or "\\" in fname or ".." in fname:
-                        return jsonify(
-                            {"error": f"Path traversal blocked: {fname}"}), 400
-                    if not fname.lower().endswith(".xlsx"):
-                        return jsonify(
-                            {"error": f"Must be .xlsx: {fname}"}), 400
-
             # POLISH P1: Generate run_id for sync too (consistent history)
             import uuid
             run_id = str(uuid.uuid4())
 
-            # Build command with explicit whitelist approach
-            base_cmd = [sys.executable, "-m", "scripts.daily_import_ops"]
+            # Use sys.executable + pass run_id
+            cmd = [
+                sys.executable, "-m", "scripts.daily_import_ops",
+                "--mode", mode,
+                "--run-id", run_id,      # POLISH P1: Consistency!
+                "--no-log-file"           # API will write log
+            ]
 
-            # Explicit whitelist for mode (Semgrep-friendly)
-            if mode == "auto":
-                cmd = base_cmd + ["--mode", "auto", "--run-id", run_id,
-                                  "--no-log-file"]
-            elif mode == "files":
-                cmd = base_cmd + ["--mode", "files", "--run-id", run_id,
-                                  "--no-log-file", "--files"] + files
-            else:
-                return jsonify({"error": "Invalid mode"}), 400
+            if mode == "files" and files:
+                cmd.extend(["--files"] + files)
 
             result = subprocess.run(
                 cmd,
                 cwd=str(BASE_DIR),
                 capture_output=True,
                 text=True,
-                timeout=900,
-                shell=False
+                timeout=900
             )
 
             import_result = json.loads(result.stdout)
