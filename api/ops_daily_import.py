@@ -284,8 +284,8 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
             if mode == "files" and files:
                 cmd.extend(["--files"] + files)
 
-            # nosemgrep: python.flask.security.injection.subprocess-injection
             # Justification: inputs validated above (mode whitelisted, files path-checked)
+            # nosemgrep: python.flask.security.injection.subprocess-injection
             result = subprocess.run(
                 cmd,
                 cwd=str(BASE_DIR),
