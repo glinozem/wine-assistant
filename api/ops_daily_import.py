@@ -286,7 +286,7 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
 
             # Justification: inputs validated above (mode whitelisted, files path-checked)
             # nosemgrep: python.flask.security.injection.subprocess-injection
-            result = subprocess.run(
+            result = subprocess.run( # nosemgrep
                 cmd,
                 cwd=str(BASE_DIR),
                 capture_output=True,
