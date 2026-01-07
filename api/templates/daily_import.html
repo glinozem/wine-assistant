@@ -495,6 +495,8 @@
         </div>
 
         <button id="refreshInboxBtn" class="btn">🔄 Обновить Inbox</button>
+        <button id="uploadInboxBtn" class="btn">⬆️ Загрузить .xlsx</button>
+        <input type="file" id="uploadInboxInput" accept=".xlsx" multiple style="display:none;" />
         <button id="runImportBtn" class="btn primary">▶ Запустить импорт</button>
         <button id="copyJsonBtn" class="btn" style="display:none;">📋 Copy JSON</button>
         <a href="/ui" class="btn">← Назад к каталогу</a>
@@ -559,6 +561,7 @@
   const API_PREFIX = "/api/v1/ops/daily-import";
   const RUN_POLL_INTERVAL_MS = 1200;
   const RUN_POLL_TIMEOUT_MS  = 5 * 60 * 1000;
+  const UPLOAD_MAX_FILES = 50;
   const RUNNING_STATUSES = new Set(["STARTED","RUNNING","IN_PROGRESS"]);
 
   function normalizeSelectedMode(obj, requestedMode){
@@ -609,6 +612,8 @@
   const elImportMode = document.getElementById("importMode");
   const elRefreshInboxBtn = document.getElementById("refreshInboxBtn");
   const elRunImportBtn = document.getElementById("runImportBtn");
+  const elUploadInboxBtn = document.getElementById("uploadInboxBtn");
+  const elUploadInboxInput = document.getElementById("uploadInboxInput");
   const elCopyJsonBtn = document.getElementById("copyJsonBtn");
   const elApiKey = document.getElementById("apiKey");
   const elApiStatus = document.getElementById("apiStatus");
@@ -920,6 +925,77 @@
     renderInboxFiles();
   });
 
+  function setUploadEnabled(enabled){
+    elUploadInboxBtn.disabled = !enabled;
+  }
+
+  async function uploadInboxFiles(fileList){
+    const files = Array.from(fileList || []).filter(Boolean);
+    if (files.length === 0) return;
+    if (files.length > UPLOAD_MAX_FILES) {
+      showToast("Ошибка", `Максимум ${UPLOAD_MAX_FILES} файлов за один запрос`, "error");
+      return;
+    }
+
+    // Optional: quick client-side guardrail (backend тоже проверит)
+    const onlyXlsx = files.filter(f => String(f.name || "").toLowerCase().endsWith(".xlsx"));
+    if (onlyXlsx.length !== files.length) {
+      showToast("Ошибка", "Разрешены только файлы .xlsx", "error");
+      return;
+    }
+
+    try {
+      setApiStatus("Загрузка...", "");
+      setUploadEnabled(false);
+      elInboxFooter.innerHTML = '<div class="loader"><span class="spinner"></span><span>Загрузка файлов...</span></div>';
+
+      const fd = new FormData();
+      for (const f of files) fd.append("files", f);
+
+      // ВАЖНО: не ставим Content-Type — браузер сам выставит boundary
+      const resp = await apiFetch(API_PREFIX + "/inbox/upload", {
+        method: "POST",
+        body: fd
+      });
+
+      const uploaded = (resp && resp.uploaded) ? resp.uploaded : [];
+      const rejected = (resp && resp.rejected) ? resp.rejected : [];
+
+      const u = uploaded.length;
+      const r = rejected.length;
+
+      if (u === 0 && r > 0) {
+        // показать одну-две причины, не спамить
+        const first = rejected[0];
+        const msg = first
+          ? `Ничего не загружено. ${first.original_name || "Файл"}: ${first.reason || "INVALID_FILE"}`
+          : "Ничего не загружено.";
+        showToast("Upload", msg, "error");
+      } else if (r > 0) {
+          const first = rejected[0];
+          const hint = first ? ` Пример: ${first.original_name || "файл"} — ${first.reason || "INVALID_FILE"}` : "";
+          showToast("Upload завершён", `Загружено: ${u}, отклонено: ${r}.${hint}`, "warning");
+      } else {
+          showToast("Upload завершён", `Загружено файлов: ${u}`, "success");
+      }
+
+      // Обновляем inbox (лучше всегда через refreshInbox, чтобы соблюсти reconcileSelectedFiles)
+      await refreshInbox();
+
+      // Если backend вернул inbox.files — можно было бы использовать, но refreshInbox уже делает всё нужное
+      // setApiStatus("✓ Подключено", "ok");
+      // elInboxFooter.textContent = `Загружено: ${u}, отклонено: ${r}`;
+
+    } catch (err) {
+      console.error("Error uploading inbox files:", err);
+      showToast("Ошибка upload", err.message, "error");
+      setApiStatus("Ошибка подключения", "error");
+      elInboxFooter.textContent = "Ошибка загрузки";
+    } finally {
+      setUploadEnabled(true);
+    }
+  }
+
   /* ========= Run Import ========= */
   async function runImport(){
     const mode = elImportMode.value;
@@ -982,7 +1058,6 @@
         payload.files = Array.from(state.selectedFiles);
       }
 
-      const result = [];
       const r0 = await apiFetch(API_PREFIX + "/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1221,7 +1296,8 @@
   /* ========= Download Files ========= */
   window.downloadFile = async function(kind, relpath){
     const apiKey = getApiKey();
-    const url = `/api/v1/ops/files/${kind}/${encodeURI(relpath)}`;
+    const safeRel = String(relpath || "").split("/").map(encodeURIComponent).join("/");
+    const url = `/api/v1/ops/files/${kind}/${safeRel}`;
 
     try {
       const res = await fetch(url, {
@@ -1266,6 +1342,18 @@
   elRunImportBtn.addEventListener("click", runImport);
   elCopyJsonBtn.addEventListener("click", copyJsonResult);
 
+  elUploadInboxBtn.addEventListener("click", () => {
+    // reset input so same file can be selected again
+    elUploadInboxInput.value = "";
+    elUploadInboxInput.click();
+  });
+
+  elUploadInboxInput.addEventListener("change", async () => {
+    await uploadInboxFiles(elUploadInboxInput.files);
+    // reset for repeat selection
+    elUploadInboxInput.value = "";
+  });
+
   elImportMode.addEventListener("change", () => {
     state.selectedFiles.clear();
     renderInboxFiles();
@@ -1277,6 +1365,10 @@
     if (key) {
       localStorage.setItem("wine_assistant_api_key", key);
       setApiStatus("Ключ сохранён", "ok");
+      setUploadEnabled(true);
+    } else {
+      setUploadEnabled(false);
+      setApiStatus("Ключ отсутствует", "warning");
     }
   });
 
@@ -1290,8 +1382,10 @@
 
     // Auto-refresh inbox on load if API key is present
     if (getApiKey()) {
+      setUploadEnabled(true);
       refreshInbox();
     } else {
+      setUploadEnabled(false);
       setApiStatus("Ключ отсутствует", "warning");
     }
   })();

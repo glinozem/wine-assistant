@@ -1,8 +1,0 @@
-﻿# Semgrep ignore rules for wine-assistant
-
-# Ops Daily Import: False positive on validated subprocess call
-# All inputs (mode, files) are validated before subprocess.run():
-# - mode is whitelisted to ("auto", "files")
-# - files array is validated: basename only, no path traversal, .xlsx extension only
-# - Additional validation in orchestrator (scripts/daily_import_ops.py)
-api/ops_daily_import.py:289
