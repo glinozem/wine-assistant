@@ -37,6 +37,12 @@ LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 ALLOWED_MODES = {"auto", "files"}
 MAX_FILES = 50
+# Upload limits (env-overridable)
+MAX_UPLOAD_FILE_MB = int(os.getenv("OPS_UPLOAD_MAX_FILE_MB", "50"))
+MAX_UPLOAD_TOTAL_MB = int(os.getenv("OPS_UPLOAD_MAX_TOTAL_MB", "200"))
+
+MAX_UPLOAD_FILE_BYTES = MAX_UPLOAD_FILE_MB * 1024 * 1024
+MAX_UPLOAD_TOTAL_BYTES = MAX_UPLOAD_TOTAL_MB * 1024 * 1024
 
 
 def _normalize_payload(payload: dict) -> tuple[str, list[str]]:
@@ -70,16 +76,7 @@ def _normalize_payload(payload: dict) -> tuple[str, list[str]]:
         if not isinstance(f, str):
             raise ValueError("files must contain only strings")
 
-        name = Path(f).name
-        # Reject any path components (e.g. subdir/file.xlsx, .., absolute paths)
-        if name != f:
-            raise ValueError(f"Invalid filename: {f}")
-        # Reject option-like args (argparse injection)
-        if not name or name.startswith("-"):
-            raise ValueError(f"Invalid filename: {f}")
-        if not name.lower().endswith(".xlsx"):
-            raise ValueError(f"Only .xlsx allowed: {name}")
-
+        name = _validate_inbox_xlsx_basename(f)
         candidate = INBOX_DIR / name
         if not candidate.exists():
             raise ValueError(f"File not found in inbox: {name}")
@@ -92,8 +89,103 @@ def _normalize_payload(payload: dict) -> tuple[str, list[str]]:
     return mode, safe_files
 
 
+def _validate_inbox_xlsx_basename(raw: str) -> str:
+    """
+    Return safe basename (unicode preserved) or raise ValueError.
+
+    Rules:
+    - must be str, non-empty
+    - basename only (no / or \\), no '..'
+    - must not start with '-'
+    - must end with .xlsx (case-insensitive)
+    """
+    if not isinstance(raw, str):
+        raise ValueError("files must contain only strings")
+
+    name = raw.strip()
+    if not name:
+        raise ValueError(f"Invalid filename: {raw}")
+
+    # Block traversal / path separators explicitly (Linux Path.name won't catch backslash)
+    if "/" in name or "\\" in name:
+        raise ValueError(f"Invalid filename: {raw}")
+    if "\x00" in name:
+        raise ValueError(f"Invalid filename: {raw}")
+    if name.startswith("-"):
+        raise ValueError(f"Invalid filename: {raw}")
+
+    # Block explicit parent dir tokens (defense-in-depth)
+    if name == ".." or name.startswith("..") or ".." in name:
+        raise ValueError(f"Invalid filename: {raw}")
+
+    if not name.lower().endswith(".xlsx"):
+        raise ValueError(f"Only .xlsx allowed: {name}")
+
+    # keep unicode as-is
+    return name
+
+
 def register_ops_daily_import(app, require_api_key, db_connect, db_query):
     """Register ops daily-import endpoints"""
+
+    def _list_inbox_files():
+        files = []
+        if INBOX_DIR.exists():
+            xlsx_files = list(INBOX_DIR.glob("*.xlsx"))
+            newest_file = max(xlsx_files, key=lambda p: p.stat().st_mtime) if xlsx_files else None
+
+            for file_path in xlsx_files:
+                stat = file_path.stat()
+                files.append({
+                    "name": file_path.name,
+                    "size": stat.st_size,
+                    "mtime": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    "is_latest": (file_path == newest_file)
+                })
+        return files
+
+    def _allocate_non_conflicting_name(dest_dir: Path, desired: str) -> str:
+        p = dest_dir / desired
+        if not p.exists():
+            return desired
+
+        stem = Path(desired).stem
+        suffix = Path(desired).suffix  # ".xlsx"
+        for i in range(1, 10_000):
+            candidate = f"{stem} ({i}){suffix}"
+            if not (dest_dir / candidate).exists():
+                return candidate
+        raise ValueError("Too many name conflicts")
+
+    def _save_upload_atomic(file_storage, dest_dir: Path, saved_name: str,
+                            max_bytes: int) -> int:
+        import uuid
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        tmp_path = dest_dir / f".upload-{uuid.uuid4().hex}.tmp"
+        final_path = dest_dir / saved_name
+
+        written = 0
+        try:
+            with open(tmp_path, "wb") as f:
+                while True:
+                    chunk = file_storage.stream.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > max_bytes:
+                        raise ValueError("FILE_TOO_LARGE")
+                    f.write(chunk)
+
+            os.replace(str(tmp_path), str(final_path))
+            return written
+        finally:
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except Exception:
+                    pass
+
 
     # ==================== Atomic log writes ====================
     def write_log_atomic(run_id, data):
@@ -201,22 +293,88 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
     @require_api_key
     def ops_daily_import_inbox():
         """GET /api/v1/ops/daily-import/inbox - list inbox files"""
-        try:
-            files = []
-            if INBOX_DIR.exists():
-                xlsx_files = list(INBOX_DIR.glob("*.xlsx"))
-                newest_file = max(xlsx_files, key=lambda p: p.stat().st_mtime) if xlsx_files else None
+        return jsonify({"files": _list_inbox_files()}), 200
 
-                for file_path in xlsx_files:
-                    stat = file_path.stat()
-                    files.append({
-                        "name": file_path.name,
-                        "size": stat.st_size,
-                        "mtime": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                        "is_latest": (file_path == newest_file)
+    @app.route("/api/v1/ops/daily-import/inbox/upload", methods=["POST"])
+    @require_api_key
+    def ops_daily_import_inbox_upload():
+        try:
+            # total request size pre-check (best-effort)
+            cl = request.content_length
+            if cl is not None and cl > MAX_UPLOAD_TOTAL_BYTES:
+                return jsonify({"error": "payload_too_large"}), 413
+
+            # accept both field names
+            fs_list = []
+            fs_list.extend(request.files.getlist("files"))
+            fs_list.extend(request.files.getlist("files[]"))
+
+            if not fs_list:
+                return jsonify(
+                    {"error": "No files provided (field: files)"}), 400
+            if len(fs_list) > MAX_FILES:
+                return jsonify(
+                    {"error": f"Too many files (max {MAX_FILES})"}), 400
+
+            uploaded = []
+            rejected = []
+
+            total_written = 0
+
+            for fs in fs_list:
+                original = getattr(fs, "filename", None) or ""
+                try:
+                    safe_name = _validate_inbox_xlsx_basename(original)
+                    saved_name = _allocate_non_conflicting_name(INBOX_DIR,
+                                                                safe_name)
+
+                    size = _save_upload_atomic(fs, INBOX_DIR, saved_name,
+                                               MAX_UPLOAD_FILE_BYTES)
+
+                    total_written += size
+                    if total_written > MAX_UPLOAD_TOTAL_BYTES:
+                        # roll back this file and mark rejected
+                        try:
+                            (INBOX_DIR / saved_name).unlink(
+                                missing_ok=True)  # py3.11 ok
+                        except Exception:
+                            pass
+                        rejected.append({
+                            "original_name": original,
+                            "reason": "TOTAL_TOO_LARGE",
+                            "message": f"Total upload limit exceeded ({MAX_UPLOAD_TOTAL_MB} MB)"
+                        })
+                        continue
+
+                    uploaded.append({
+                        "original_name": original,
+                        "saved_name": saved_name,
+                        "size": size,
+                        "status": "UPLOADED"
                     })
 
-            return jsonify({"files": files}), 200
+                except ValueError as e:
+                    # map known errors
+                    reason = str(e)
+                    if reason == "FILE_TOO_LARGE":
+                        rejected.append({
+                            "original_name": original,
+                            "reason": "FILE_TOO_LARGE",
+                            "message": f"Max per-file size is {MAX_UPLOAD_FILE_MB} MB"
+                        })
+                    else:
+                        # default for filename/ext/etc
+                        rejected.append({
+                            "original_name": original,
+                            "reason": "INVALID_FILE",
+                            "message": str(e)
+                        })
+
+            return jsonify({
+                "uploaded": uploaded,
+                "rejected": rejected,
+                "inbox": {"files": _list_inbox_files()},
+            }), 200
 
         except Exception as e:
             return jsonify({"error": str(e)}), 500
