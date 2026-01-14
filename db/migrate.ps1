@@ -79,6 +79,16 @@ ExecSql 'CREATE TABLE IF NOT EXISTS public.schema_migrations (filename text PRIM
 
 # Locate migrations
 $scriptRoot    = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+# Bootstrap базовых таблиц (init.sql)
+$initSql = Join-Path $scriptRoot "init.sql"
+if (Test-Path $initSql) {
+  Info (">> Bootstrap init.sql: " + $initSql)
+  ExecSqlFile $initSql
+} else {
+  Warn ("init.sql not found: " + $initSql + " (skipping)")
+}
+
 $migrationsDir = Join-Path $scriptRoot "migrations"
 if (-not (Test-Path $migrationsDir)) { Err ("Migrations dir not found: " + $migrationsDir); exit 1 }
 

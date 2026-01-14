@@ -28,6 +28,26 @@ jobs:
         run: |
           set -Eeuo pipefail
           python scripts/check_migrations.py
+      - name: Validate DB bootstrap schema contract (init.sql)
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python scripts/check_db_bootstrap_contract.py
+      - name: Disallow edits of canonical migrations (PR only)
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags --prune --depth=1 origin master
+
+          bad=$(git diff --name-only --diff-filter=MR origin/master...HEAD -- db/migrations \
+            | grep -E '^db/migrations/[0-9]{4}_.+\.sql$' || true)
+
+          if [[ -n "${bad}" ]]; then
+            echo "::error::Editing already-existing canonical migrations is forbidden. Add a new migration instead."
+            echo "${bad}"
+            exit 1
+          fi
 
   tests:
     needs: migration_lint

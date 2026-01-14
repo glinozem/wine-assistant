@@ -586,9 +586,53 @@ cp .env.example .env
 # 5. Запуск PostgreSQL
 docker compose up -d db
 
-# 6. Применение миграций
-docker compose exec -T db psql -U postgres -d wine_db < db/migrations/0001_*.sql
-# ... (применить все миграции по порядку)
+# 6.️ Миграции БД (bootstrap + schema evolution)
+
+После первого запуска контейнеров необходимо применить bootstrap-скрипт и канонические миграции БД.
+
+## Docker / Linux / macOS
+
+```bash
+# Применить bootstrap (db/init.sql при необходимости) + миграции (db/migrations)
+make db-migrate
+```
+
+## Windows (PowerShell)
+
+```powershell
+# Применить bootstrap (db/init.sql при необходимости) + миграции (db/migrations)
+.\db\migrate.ps1
+```
+
+## Проверка
+
+```bash
+# Открыть psql в контейнере
+make db-shell
+```
+
+В psql:
+
+```sql
+-- Должны быть применённые миграции
+select * from public.schema_migrations order by version;
+
+-- Базовая проверка guardrails по product_prices
+select count(*) as invalid_ranges
+from public.product_prices
+where effective_to is not null and effective_to <= effective_from;
+```
+
+## Политика и troubleshooting
+
+- Источник истины по изменениям схемы: `db/migrations/NNNN_*.sql`.
+- `db/init.sql` используется только как bootstrap для базовых таблиц (`products`, `inventory`) и не должен содержать «инкрементальные» изменения (индексы/функции/новые таблицы).
+- Если CI сообщает, что изменены старые миграции — откатите правку и добавьте новую миграцию.
+
+Подробнее:
+- `docs/dev/db-migrations.md` — канон миграций и CI-guardrails.
+- `docs/dev/effective_ranges_remediation.md` — playbook исправления effective ranges в `product_prices`.
+
 
 # 7. Запуск API
 flask run --host=0.0.0.0 --port=18000
