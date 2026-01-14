@@ -1,0 +1,14 @@
+# Default owner (single-owner repo)
+* @glinozem
+
+# AI evaluation harness
+/eval/ @glinozem
+
+# API surface
+/api/ @glinozem
+
+# DB migrations (high-risk changes)
+/db/migrations/ @glinozem
+
+# Architecture decision records
+/docs/adr/ @glinozem

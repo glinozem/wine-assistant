@@ -111,12 +111,19 @@ record_migration() {
 }
 
 
-# --- 6) Применяем init + миграции ---
-if [[ -f "${INIT_SQL}" ]]; then
-  echo "[migrator] apply init.sql"
-  apply_sql "${INIT_SQL}"
+# --- 6) Bootstrap базовых таблиц (init.sql) ---
+bootstrap_needed="$("${PSQL[@]}" -tA -c "SELECT (to_regclass('public.products') IS NULL) OR (to_regclass('public.inventory') IS NULL);")"
+
+if [[ "${bootstrap_needed}" == "t" ]]; then
+  if [[ -f "${INIT_SQL}" ]]; then
+    echo "[migrator] bootstrap: apply init.sql -> ${INIT_SQL}"
+    apply_sql "${INIT_SQL}"
+  else
+    echo "[migrator] ERROR: base tables are missing and init.sql not found: ${INIT_SQL}"
+    exit 2
+  fi
 else
-  echo "[migrator] WARNING: ${INIT_SQL} not found, skipping init.sql"
+  echo "[migrator] bootstrap: base tables already exist, skip init.sql"
 fi
 
 record_migration_table_safe
