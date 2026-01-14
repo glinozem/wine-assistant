@@ -16,11 +16,13 @@ Previous fixes:
 - v1.2.1: blockers A-D, risks 3.1-3.2
 """
 
+import base64
 import json
 import multiprocessing
 import os
 import subprocess
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -159,7 +161,6 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
 
     def _save_upload_atomic(file_storage, dest_dir: Path, saved_name: str,
                             max_bytes: int) -> int:
-        import uuid
         dest_dir.mkdir(parents=True, exist_ok=True)
 
         tmp_path = dest_dir / f".upload-{uuid.uuid4().hex}.tmp"
@@ -202,6 +203,219 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
             print(f"Error writing log: {e}")
             if tmp_file.exists():
                 tmp_file.unlink()
+
+    def _db_exec(conn, sql: str, params: tuple = ()) -> None:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+
+    def _db_conn_or_none():
+        conn, err = db_connect()
+        if err or conn is None:
+            return None
+        return conn
+
+    def _dt_ensure_aware(dt: datetime) -> datetime:
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt
+
+    def _dt_to_iso(v):
+        if v is None:
+            return None
+        if isinstance(v, str):
+            return v
+        if isinstance(v, datetime):
+            return _dt_ensure_aware(v).isoformat()
+        return str(v)
+
+    def _iso_to_dt(v):
+        if v is None:
+            return None
+        if isinstance(v, datetime):
+            return _dt_ensure_aware(v)
+        if isinstance(v, str) and v:
+            s = v.replace("Z", "+00:00")
+            try:
+                dt = datetime.fromisoformat(s)
+            except ValueError:
+                return None
+            return _dt_ensure_aware(dt)
+        return None
+
+    def _encode_cursor(started_at: datetime, run_id: str) -> str:
+        payload = {
+            "started_at": _dt_ensure_aware(started_at).isoformat(),
+            "run_id": run_id,
+        }
+        raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+    def _decode_cursor(cur: str) -> tuple[datetime, str]:
+        s = (cur or "").strip()
+        if not s:
+            raise ValueError("empty cursor")
+
+        pad = "=" * (-len(s) % 4)
+        raw = base64.urlsafe_b64decode((s + pad).encode("ascii"))
+        obj = json.loads(raw.decode("utf-8"))
+
+        dt = _iso_to_dt(obj.get("started_at"))
+        if dt is None:
+            raise ValueError("bad cursor.started_at")
+
+        run_id = str(uuid.UUID(str(obj.get("run_id"))))
+        return dt, run_id
+
+    def _summary_legacy_fields(summary: dict) -> dict:
+        s = summary or {}
+        return {
+            "files_total": s.get("files_total", 0),
+            "files_imported": s.get("files_imported", 0),
+            "files_skipped": s.get("files_skipped", 0),
+            "files_quarantined": s.get("files_quarantined", 0),
+            "files_failed": s.get("files_failed", 0),
+        }
+
+    def _item_from_db_row(row: dict) -> dict:
+        summary = row.get("summary") or {}
+        return {
+            "run_id": str(row.get("run_id")),
+            "status": row.get("status"),
+            "requested_mode": row.get("requested_mode"),
+            "selected_mode": row.get("selected_mode"),
+            "started_at": _dt_to_iso(row.get("started_at")),
+            "finished_at": _dt_to_iso(row.get("finished_at")),
+            "duration_ms": row.get("duration_ms"),
+            "summary": summary,
+        }
+
+    def _legacy_from_item(item: dict) -> dict:
+        summary = item.get("summary") or {}
+        out = {
+            "run_id": item.get("run_id"),
+            "status": item.get("status"),
+            "started_at": item.get("started_at"),
+            "finished_at": item.get("finished_at"),
+            "duration_ms": item.get("duration_ms"),
+        }
+        out.update(_summary_legacy_fields(summary))
+        return out
+
+    def _db_registry_insert_start(run_id: str, requested_mode: str, files: list[str], started_at: datetime) -> None:
+        conn = _db_conn_or_none()
+        if conn is None:
+            return
+        try:
+            summary = {
+                "files_total": len(files or []),
+                "files_imported": 0,
+                "files_skipped": 0,
+                "files_quarantined": 0,
+                "files_failed": 0,
+            }
+            sql = """
+            INSERT INTO public.ops_daily_import_runs
+                  (run_id, requested_mode, status, started_at, summary, log_relpath)
+            VALUES
+              (%s, %s, 'RUNNING', %s, %s::jsonb, %s)
+            ON CONFLICT (run_id) DO UPDATE
+            SET
+              requested_mode = EXCLUDED.requested_mode,
+              status = 'RUNNING',
+              started_at = LEAST(public.ops_daily_import_runs.started_at, EXCLUDED.started_at),
+              summary = EXCLUDED.summary,
+              log_relpath = COALESCE (public.ops_daily_import_runs.log_relpath, EXCLUDED.log_relpath),
+              updated_at = now();
+                  """
+            _db_exec(
+                conn,
+                sql,
+                (run_id, requested_mode, started_at, json.dumps(summary), f"{run_id}.json"),
+            )
+
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def _db_registry_update_finish(run_id: str, requested_mode: str, payload: dict) -> None:
+        conn = _db_conn_or_none()
+        if conn is None:
+            return
+        try:
+            status = payload.get("status") or "FAILED"
+            selected_mode = payload.get("selected_mode")
+            finished_at = _iso_to_dt(payload.get("finished_at")) or datetime.now(timezone.utc)
+            started_at = _iso_to_dt(payload.get("started_at"))
+            duration_ms = payload.get("duration_ms")
+
+            if duration_ms is None and started_at is not None:
+                duration_ms = int((_dt_ensure_aware(finished_at) - _dt_ensure_aware(started_at)).total_seconds() * 1000)
+
+            summary = payload.get("summary")
+            if not isinstance(summary, dict) or not summary:
+                summary = {}
+
+            result_json = payload if isinstance(payload, dict) and payload else {}
+
+            sql = """
+            INSERT INTO public.ops_daily_import_runs
+              (run_id, requested_mode, status, selected_mode, started_at, finished_at, duration_ms, summary, result_json, log_relpath)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s)
+            ON CONFLICT (run_id) DO UPDATE
+            SET
+             requested_mode = EXCLUDED.requested_mode,
+             status = EXCLUDED.status,
+             selected_mode = COALESCE (EXCLUDED.selected_mode, public.ops_daily_import_runs.selected_mode),
+             started_at = LEAST(public.ops_daily_import_runs.started_at, EXCLUDED.started_at),
+             finished_at = COALESCE (EXCLUDED.finished_at, public.ops_daily_import_runs.finished_at),
+             duration_ms = COALESCE (EXCLUDED.duration_ms, public.ops_daily_import_runs.duration_ms),
+             summary = CASE
+               WHEN EXCLUDED.summary = '{}'::jsonb THEN public.ops_daily_import_runs.summary
+               ELSE EXCLUDED.summary
+             END,
+             result_json = CASE
+               WHEN EXCLUDED.result_json = '{}'::jsonb THEN public.ops_daily_import_runs.result_json
+               ELSE EXCLUDED.result_json
+             END,
+              log_relpath = COALESCE(public.ops_daily_import_runs.log_relpath, EXCLUDED.log_relpath),
+              updated_at = now();
+            """
+
+            # If payload doesn't carry started_at, fallback to finished_at (best-effort)
+            started_at_dt = started_at or finished_at
+
+            _db_exec(
+                conn,
+                sql,
+                (
+                    run_id,
+                    requested_mode,
+                    status,
+                    selected_mode,
+                    started_at_dt,
+                    finished_at,
+                    duration_ms,
+                    json.dumps(summary),
+                    json.dumps(result_json),
+                    f"{run_id}.json",
+                ),
+            )
+
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def execute_import_background(run_id, mode, files):
         """
@@ -246,6 +460,8 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
 
                     write_log_atomic(run_id, result)
 
+                    _db_registry_update_finish(run_id, mode, result)
+
                 except json.JSONDecodeError as e:
                     error_result = {
                         "run_id": run_id,
@@ -257,6 +473,8 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
                     }
 
                     write_log_atomic(run_id, error_result)
+
+                    _db_registry_update_finish(run_id, mode, error_result)
 
             except subprocess.TimeoutExpired:
                 # FIX R2: Kill the process and wait for it to die
@@ -277,6 +495,8 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
 
                 write_log_atomic(run_id, timeout_result)
 
+                _db_registry_update_finish(run_id, mode, timeout_result)
+
         except Exception as e:
             error_result = {
                 "run_id": run_id,
@@ -286,6 +506,8 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
             }
 
             write_log_atomic(run_id, error_result)
+
+            _db_registry_update_finish(run_id, mode, error_result)
 
     # ==================== ENDPOINTS ====================
 
@@ -395,21 +617,24 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
             except ValueError as e:
                 return jsonify({"error": str(e)}), 400
 
-            import uuid
             run_id = str(uuid.uuid4())
 
             # FIX R1: Write RUNNING status BEFORE starting background process
             # This ensures GET /runs/<run_id> never returns 404
+            started_at = datetime.now(timezone.utc)
+
             initial_status = {
                 "run_id": run_id,
                 "status": "RUNNING",
                 "mode": mode,
                 "files": files,
-                "started_at": datetime.now(timezone.utc).isoformat(),  # FIX R3
+                "started_at": started_at.isoformat(),
                 "message": "Import in progress..."
             }
 
             write_log_atomic(run_id, initial_status)
+
+            _db_registry_insert_start(run_id, mode, files, started_at)
 
             # Now start background process (daemon=False - survives worker restart)
             proc = multiprocessing.Process(
@@ -446,7 +671,6 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
                 return jsonify({"error": str(e)}), 400
 
             # POLISH P1: Generate run_id for sync too (consistent history)
-            import uuid
             run_id = str(uuid.uuid4())
 
             # Use sys.executable + pass run_id
@@ -508,12 +732,68 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
     @app.route("/api/v1/ops/daily-import/runs", methods=["GET"])
     @require_api_key
     def ops_daily_import_runs():
-        """GET /api/v1/ops/daily-import/runs?limit=50 - list runs"""
+        """GET /api/v1/ops/daily-import/runs?limit=50&cursor=... - list runs (DB-first, FS fallback)"""
         try:
             limit = int(request.args.get("limit", 50))
-            limit = min(limit, 50)
+            limit = max(1, min(limit, 50))
 
+            cursor = request.args.get("cursor")
+            conn = _db_conn_or_none()
+
+            # ---- DB-first ----
+            if conn is not None:
+                try:
+                    where = ""
+                    params = []
+                    if cursor:
+                        try:
+                            dt, rid = _decode_cursor(cursor)
+                        except ValueError:
+                            return jsonify({"error": "Invalid cursor"}), 400
+                        where = "WHERE (started_at, run_id) < (%s, %s)"
+                        params.extend([dt, rid])
+
+                    sql = f"""
+                    SELECT
+                      run_id::text as run_id,
+                      status,
+                      requested_mode,
+                      selected_mode,
+                      started_at,
+                      finished_at,
+                      duration_ms,
+                      summary
+                    FROM public.ops_daily_import_runs
+                    {where}
+                    ORDER BY started_at DESC, run_id DESC
+                    LIMIT %s;
+                    """
+                    params.append(limit + 1)
+
+                    rows = db_query(conn, sql, tuple(params)) or []
+                    has_more = len(rows) > limit
+                    page = rows[:limit]
+
+                    items = [_item_from_db_row(r) for r in page]
+                    runs = [_legacy_from_item(i) for i in items]
+
+                    resp = {"items": items, "runs": runs}
+                    if has_more and page:
+                        last = page[-1]
+                        last_dt = _iso_to_dt(last.get("started_at"))
+                        if last_dt is not None:
+                            resp["next_cursor"] = _encode_cursor(last_dt, str(last.get("run_id")))
+
+                    return jsonify(resp), 200
+                finally:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+            # ---- FS fallback (DB down) ----
             runs = []
+            items = []
 
             if LOGS_DIR.exists():
                 log_files = sorted(
@@ -524,25 +804,26 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
 
                 for log_file in log_files:
                     try:
-                        with open(log_file, 'r') as f:
+                        with open(log_file, "r", encoding="utf-8") as f:
                             run_data = json.load(f)
 
-                        runs.append({
+                        summary = run_data.get("summary", {}) or {}
+                        item = {
                             "run_id": run_data.get("run_id"),
                             "status": run_data.get("status"),
+                            "requested_mode": run_data.get("mode"),
+                            "selected_mode": run_data.get("selected_mode"),
                             "started_at": run_data.get("started_at"),
                             "finished_at": run_data.get("finished_at"),
                             "duration_ms": run_data.get("duration_ms"),
-                            "files_total": run_data.get("summary", {}).get("files_total", 0),
-                            "files_imported": run_data.get("summary", {}).get("files_imported", 0),
-                            "files_skipped": run_data.get("summary", {}).get("files_skipped", 0),
-                            "files_quarantined": run_data.get("summary", {}).get("files_quarantined", 0),
-                            "files_failed": run_data.get("summary", {}).get("files_failed", 0)
-                        })
+                            "summary": summary,
+                        }
+                        items.append(item)
+                        runs.append(_legacy_from_item(item))
                     except (json.JSONDecodeError, IOError):
                         continue
 
-            return jsonify({"runs": runs}), 200
+            return jsonify({"items": items, "runs": runs}), 200
 
         except Exception as e:
             return jsonify({"error": str(e)}), 500
@@ -551,25 +832,75 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
     @require_api_key
     def ops_daily_import_run_detail(run_id):
         """
-        GET /api/v1/ops/daily-import/runs/{run_id} - run details
-
-        FIX R1: File now created BEFORE proc.start(), so 404 is rare
+        GET /api/v1/ops/daily-import/runs/{run_id} - run details (DB-first, FS fallback)
         """
         try:
-            log_file = LOGS_DIR / f"{run_id}.json"
+            # validate UUID early
+            try:
+                run_id_norm = str(uuid.UUID(run_id))
+            except ValueError:
+                return jsonify({"error": "Invalid run_id"}), 400
 
+            conn = _db_conn_or_none()
+
+            # ---- DB-first ----
+            if conn is not None:
+                try:
+                    sql = """
+                          SELECT run_id::text as run_id, status,
+                                 requested_mode,
+                                 selected_mode,
+                                 started_at,
+                                 finished_at,
+                                 duration_ms,
+                                 summary,
+                                 result_json,
+                                 log_relpath
+                          FROM public.ops_daily_import_runs
+                          WHERE run_id = %s
+                          LIMIT 1;
+                          """
+                    rows = db_query(conn, sql, (run_id_norm,)) or []
+                    if rows:
+                        row = rows[0]
+                        payload = row.get("result_json")
+
+                        if not isinstance(payload, dict) or not payload:
+                            payload = {
+                                "run_id": row.get("run_id"),
+                                "status": row.get("status"),
+                                "requested_mode": row.get("requested_mode"),
+                                "selected_mode": row.get("selected_mode"),
+                                "started_at": _dt_to_iso(
+                                    row.get("started_at")),
+                                "finished_at": _dt_to_iso(
+                                    row.get("finished_at")),
+                                "duration_ms": row.get("duration_ms"),
+                                "summary": row.get("summary") or {},
+                            }
+
+                        # Ensure minimal keys exist
+                        payload.setdefault("run_id", row.get("run_id"))
+                        payload.setdefault("status", row.get("status"))
+                        return jsonify(payload), 200
+                finally:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+            # ---- FS fallback ----
+            log_file = LOGS_DIR / f"{run_id_norm}.json"
             if not log_file.exists():
                 return jsonify({"error": "Run not found"}), 404
 
             try:
-                with open(log_file, 'r') as f:
+                with open(log_file, "r", encoding="utf-8") as f:
                     run_data = json.load(f)
                 return jsonify(run_data), 200
-
             except json.JSONDecodeError:
-                # File being written - return RUNNING
                 return jsonify({
-                    "run_id": run_id,
+                    "run_id": run_id_norm,
                     "status": "RUNNING",
                     "message": "Import in progress (log updating)..."
                 }), 200
