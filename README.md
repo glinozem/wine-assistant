@@ -217,6 +217,8 @@ $rid = "<run_id>"
 irm "http://localhost:18000/api/v1/ops/daily-import/runs/$rid" -Headers @{ "X-API-Key" = $k } | ConvertTo-Json -Depth 10
 ```
 
+См. также: **[docs/dev/run-sync-powershell.md](docs/dev/run-sync-powershell.md)** — как дергать `POST /api/v1/ops/daily-import/run-sync` из PowerShell (PS 5.1 vs 7+) и почему `curl.exe --data-raw` часто ломает JSON.
+
 Примечание: используйте `docker compose ...` вместо `docker-compose ...`, если в вашей среде нет алиаса `docker-compose` (в проекте есть заметки по этой теме в документации).
 
 ## 🧑‍💻 Developer Docs (для разработчиков)
@@ -733,6 +735,7 @@ make dr-smoke-truncate DR_BACKUP_KEEP=2 MANAGE_PROMTAIL=1
 - **[docs/dev/backup-dr-runbook.md](docs/dev/backup-dr-runbook.md)** — Backup/DR руководство
 - **[docs/dev/web-ui.md](docs/dev/web-ui.md)** — Документация UI
 - **[docs/dev/windows-powershell-http.md](docs/dev/windows-powershell-http.md)** — PowerShell для API
+- **[docs/dev/run-sync-powershell.md](docs/dev/run-sync-powershell.md)** — Как дергать `/run-sync` из PowerShell (5.1 vs 7+)
 
 ---
 

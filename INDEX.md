@@ -7,6 +7,7 @@
 - API:
   - `GET /api/v1/ops/daily-import/inbox`
   - `POST /api/v1/ops/daily-import/run`
+  - `POST /api/v1/ops/daily-import/run-sync`
   - `GET /api/v1/ops/daily-import/runs/<run_id>`
 - CLI / Dev:
   - Makefile: `make daily-import`, `make daily-import-files`, `make daily-import-files-ps`, `make daily-import-history`
@@ -103,6 +104,12 @@
 - HTTP requests примеры
 - JSON parsing
 - Error handling
+
+### [docs/dev/run-sync-powershell.md](docs/dev/run-sync-powershell.md)
+**Как дергать `/api/v1/ops/daily-import/run-sync` из PowerShell (5.1 vs 7+)**
+- Почему `curl.exe --data-raw` может ломать JSON из-за quoting/экранирования
+- Рабочие команды для PS 5.1 и PS 7+
+- Диагностика по ответу `Invalid JSON` (в т.ч. `received_body_tail`)
 
 ### Development Setup
 
