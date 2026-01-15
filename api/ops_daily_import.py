@@ -27,7 +27,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from flask import jsonify, request, send_file
-from werkzeug.exceptions import BadRequest
 
 # Paths
 BASE_DIR = Path(__file__).parent.parent
@@ -699,10 +698,48 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
         proc_result: subprocess.CompletedProcess[str] | None = None
 
         try:
-            try:
-                data = request.get_json(force=True) or {}
-            except BadRequest:
-                return jsonify({"error": "Invalid JSON"}), 400
+            data = request.get_json(silent=True)
+
+            if data is None:
+                raw = (request.get_data(cache=False, as_text=True) or "").strip()
+
+                if not raw:
+                    return jsonify({
+                        "error": "Missing JSON body",
+                        "example": {"mode": "auto", "files": []},
+                    }), 400
+
+                err = {
+                    "error": "Invalid JSON",
+                    "hint": (
+                        "PowerShell + curl.exe часто «съедает» кавычки, и сервер получает не-JSON "
+                        "(например: {files:[],mode:auto}). "
+                        "Используй Invoke-RestMethod или пайп в curl --data-binary '@-'."
+                    ),
+                    "example_ps_invoke_restmethod": (
+                        "Invoke-RestMethod -Method Post -Uri $url "
+                        "-Headers @{ 'X-API-Key' = $apiKey } "
+                        "-ContentType 'application/json' -Body $body"
+                    ),
+                    "example_ps_curl_pipe": (
+                        "$body | curl.exe -X POST $url "
+                        "-H 'Content-Type: application/json' "
+                        "-H \"X-API-Key: $apiKey\" "
+                        "--data-binary '@-'"
+                    ),
+                    "example": {"mode": "auto", "files": []},
+                }
+
+                if OPS_DB_REGISTRY_DEBUG:
+                    err["received_body_tail"] = _tail(raw, 200)
+
+                return jsonify(err), 400
+
+            if not isinstance(data, dict):
+                return jsonify({
+                    "error": "JSON body must be an object",
+                    "example": {"mode": "auto", "files": []},
+                }), 400
 
             try:
                 mode, files = _normalize_payload(data)
