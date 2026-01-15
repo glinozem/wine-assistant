@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from flask import jsonify, request, send_file
+from werkzeug.exceptions import BadRequest
 
 # Paths
 BASE_DIR = Path(__file__).parent.parent
@@ -45,6 +46,11 @@ MAX_UPLOAD_TOTAL_MB = int(os.getenv("OPS_UPLOAD_MAX_TOTAL_MB", "200"))
 
 MAX_UPLOAD_FILE_BYTES = MAX_UPLOAD_FILE_MB * 1024 * 1024
 MAX_UPLOAD_TOTAL_BYTES = MAX_UPLOAD_TOTAL_MB * 1024 * 1024
+
+SYNC_RUN_TIMEOUT_S = int(os.getenv("OPS_DAILY_IMPORT_SYNC_TIMEOUT_S", "900"))
+STDIO_TAIL_CHARS = int(os.getenv("OPS_DAILY_IMPORT_STDIO_TAIL_CHARS", "2000"))
+
+OPS_DB_REGISTRY_DEBUG = os.getenv("OPS_DB_REGISTRY_DEBUG", "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def _normalize_payload(payload: dict) -> tuple[str, list[str]]:
@@ -249,6 +255,29 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
                 return None
             return _dt_ensure_aware(dt)
         return None
+
+    def _tail(s: str | None, limit: int) -> str | None:
+        if not s:
+            return None
+        s = s.replace("\x00", "")
+        if len(s) <= limit:
+            return s
+        return s[-limit:]
+
+    def _summary_min(files: list[str]) -> dict:
+        return {
+            "files_total": len(files or []),
+            "files_imported": 0,
+            "files_skipped": 0,
+            "files_quarantined": 0,
+            "files_failed": 0,
+        }
+
+    def _calc_duration_ms(started_at: datetime | None,
+                          finished_at: datetime) -> int | None:
+        if started_at is None:
+            return None
+        return int((finished_at - started_at).total_seconds() * 1000)
 
     def _encode_cursor(started_at: datetime, run_id: str) -> str:
         payload = {
@@ -657,77 +686,227 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
     @require_api_key
     def ops_daily_import_run_sync():
         """
-        POST /api/v1/ops/daily-import/run-sync - SYNC import (DEBUG ONLY)
-
-        POLISH P1: Also uses --run-id for consistent history
-
-        ⚠️ Requires GUNICORN_TIMEOUT=900 or use async /run instead
+        POST /api/v1/ops/daily-import/run-sync
+        Synchronous import (intended for short/local runs).
+        DB registry: start + finish (best-effort); FS logs stay as fallback.
         """
+        run_id = None
+        mode = None
+        files: list[str] = []
+        started_at: datetime | None = None
+
+        cmd: list[str] | None = None
+        proc_result: subprocess.CompletedProcess[str] | None = None
+
         try:
-            payload = request.get_json() or {}
             try:
-                mode, files = _normalize_payload(payload)
+                data = request.get_json(force=True) or {}
+            except BadRequest:
+                return jsonify({"error": "Invalid JSON"}), 400
+
+            try:
+                mode, files = _normalize_payload(data)
             except ValueError as e:
                 return jsonify({"error": str(e)}), 400
 
-            # POLISH P1: Generate run_id for sync too (consistent history)
             run_id = str(uuid.uuid4())
+            started_at = datetime.now(timezone.utc)
 
-            # Use sys.executable + pass run_id
+            initial_status = {
+                "run_id": run_id,
+                "status": "RUNNING",
+                "mode": mode,
+                "files": files,
+                "started_at": started_at.isoformat(),
+                "message": "Import in progress...",
+            }
+            write_log_atomic(run_id, initial_status)
+
+            # DB start (best-effort)
+            try:
+                _db_registry_insert_start(run_id, mode, files, started_at)
+            except Exception as e:
+                if OPS_DB_REGISTRY_DEBUG:
+                    print(
+                        f"[ops_daily_import] DB registry start failed (run_id={run_id}): {e!r}",
+                        file=sys.stderr
+                    )
+
             cmd = [
-                sys.executable, "-m", "scripts.daily_import_ops",
-                "--mode", mode,
-                "--run-id", run_id,      # POLISH P1: Consistency!
-                "--no-log-file"           # API will write log
+                sys.executable,
+                "-m",
+                "scripts.daily_import_ops",
+                "--mode",
+                mode,
+                "--run-id",
+                run_id,
+                "--no-log-file",
             ]
-
             if mode == "files" and files:
-                cmd.extend(["--files"] + files)
+                cmd.extend(["--files", *files])
 
-            result = subprocess.run(  # nosemgrep: python.flask.security.injection.subprocess-injection.subprocess-injection
+            proc_result = subprocess.run(
                 cmd,
                 cwd=str(BASE_DIR),
                 capture_output=True,
                 text=True,
-                timeout=900,
+                timeout=SYNC_RUN_TIMEOUT_S,
                 shell=False,
             )
 
-            try:
-                import_result = json.loads(result.stdout) if result.stdout else None
-            except json.JSONDecodeError:
-                import_result = None
+            if proc_result.returncode != 0:
+                raise RuntimeError(proc_result.stderr.strip() or "Import failed")
 
+            import_result = json.loads(proc_result.stdout)
             if not isinstance(import_result, dict):
-                import_result = {
-                    "run_id": run_id,
-                    "status": "FAILED",
-                    "error": f"Invalid JSON from orchestrator (exit={result.returncode})",
-                    "stdout": (result.stdout or "")[:1000],
-                    "stderr": (result.stderr or "")[:1000],
-                    "finished_at": datetime.now(timezone.utc).isoformat(),
-                }
+                import_result = {"result": import_result}
 
-            if import_result.get("run_id") != run_id:
-                import_result["run_id"] = run_id
+            # Ensure minimal keys for both FS + DB contracts
+            import_result.setdefault("run_id", run_id)
+            import_result.setdefault("mode", mode)  # backward compat
+            import_result.setdefault("requested_mode", mode)
+            import_result.setdefault("started_at", started_at.isoformat())
 
-            # POLISH P1: Write to history for consistency
+            import_result.setdefault("finished_at",
+                                     datetime.now(timezone.utc).isoformat())
+
             write_log_atomic(run_id, import_result)
+
+            # DB finish (best-effort); upsert saves even if start insert failed
+            try:
+                _db_registry_update_finish(run_id, mode, import_result)
+            except Exception as e:
+                if OPS_DB_REGISTRY_DEBUG:
+                    print(
+                        f"[ops_daily_import] DB registry finish failed (run_id={run_id}): {e!r}",
+                        file=sys.stderr
+                    )
 
             return jsonify(import_result), 200
 
-        except subprocess.TimeoutExpired:
-            return jsonify({
-                "error": "Import timeout (>15 minutes)",
-                "hint": "Use async POST /run for long imports"
-            }), 504
+        except subprocess.TimeoutExpired as e:
+            finished_at = datetime.now(timezone.utc)
+
+            duration_ms = _calc_duration_ms(started_at, finished_at)
+
+            summary_min = _summary_min(files)
+
+            stdout_raw = getattr(e, "stdout", None)
+            if stdout_raw is None:
+                stdout_raw = getattr(e, "output",
+                                     None)  # TimeoutExpired.output == stdout
+
+            stderr_raw = getattr(e, "stderr", None)
+
+            timeout_result = {
+                "run_id": run_id,
+                "status": "TIMEOUT",
+                "requested_mode": mode,
+                "mode": mode,  # backward compat
+                "files": files,
+                "started_at": started_at.isoformat() if started_at else None,
+                "finished_at": finished_at.isoformat(),
+                "duration_ms": duration_ms,
+                "message": f"Import timeout (>{SYNC_RUN_TIMEOUT_S}s)",
+                "hint": "Use async POST /run for long imports",
+                "summary": summary_min,
+                "exit_code": None,
+                "stdout_tail": _tail(stdout_raw, STDIO_TAIL_CHARS),
+                "stderr_tail": _tail(stderr_raw, STDIO_TAIL_CHARS),
+            }
+
+            if run_id:
+                write_log_atomic(run_id, timeout_result)
+                try:
+                    _db_registry_update_finish(run_id, mode or "auto", timeout_result)
+                except Exception as e:
+                    if OPS_DB_REGISTRY_DEBUG:
+                        print(
+                            f"[ops_daily_import] DB registry finish failed (run_id={run_id}): {e!r}",
+                            file=sys.stderr
+                        )
+
+            return jsonify(timeout_result), 504
+
         except json.JSONDecodeError as e:
-            return jsonify({
-                "error": "Invalid JSON from orchestrator",
-                "details": str(e)
-            }), 500
+            finished_at = datetime.now(timezone.utc)
+
+            duration_ms = _calc_duration_ms(started_at, finished_at)
+
+            summary_min = _summary_min(files)
+
+            error_result = {
+                "run_id": run_id,
+                "status": "FAILED",
+                "requested_mode": mode,
+                "mode": mode,  # backward compat
+                "files": files,
+                "started_at": started_at.isoformat() if started_at else None,
+                "finished_at": finished_at.isoformat(),
+                "duration_ms": duration_ms,
+                "message": "Invalid JSON from orchestrator",
+                "hint": "Check orchestrator stdout/stderr tails",
+                "details": str(e),
+                "summary": summary_min,
+                "exit_code": proc_result.returncode if proc_result else None,
+                "stdout_tail": _tail(proc_result.stdout if proc_result else
+                                     None, STDIO_TAIL_CHARS),
+                "stderr_tail": _tail(proc_result.stderr if proc_result else
+                                     None, STDIO_TAIL_CHARS),
+            }
+
+            if run_id:
+                write_log_atomic(run_id, error_result)
+                try:
+                    _db_registry_update_finish(run_id, mode or "auto", error_result)
+                except Exception as e:
+                    if OPS_DB_REGISTRY_DEBUG:
+                        print(
+                            f"[ops_daily_import] DB registry finish failed (run_id={run_id}): {e!r}",
+                            file=sys.stderr
+                        )
+
+            return jsonify(error_result), 500
+
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            finished_at = datetime.now(timezone.utc)
+
+            duration_ms = _calc_duration_ms(started_at, finished_at)
+
+            summary_min = _summary_min(files)
+
+            error_result = {
+                "run_id": run_id,
+                "status": "FAILED",
+                "requested_mode": mode,
+                "mode": mode,  # backward compat
+                "files": files,
+                "started_at": started_at.isoformat() if started_at else None,
+                "finished_at": finished_at.isoformat(),
+                "duration_ms": duration_ms,
+                "message": "Sync import failed",
+                "details": str(e),
+                "summary": summary_min,
+                "exit_code": proc_result.returncode if proc_result else None,
+                "stdout_tail": _tail(proc_result.stdout if proc_result else
+                                     None, STDIO_TAIL_CHARS),
+                "stderr_tail": _tail(proc_result.stderr if proc_result else
+                                     None, STDIO_TAIL_CHARS),
+            }
+
+            if run_id:
+                write_log_atomic(run_id, error_result)
+                try:
+                    _db_registry_update_finish(run_id, mode or "auto", error_result)
+                except Exception as e:
+                    if OPS_DB_REGISTRY_DEBUG:
+                        print(
+                            f"[ops_daily_import] DB registry finish failed (run_id={run_id}): {e!r}",
+                            file=sys.stderr
+                        )
+
+            return jsonify(error_result), 500
+
 
     @app.route("/api/v1/ops/daily-import/runs", methods=["GET"])
     @require_api_key
