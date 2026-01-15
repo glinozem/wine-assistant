@@ -58,6 +58,7 @@ services:
       LC_ALL: C.UTF-8
       PYTHONUTF8: "1"
       PYTHONIOENCODING: "utf-8"
+      OPS_DB_REGISTRY_DEBUG: ${OPS_DB_REGISTRY_DEBUG:-}
       # Тоже жёстко db:5432, чтобы не зависеть от внешних DB_HOST/DB_PORT
       DB_HOST: db
       DB_PORT: 5432
