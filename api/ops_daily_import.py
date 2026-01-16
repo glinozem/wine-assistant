@@ -651,12 +651,21 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
             # This ensures GET /runs/<run_id> never returns 404
             started_at = datetime.now(timezone.utc)
 
+            files_pending = (
+                [{"original_name": f, "status": "PENDING"} for f in
+                 files] if mode == "files" else [])
+
             initial_status = {
                 "run_id": run_id,
                 "status": "RUNNING",
-                "mode": mode,
-                "files": files,
+                "requested_mode": mode,
+                "mode": mode,  # backward compat
+                "selected_mode": None,
                 "started_at": started_at.isoformat(),
+                "finished_at": None,
+                "duration_ms": None,
+                "files": files_pending,
+                "summary": _summary_min(files if mode == "files" else []),
                 "message": "Import in progress..."
             }
 
@@ -749,14 +758,24 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
             run_id = str(uuid.uuid4())
             started_at = datetime.now(timezone.utc)
 
+            files_pending = (
+                [{"original_name": f, "status": "PENDING"} for f in
+                 files] if mode == "files" else [])
+
             initial_status = {
                 "run_id": run_id,
                 "status": "RUNNING",
-                "mode": mode,
-                "files": files,
+                "requested_mode": mode,
+                "mode": mode,  # backward compat
+                "selected_mode": None,
                 "started_at": started_at.isoformat(),
+                "finished_at": None,
+                "duration_ms": None,
+                "files": files_pending,
+                "summary": _summary_min(files if mode == "files" else []),
                 "message": "Import in progress...",
             }
+
             write_log_atomic(run_id, initial_status)
 
             # DB start (best-effort)
@@ -944,30 +963,101 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
 
             return jsonify(error_result), 500
 
-
     @app.route("/api/v1/ops/daily-import/runs", methods=["GET"])
     @require_api_key
     def ops_daily_import_runs():
-        """GET /api/v1/ops/daily-import/runs?limit=50&cursor=... - list runs (DB-first, FS fallback)"""
-        try:
-            limit = int(request.args.get("limit", 50))
-            limit = max(1, min(limit, 50))
+        """
+        GET /api/v1/ops/daily-import/runs
 
-            cursor = request.args.get("cursor")
+        Query:
+          - limit: int (default=50, max=200)
+          - cursor: opaque (optional)
+          - status: string (optional)
+          - from/to: ISO datetime (optional)
+
+        Response:
+          - items[] (stable contract)
+          - runs[] alias (backward compat)
+          - next_cursor (optional; null if no more)
+        """
+        try:
+            # limit
+            raw_limit = (request.args.get("limit") or "").strip() or "50"
+            try:
+                limit = int(raw_limit)
+            except ValueError:
+                return jsonify({"error": "Invalid limit"}), 400
+            limit = max(1, min(limit, 200))
+
+            cursor = (request.args.get("cursor") or "").strip() or None
+
+            status = (request.args.get("status") or "").strip()
+            if status:
+                import re
+                status = status.upper()
+                if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,39}", status):
+                    return jsonify({"error": "Invalid status filter"}), 400
+
+            from_arg = (request.args.get("from") or "").strip()
+            to_arg = (request.args.get("to") or "").strip()
+
+            from_dt = _iso_to_dt(from_arg) if from_arg else None
+            to_dt = _iso_to_dt(to_arg) if to_arg else None
+
+            if from_arg and from_dt is None:
+                return jsonify({"error": "Invalid from datetime"}), 400
+            if to_arg and to_dt is None:
+                return jsonify({"error": "Invalid to datetime"}), 400
+
+            def _respond(items: list[dict], has_more: bool):
+                runs = [_legacy_from_item(i) for i in items]
+                resp = {"items": items, "runs": runs, "next_cursor": None}
+
+                if has_more and items:
+                    last = items[-1]
+                    last_dt = _iso_to_dt(last.get("started_at"))
+                    if last_dt is not None and last.get("run_id"):
+                        resp["next_cursor"] = _encode_cursor(last_dt,
+                                                             str(last.get(
+                                                                 "run_id")))
+
+                return jsonify(resp), 200
+
             conn = _db_conn_or_none()
 
             # ---- DB-first ----
             if conn is not None:
                 try:
-                    where = ""
-                    params = []
+                    where_clauses: list[str] = []
+                    params: list[object] = []
+
+                    if status:
+                        where_clauses.append("status = %s")
+                        params.append(status)
+
+                    if from_dt is not None:
+                        where_clauses.append("started_at >= %s")
+                        params.append(from_dt)
+
+                    if to_dt is not None:
+                        where_clauses.append("started_at <= %s")
+                        params.append(to_dt)
+
                     if cursor:
                         try:
                             dt, rid = _decode_cursor(cursor)
                         except ValueError:
                             return jsonify({"error": "Invalid cursor"}), 400
-                        where = "WHERE (started_at, run_id) < (%s, %s)"
+                        try:
+                            rid = str(uuid.UUID(str(rid)))
+                        except ValueError:
+                            return jsonify({"error": "Invalid cursor"}), 400
+                        where_clauses.append("(started_at, run_id) < (%s, %s)")
                         params.extend([dt, rid])
+
+                    where = ""
+                    if where_clauses:
+                        where = "WHERE " + " AND ".join(where_clauses)
 
                     sql = f"""
                     SELECT
@@ -991,55 +1081,127 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
                     page = rows[:limit]
 
                     items = [_item_from_db_row(r) for r in page]
-                    runs = [_legacy_from_item(i) for i in items]
+                    return _respond(items, has_more)
 
-                    resp = {"items": items, "runs": runs}
-                    if has_more and page:
-                        last = page[-1]
-                        last_dt = _iso_to_dt(last.get("started_at"))
-                        if last_dt is not None:
-                            resp["next_cursor"] = _encode_cursor(last_dt, str(last.get("run_id")))
+                except Exception as e:
+                    if OPS_DB_REGISTRY_DEBUG:
+                        print(
+                            f"[ops_daily_import] DB runs list failed; falling back to FS: {e!r}",
+                            file=sys.stderr
+                        )
 
-                    return jsonify(resp), 200
                 finally:
                     try:
                         conn.close()
                     except Exception:
                         pass
 
-            # ---- FS fallback (DB down) ----
-            runs = []
-            items = []
+            # ---- FS fallback (DB down / DB error) ----
+            cursor_dt = cursor_rid = None
+            if cursor:
+                try:
+                    cursor_dt, cursor_rid = _decode_cursor(cursor)
+                except ValueError:
+                    return jsonify({"error": "Invalid cursor"}), 400
+                try:
+                    cursor_rid = str(uuid.UUID(str(cursor_rid)))
+                except ValueError:
+                    return jsonify({"error": "Invalid cursor"}), 400
+
+            items: list[dict] = []
+            has_more = False
 
             if LOGS_DIR.exists():
                 log_files = sorted(
                     LOGS_DIR.glob("*.json"),
                     key=lambda p: p.stat().st_mtime,
-                    reverse=True
-                )[:limit]
+                    reverse=True,
+                )
 
                 for log_file in log_files:
+                    run_id_guess = log_file.stem
+                    started_dt = datetime.fromtimestamp(
+                        log_file.stat().st_mtime, tz=timezone.utc)
+
                     try:
                         with open(log_file, "r", encoding="utf-8") as f:
                             run_data = json.load(f)
 
+                        run_id_guess = str(
+                            run_data.get("run_id") or run_id_guess)
+                        started_dt = _iso_to_dt(
+                            run_data.get("started_at")) or started_dt
+
                         summary = run_data.get("summary", {}) or {}
                         item = {
-                            "run_id": run_data.get("run_id"),
+                            "run_id": run_id_guess,
                             "status": run_data.get("status"),
-                            "requested_mode": run_data.get("mode"),
+                            "requested_mode": run_data.get(
+                                "requested_mode") or run_data.get("mode"),
                             "selected_mode": run_data.get("selected_mode"),
-                            "started_at": run_data.get("started_at"),
+                            "started_at": _dt_to_iso(started_dt),
                             "finished_at": run_data.get("finished_at"),
                             "duration_ms": run_data.get("duration_ms"),
                             "summary": summary,
                         }
-                        items.append(item)
-                        runs.append(_legacy_from_item(item))
-                    except (json.JSONDecodeError, IOError):
+
+                    except json.JSONDecodeError:
+                        # partial JSON while RUNNING
+                        item = {
+                            "run_id": run_id_guess,
+                            "status": "RUNNING",
+                            "requested_mode": None,
+                            "selected_mode": None,
+                            "started_at": _dt_to_iso(started_dt),
+                            "finished_at": None,
+                            "duration_ms": None,
+                            "summary": {},
+                        }
+
+                    except IOError:
                         continue
 
-            return jsonify({"items": items, "runs": runs}), 200
+                    # filters
+                    if status and (
+                            str(item.get("status") or "").upper() != status):
+                        continue
+
+                    item_dt = _iso_to_dt(item.get("started_at"))
+                    if from_dt is not None and (
+                            item_dt is None or item_dt < from_dt):
+                        continue
+                    if to_dt is not None and (
+                            item_dt is None or item_dt > to_dt):
+                        continue
+
+                    if cursor_dt is not None and cursor_rid is not None:
+                        try:
+                            rid_val = str(uuid.UUID(str(item.get("run_id"))))
+                        except Exception:
+                            rid_val = str(item.get("run_id"))
+
+                        if item_dt is None:
+                            continue
+
+                        if not ((item_dt, rid_val) < (cursor_dt, cursor_rid)):
+                            continue
+
+                    items.append(item)
+                    if len(items) >= (limit + 1):
+                        break
+
+                # stable order (newest first)
+                def _fs_sort_key(i: dict):
+                    dt = _iso_to_dt(i.get("started_at"))
+                    dt = dt or datetime(1970, 1, 1, tzinfo=timezone.utc)
+                    rid = str(i.get("run_id") or "")
+                    return (dt, rid)
+
+                items.sort(key=_fs_sort_key, reverse=True)
+                has_more = len(items) > limit
+                items = items[:limit]
+
+            return _respond(items, has_more)
 
         except Exception as e:
             return jsonify({"error": str(e)}), 500
@@ -1049,6 +1211,8 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
     def ops_daily_import_run_detail(run_id):
         """
         GET /api/v1/ops/daily-import/runs/{run_id} - run details (DB-first, FS fallback)
+
+        Always returns a stable schema (even while RUNNING / partial JSON).
         """
         try:
             # validate UUID early
@@ -1056,6 +1220,62 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
                 run_id_norm = str(uuid.UUID(run_id))
             except ValueError:
                 return jsonify({"error": "Invalid run_id"}), 400
+
+            def _normalize_run_detail(payload: dict | None,
+                                      row: dict | None) -> dict:
+                out: dict = {}
+
+                if isinstance(payload, dict):
+                    out.update(payload)
+
+                # map legacy field
+                if out.get("requested_mode") is None and out.get("mode"):
+                    out["requested_mode"] = out.get("mode")
+
+                if row:
+                    out.setdefault("run_id", row.get("run_id"))
+                    out.setdefault("status", row.get("status"))
+                    out.setdefault("requested_mode", row.get("requested_mode"))
+                    out.setdefault("selected_mode", row.get("selected_mode"))
+                    out.setdefault("started_at",
+                                   _dt_to_iso(row.get("started_at")))
+                    out.setdefault("finished_at",
+                                   _dt_to_iso(row.get("finished_at")))
+                    out.setdefault("duration_ms", row.get("duration_ms"))
+                    if isinstance(row.get("summary"), dict):
+                        out.setdefault("summary", row.get("summary") or {})
+
+                # backward compat
+                if out.get("requested_mode") and "mode" not in out:
+                    out["mode"] = out.get("requested_mode")
+
+                # normalize timestamps (if someone put datetime objects)
+                if isinstance(out.get("started_at"), datetime):
+                    out["started_at"] = _dt_to_iso(out.get("started_at"))
+                if isinstance(out.get("finished_at"), datetime):
+                    out["finished_at"] = _dt_to_iso(out.get("finished_at"))
+
+                # normalize summary
+                if not isinstance(out.get("summary"), dict):
+                    out["summary"] = {}
+
+                # normalize files: list[str] -> list[dict]
+                files_val = out.get("files")
+                if files_val is None:
+                    out["files"] = []
+                elif isinstance(files_val, list) and files_val and isinstance(
+                        files_val[0], str):
+                    out["files"] = [{"original_name": s, "status": "PENDING"}
+                                    for s in files_val]
+
+                # Ensure minimal keys
+                out.setdefault("run_id", run_id_norm)
+                out.setdefault("status", out.get("status") or "RUNNING")
+                out.setdefault("selected_mode", out.get("selected_mode"))
+                out.setdefault("finished_at", out.get("finished_at"))
+                out.setdefault("duration_ms", out.get("duration_ms"))
+
+                return out
 
             conn = _db_conn_or_none()
 
@@ -1073,32 +1293,23 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
                                  result_json,
                                  log_relpath
                           FROM public.ops_daily_import_runs
-                          WHERE run_id = %s
-                          LIMIT 1;
+                          WHERE run_id = %s LIMIT 1;
                           """
                     rows = db_query(conn, sql, (run_id_norm,)) or []
                     if rows:
                         row = rows[0]
-                        payload = row.get("result_json")
+                        payload = row.get("result_json") if isinstance(
+                            row.get("result_json"), dict) else None
+                        return jsonify(
+                            _normalize_run_detail(payload, row)), 200
 
-                        if not isinstance(payload, dict) or not payload:
-                            payload = {
-                                "run_id": row.get("run_id"),
-                                "status": row.get("status"),
-                                "requested_mode": row.get("requested_mode"),
-                                "selected_mode": row.get("selected_mode"),
-                                "started_at": _dt_to_iso(
-                                    row.get("started_at")),
-                                "finished_at": _dt_to_iso(
-                                    row.get("finished_at")),
-                                "duration_ms": row.get("duration_ms"),
-                                "summary": row.get("summary") or {},
-                            }
+                except Exception as e:
+                    if OPS_DB_REGISTRY_DEBUG:
+                        print(
+                            f"[ops_daily_import] DB run detail failed; falling back to FS (run_id={run_id_norm}): {e!r}",
+                            file=sys.stderr
+                        )
 
-                        # Ensure minimal keys exist
-                        payload.setdefault("run_id", row.get("run_id"))
-                        payload.setdefault("status", row.get("status"))
-                        return jsonify(payload), 200
                 finally:
                     try:
                         conn.close()
@@ -1113,13 +1324,23 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
             try:
                 with open(log_file, "r", encoding="utf-8") as f:
                     run_data = json.load(f)
-                return jsonify(run_data), 200
+                return jsonify(_normalize_run_detail(run_data, None)), 200
+
             except json.JSONDecodeError:
-                return jsonify({
+                # partial JSON while RUNNING
+                started_dt = datetime.fromtimestamp(log_file.stat().st_mtime,
+                                                    tz=timezone.utc)
+                payload = {
                     "run_id": run_id_norm,
                     "status": "RUNNING",
-                    "message": "Import in progress (log updating)..."
-                }), 200
+                    "started_at": started_dt.isoformat(),
+                    "finished_at": None,
+                    "duration_ms": None,
+                    "files": [],
+                    "summary": {},
+                    "message": "Import in progress (log updating)...",
+                }
+                return jsonify(_normalize_run_detail(payload, None)), 200
 
         except Exception as e:
             return jsonify({"error": str(e)}), 500
