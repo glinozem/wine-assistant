@@ -1,6 +1,6 @@
+import hashlib
 import io
 import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -33,6 +33,7 @@ def ops_client(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "ARCHIVE_DIR", archive)
     monkeypatch.setattr(mod, "QUARANTINE_DIR", quarantine)
     monkeypatch.setattr(mod, "LOGS_DIR", logs)
+    monkeypatch.setattr(mod, "OPS_UPLOAD_DEDUPE_POLICY", "reject")
 
     app = Flask(__name__)
 
@@ -79,6 +80,8 @@ def test_upload_happy_path_saves_file_and_returns_saved_name(ops_client):
     assert data["uploaded"][0]["original_name"] == "prices.xlsx"
     assert data["uploaded"][0]["saved_name"] == "prices.xlsx"
     assert data["uploaded"][0]["status"] == "UPLOADED"
+    expected_sha = hashlib.sha256(b"dummy-xlsx-bytes").hexdigest()
+    assert data["uploaded"][0]["sha256"] == expected_sha
 
     saved = dirs["inbox"] / "prices.xlsx"
     assert saved.exists()
@@ -115,6 +118,37 @@ def test_upload_name_conflict_allocates_prices_1(ops_client):
     assert d2["uploaded"][0]["saved_name"] == "prices (1).xlsx"
     assert (dirs["inbox"] / "prices.xlsx").read_bytes() == b"v1"
     assert (dirs["inbox"] / "prices (1).xlsx").read_bytes() == b"v2"
+
+def test_upload_dedupe_same_content_rejected_by_sha(ops_client):
+    client, _mod, dirs = ops_client
+
+    payload = b"same-content"
+    sha = hashlib.sha256(payload).hexdigest()
+
+    r1 = client.post(
+        "/api/v1/ops/daily-import/inbox/upload",
+        headers={"X-API-Key": "testkey"},
+        data={"files": (io.BytesIO(payload), "a.xlsx")},
+        content_type="multipart/form-data",
+    )
+    assert r1.status_code == 200
+    d1 = r1.get_json()
+    assert d1 and d1["uploaded"] and d1["uploaded"][0]["sha256"] == sha
+    assert (dirs["inbox"] / "a.xlsx").exists()
+
+    r2 = client.post(
+        "/api/v1/ops/daily-import/inbox/upload",
+        headers={"X-API-Key": "testkey"},
+        data={"files": (io.BytesIO(payload), "b.xlsx")},
+        content_type="multipart/form-data",
+    )
+    assert r2.status_code == 200
+    d2 = r2.get_json()
+    assert d2 and d2["uploaded"] == []
+    assert d2["rejected"] and d2["rejected"][0]["reason"] == "DUPLICATE"
+    assert d2["rejected"][0]["sha256"] == sha
+    assert d2["rejected"][0]["duplicate_of"] == ["a.xlsx"]
+    assert not (dirs["inbox"] / "b.xlsx").exists()
 
 def test_upload_accepts_files_array_field_name_files_brackets(ops_client):
     client, _mod, dirs = ops_client
