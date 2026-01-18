@@ -11,7 +11,10 @@ from flask import Flask
 try:
     from dotenv import load_dotenv
 
-    load_dotenv(override=False)
+    # В локальной разработке лучше предпочесть .env, чтобы не "протекали" старые PG* из окружения.
+    # В CI окружение должно быть источником истины.
+    override = os.getenv("CI") not in ("1", "true", "True")
+    load_dotenv(override=override)
 except Exception:
     # python-dotenv is optional; tests can still run if env vars are provided by the shell/CI.
     pass
