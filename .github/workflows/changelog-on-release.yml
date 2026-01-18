@@ -40,10 +40,21 @@ jobs:
       - name: Resolve tag
         id: tag
         shell: bash
+        env:
+          TAG_INPUT: ${{ github.event.release.tag_name || inputs.tag }}
         run: |
-          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          set -euo pipefail
+          TAG="$TAG_INPUT"
+
           if [[ -z "$TAG" ]]; then
             echo "No tag provided; skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Defensive: ограничиваем charset тега (и убираем риск странных инъекций через shell/regex/branch name)
+          if [[ ! "$TAG" =~ ^[0-9A-Za-z._-]{1,128}$ ]]; then
+            echo "Invalid tag value; skipping."
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
