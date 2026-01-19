@@ -201,16 +201,6 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
 
     # ==================== SHA-256 / Dedupe helpers (PR-1) ====================
 
-    def _sha256_file(path: Path) -> str:
-        h = hashlib.sha256()
-        with open(path, "rb") as f:
-            while True:
-                chunk = f.read(1024 * 1024)
-                if not chunk:
-                    break
-                h.update(chunk)
-        return h.hexdigest()
-
     def _write_upload_tmp_with_sha(file_storage, dest_dir: Path,
                                    max_bytes: int) -> tuple[Path, int, str]:
         """
@@ -247,20 +237,6 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
         os.replace(str(tmp_path), str(final_path))
         return final_path
 
-    def _build_inbox_sha_index() -> dict[str, list[str]]:
-        """Best-effort: hash all current *.xlsx in inbox; used for request-scoped dedupe."""
-        idx: dict[str, list[str]] = {}
-        if not INBOX_DIR.exists():
-            return idx
-        for p in INBOX_DIR.glob("*.xlsx"):
-            try:
-                sha = _sha256_file(p)
-            except Exception:
-                # don't block uploads because one file is unreadable
-                continue
-            idx.setdefault(sha, []).append(p.name)
-        return idx
-
     # ==================== Atomic log writes ====================
     def write_log_atomic(run_id, data):
         """Atomic log write (tmp → os.replace)"""
@@ -288,6 +264,75 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
             except Exception:
                 pass
             raise
+
+    def _db_query_write(conn, sql: str, params: tuple = ()) -> list[dict]:
+        try:
+            rows = db_query(conn, sql, params) or []
+            conn.commit()
+            return rows
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+
+    def _db_get_inbox_upload_by_sha256(conn, sha256: str) -> dict | None:
+        rows = db_query(
+            conn,
+            """
+            SELECT upload_id, saved_name, original_name, sha256, size_bytes, uploaded_at
+            FROM public.ops_daily_import_uploads
+            WHERE status = 'INBOX' AND sha256 = %s
+            LIMIT 1
+            """,
+            (sha256,),
+        ) or []
+        return rows[0] if rows else None
+
+    def _db_try_register_inbox_upload(
+        conn,
+        *,
+        original_name: str,
+        saved_name: str,
+        sha256: str,
+        size_bytes: int,
+        metadata: dict | None = None,
+    ) -> tuple[bool, dict | None]:
+        payload = json.dumps(metadata or {}, ensure_ascii=False)
+        rows = _db_query_write(
+            conn,
+            """
+            INSERT INTO public.ops_daily_import_uploads
+              (status, original_name, saved_name, sha256, size_bytes, metadata)
+            VALUES
+              ('INBOX', %s, %s, %s, %s, %s::jsonb)
+            ON CONFLICT (sha256) WHERE status = 'INBOX'
+            DO NOTHING
+            RETURNING upload_id
+            """,
+            (original_name, saved_name, sha256, int(size_bytes), payload),
+        )
+        if rows:
+            return True, rows[0]
+        return False, _db_get_inbox_upload_by_sha256(conn, sha256)
+
+    def _is_saved_name_unique_violation(e: Exception) -> bool:
+        # psycopg2: UniqueViolation -> pgcode 23505, constraint in e.diag.constraint_name
+        if getattr(e, "pgcode", None) != "23505":
+            return False
+
+        diag = getattr(e, "diag", None)
+        cname = getattr(diag, "constraint_name", None)
+        if cname == "ux_ops_di_uploads_inbox_saved_name":
+            return True
+
+        # fallback: message sniffing
+        s = str(e).lower()
+        return (
+            "ux_ops_di_uploads_inbox_saved_name" in s
+            or ("duplicate key value" in s and "saved_name" in s)
+        )
 
     def _db_conn_or_none():
         conn, err = db_connect()
@@ -637,121 +682,164 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
             uploaded = []
             rejected = []
 
-            # Dedupe policy is request-global (env-config)
-            dedupe_policy = OPS_UPLOAD_DEDUPE_POLICY
-            sha_index = _build_inbox_sha_index() if dedupe_policy != "off" else {}
+            raw_policy = OPS_UPLOAD_DEDUPE_POLICY
+            dedupe_policy = raw_policy
+            if raw_policy in {"rename", "off"}:
+                try:
+                    app.logger.warning(
+                        "OPS_UPLOAD_DEDUPE_POLICY=%s is not supported with DB-truth dedupe (unique sha256 in INBOX). "
+                        "Treating as 'reject'.",
+                        raw_policy,
+                    )
+                except Exception:
+                    pass
+                dedupe_policy = "reject"
+
+            conn, err = db_connect()
+            if err or conn is None:
+                return jsonify({"error": "db_unavailable", "message": err or "db_connect failed"}), 503
 
             total_written = 0
+            try:
+                for fs in fs_list:
+                    original = getattr(fs, "filename", None) or ""
+                    try:
+                        safe_name = _validate_inbox_xlsx_basename(original)
 
-            for fs in fs_list:
-                original = getattr(fs, "filename", None) or ""
-                try:
-                    safe_name = _validate_inbox_xlsx_basename(original)
+                        tmp_path, size, sha256 = _write_upload_tmp_with_sha(
+                            fs, INBOX_DIR, MAX_UPLOAD_FILE_BYTES
+                        )
 
-                    # Always hash the payload for traceability (even if dedupe is off)
-                    tmp_path, size, sha256 = _write_upload_tmp_with_sha(
-                        fs, INBOX_DIR, MAX_UPLOAD_FILE_BYTES
-                    )
+                        if total_written + size > MAX_UPLOAD_TOTAL_BYTES:
+                            try:
+                                tmp_path.unlink(missing_ok=True)
+                            except Exception:
+                                pass
+                            rejected.append({
+                                "original_name": original,
+                                "reason": "TOTAL_TOO_LARGE",
+                                "message": f"Total upload limit exceeded ({MAX_UPLOAD_TOTAL_MB} MB)",
+                                "sha256": sha256,
+                            })
+                            continue
 
-                    total_written += size
-                    if total_written > MAX_UPLOAD_TOTAL_BYTES:
-                        # Reject: total limit exceeded
-                        try:
-                            tmp_path.unlink(missing_ok=True)  # py3.11 ok
-                        except Exception:
-                            pass
-                        rejected.append({
-                            "original_name": original,
-                            "reason": "TOTAL_TOO_LARGE",
-                            "message": f"Total upload limit exceeded ({MAX_UPLOAD_TOTAL_MB} MB)",
-                            "sha256": sha256,
-                        })
+                        # retry loop for saved_name unique collisions
+                        ok = False
+                        info = None
+                        saved_name = None
 
-                        continue
-
-                    # Duplicate detection (content-based) within INBOX
-                    duplicate_of = []
-                    if dedupe_policy != "off":
-                        duplicate_of.extend(sha_index.get(sha256, []))
-
-                    # preserve order, remove duplicates
-                    if duplicate_of:
-                        duplicate_of = list(dict.fromkeys(duplicate_of))
-
-                    if duplicate_of and dedupe_policy in {"reject", "skip"}:
-                        # Drop content duplicates (default)
-                        try:
-                            tmp_path.unlink(missing_ok=True)
-                        except Exception:
-                            pass
-                        rejected.append({
-                            "original_name": original,
-                            "reason": "DUPLICATE",
-                            "message": f"Duplicate content (SHA-256) found in inbox; policy={dedupe_policy}",
-                            "sha256": sha256,
-                            "duplicate_of": duplicate_of,
-                        })
-                        continue
-
-                    if duplicate_of and dedupe_policy == "rename":
-                        # Save but clearly mark as duplicate (name is deterministic-ish)
                         stem = Path(safe_name).stem
                         suffix = Path(safe_name).suffix
-                        desired = f"{stem} (DUPLICATE {sha256[:8]}){suffix}"
-                        saved_name = _allocate_non_conflicting_name(INBOX_DIR,
-                                                                    desired)
-                        status = "DUPLICATE"
-                    else:
-                        saved_name = _allocate_non_conflicting_name(INBOX_DIR,
-                                                                    safe_name)
-                        status = "UPLOADED"
 
-                    _finalize_upload_tmp(tmp_path, INBOX_DIR, saved_name)
+                        for attempt in range(5):
+                            name_hint = safe_name if attempt == 0 else f"{stem} ({attempt}){suffix}"
+                            candidate = _allocate_non_conflicting_name(INBOX_DIR, name_hint)
+                            try:
+                                ok, info = _db_try_register_inbox_upload(
+                                    conn,
+                                    original_name=original,
+                                    saved_name=candidate,
+                                    sha256=sha256,
+                                    size_bytes=size,
+                                    metadata={"dedupe_policy": dedupe_policy},
+                                )
+                                saved_name = candidate
+                                break
+                            except Exception as e:
+                                if _is_saved_name_unique_violation(e):
+                                    continue
+                                raise
 
-                    # Update request-local sha index for next files
-                    if dedupe_policy != "off":
-                        sha_index.setdefault(sha256, []).append(saved_name)
+                        if saved_name is None:
+                            # Не смогли подобрать имя (DB unique по saved_name) — это НЕ DUPLICATE по контенту.
+                            try:
+                                tmp_path.unlink(missing_ok=True)
+                            except Exception:
+                                pass
+                            rejected.append({
+                                "original_name": original,
+                                "reason": "NAME_CONFLICT",
+                                "message": "Could not allocate unique saved_name in DB (INBOX)",
+                                "sha256": sha256,
+                            })
+                            continue
 
-                    uploaded_entry = {
-                        "original_name": original,
-                        "saved_name": saved_name,
-                        "size": size,
-                        "sha256": sha256,
-                        "status": status,
-                    }
-                    if duplicate_of:
-                        uploaded_entry["duplicate_of"] = duplicate_of
+                        if not ok:
+                            try:
+                                tmp_path.unlink(missing_ok=True)
+                            except Exception:
+                                pass
 
-                    uploaded.append(uploaded_entry)
+                            dup_saved = (info or {}).get("saved_name")
+                            dup_id = (info or {}).get("upload_id")
+                            rejected.append({
+                                "original_name": original,
+                                "reason": "DUPLICATE",
+                                "duplicate_upload_id": dup_id,
+                                "message": f"Duplicate content (SHA-256) in inbox; policy={dedupe_policy}",
+                                "sha256": sha256,
+                                "duplicate_of": [dup_saved] if dup_saved else [],
+                            })
+                            continue
 
-                    try:
-                        app.logger.info(
-                            "ops daily-import upload: original=%s saved=%s size=%s sha256=%s status=%s",
-                            original,
-                            saved_name,
-                            size,
-                            sha256,
-                            status,
-                        )
-                    except Exception:
-                        pass
+                        try:
+                            _finalize_upload_tmp(tmp_path, INBOX_DIR, saved_name)
+                        except Exception:
+                            # avoid INBOX ghost in DB
+                            try:
+                                _db_query_write(
+                                    conn,
+                                    """
+                                    UPDATE public.ops_daily_import_uploads
+                                    SET status='DELETED',
+                                        moved_at=now()
+                                    WHERE status = 'INBOX'
+                                      AND sha256 = %s
+                                    """,
+                                    (sha256,),
+                                )
+                            except Exception:
+                                pass
+                            raise
 
-                except ValueError as e:
-                    # map known errors
-                    reason = str(e)
-                    if reason == "FILE_TOO_LARGE":
-                        rejected.append({
+                        total_written += size
+                        uploaded.append({
                             "original_name": original,
-                            "reason": "FILE_TOO_LARGE",
-                            "message": f"Max per-file size is {MAX_UPLOAD_FILE_MB} MB",
+                            "saved_name": saved_name,
+                            "size": size,
+                            "sha256": sha256,
+                            "status": "UPLOADED",
+                            "upload_id": (info or {}).get("upload_id"),
                         })
-                    else:
-                        # default for filename/ext/etc
-                        rejected.append({
-                            "original_name": original,
-                            "reason": "INVALID_FILE",
-                            "message": str(e),
-                        })
+
+                        try:
+                            app.logger.info(
+                                "ops daily-import upload(db): original=%s saved=%s size=%s sha256=%s upload_id=%s",
+                                original, saved_name, size, sha256,
+                                (info or {}).get("upload_id"),
+                            )
+                        except Exception:
+                            pass
+
+                    except ValueError as e:
+                        reason = str(e)
+                        if reason == "FILE_TOO_LARGE":
+                            rejected.append({
+                                "original_name": original,
+                                "reason": "FILE_TOO_LARGE",
+                                "message": f"Max per-file size is {MAX_UPLOAD_FILE_MB} MB",
+                            })
+                        else:
+                            rejected.append({
+                                "original_name": original,
+                                "reason": "INVALID_FILE",
+                                "message": str(e),
+                            })
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
             return jsonify({
                 "uploaded": uploaded,
@@ -761,6 +849,7 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
 
         except Exception as e:
             return jsonify({"error": str(e)}), 500
+
 
     @app.route("/api/v1/ops/daily-import/run", methods=["POST"])
     @require_api_key

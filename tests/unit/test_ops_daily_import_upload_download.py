@@ -1,6 +1,8 @@
 import hashlib
 import io
 import os
+import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -47,11 +49,86 @@ def ops_client(tmp_path, monkeypatch):
         wrapper.__name__ = fn.__name__
         return wrapper
 
-    # db_* для этих тестов не нужны; дадим “заглушки”
+    @dataclass
+    class _Diag:
+        constraint_name: str
+
+    class FakeUniqueViolation(Exception):
+        def __init__(self, constraint_name: str):
+            super().__init__(
+                f"duplicate key value violates unique constraint \"{constraint_name}\"")
+            self.pgcode = "23505"
+            self.diag = _Diag(constraint_name=constraint_name)
+
+    class FakeConn:
+        def __init__(self):
+            self.closed = False
+
+        def commit(self): pass
+
+        def rollback(self): pass
+
+        def close(self): self.closed = True
+
+    # in-memory "table" for ops_daily_import_uploads (only what we need)
+    uploads = []  # list[dict]
+
     def db_connect():
-        return None, "db disabled for unit tests"
+        return FakeConn(), None
 
     def db_query(conn, sql, params=()):
+        q = " ".join(sql.split()).lower()
+
+        # INSERT ... ops_daily_import_uploads ... ON CONFLICT (sha256) WHERE status='INBOX'
+        if "insert into public.ops_daily_import_uploads" in q:
+            original_name, saved_name, sha256, size_bytes, metadata_json = params
+
+            # emulate partial unique: sha256 unique where status='INBOX'
+            for r in uploads:
+                if r["status"] == "INBOX" and r["sha256"] == sha256:
+                    return []  # DO NOTHING
+
+            # emulate partial unique: saved_name unique where status='INBOX'
+            for r in uploads:
+                if r["status"] == "INBOX" and r["saved_name"] == saved_name:
+                    raise FakeUniqueViolation(
+                        "ux_ops_di_uploads_inbox_saved_name")
+
+            upload_id = str(uuid.uuid4())
+            uploads.append({
+                "upload_id": upload_id,
+                "status": "INBOX",
+                "original_name": original_name,
+                "saved_name": saved_name,
+                "sha256": sha256,
+                "size_bytes": int(size_bytes),
+            })
+            return [{"upload_id": upload_id}]
+
+        # SELECT ... WHERE status='INBOX' AND sha256=%s LIMIT 1
+        if "from public.ops_daily_import_uploads" in q and "where status = 'inbox' and sha256 = %s" in q:
+            (sha256,) = params
+            for r in uploads:
+                if r["status"] == "INBOX" and r["sha256"] == sha256:
+                    # return minimal columns used by code
+                    return [{
+                        "upload_id": r["upload_id"],
+                        "saved_name": r["saved_name"],
+                        "original_name": r["original_name"],
+                        "sha256": r["sha256"],
+                        "size_bytes": r["size_bytes"],
+                        "uploaded_at": None,
+                    }]
+            return []
+
+        # UPDATE ... SET status='DELETED' ... WHERE status='INBOX' AND sha256=%s
+        if "update public.ops_daily_import_uploads" in q and "set status='deleted'" in q:
+            (sha256,) = params
+            for r in uploads:
+                if r["status"] == "INBOX" and r["sha256"] == sha256:
+                    r["status"] = "DELETED"
+            return []
+
         return []
 
     mod.register_ops_daily_import(app, require_api_key, db_connect, db_query)
@@ -82,6 +159,7 @@ def test_upload_happy_path_saves_file_and_returns_saved_name(ops_client):
     assert data["uploaded"][0]["status"] == "UPLOADED"
     expected_sha = hashlib.sha256(b"dummy-xlsx-bytes").hexdigest()
     assert data["uploaded"][0]["sha256"] == expected_sha
+    assert data["uploaded"][0]["upload_id"]
 
     saved = dirs["inbox"] / "prices.xlsx"
     assert saved.exists()
@@ -133,6 +211,7 @@ def test_upload_dedupe_same_content_rejected_by_sha(ops_client):
     )
     assert r1.status_code == 200
     d1 = r1.get_json()
+    u1_id = d1["uploaded"][0]["upload_id"]
     assert d1 and d1["uploaded"] and d1["uploaded"][0]["sha256"] == sha
     assert (dirs["inbox"] / "a.xlsx").exists()
 
@@ -148,6 +227,7 @@ def test_upload_dedupe_same_content_rejected_by_sha(ops_client):
     assert d2["rejected"] and d2["rejected"][0]["reason"] == "DUPLICATE"
     assert d2["rejected"][0]["sha256"] == sha
     assert d2["rejected"][0]["duplicate_of"] == ["a.xlsx"]
+    assert d2["rejected"][0]["duplicate_upload_id"] == u1_id
     assert not (dirs["inbox"] / "b.xlsx").exists()
 
 def test_upload_accepts_files_array_field_name_files_brackets(ops_client):
@@ -277,6 +357,53 @@ def test_upload_total_payload_too_large_returns_413(ops_client, monkeypatch):
     assert r.status_code == 413
     data = r.get_json()
     assert data and data.get("error") == "payload_too_large"
+
+
+def test_upload_total_too_large_returns_sha256(ops_client, monkeypatch):
+    """
+    Гарантированно попадаем в ветку:
+      tmp записан + sha256 посчитан + total_written + size > MAX_UPLOAD_TOTAL_BYTES
+    (и НЕ в 413 pre-check по request.content_length).
+    """
+    client, mod, dirs = ops_client
+
+    # отключаем content_length pre-check, чтобы протестировать "loop total" ветку
+    from flask.wrappers import Request as FlaskRequest
+    monkeypatch.setattr(
+        FlaskRequest,
+        "content_length",
+        property(lambda self: None),
+        raising=False,
+    )
+
+    # Делаем маленький total-лимит: 10 байт пройдут, 2-й файл уже нет (10+10 > 15)
+    monkeypatch.setattr(mod, "MAX_UPLOAD_TOTAL_BYTES", 15)
+    monkeypatch.setattr(mod, "MAX_UPLOAD_FILE_BYTES", 1024)  # чтобы не упереться в FILE_TOO_LARGE
+
+    data = MultiDict()
+    data.add("files", (io.BytesIO(b"a" * 10), "a.xlsx"))
+    data.add("files", (io.BytesIO(b"b" * 10), "b.xlsx"))
+
+    r = client.post(
+        "/api/v1/ops/daily-import/inbox/upload",
+        headers={"X-API-Key": "testkey"},
+        data=data,
+        content_type="multipart/form-data",
+    )
+
+    assert r.status_code == 200
+    payload = r.get_json()
+    assert payload is not None
+
+    assert len(payload["uploaded"]) == 1
+    assert payload["uploaded"][0]["saved_name"] == "a.xlsx"
+    assert (dirs["inbox"] / "a.xlsx").exists()
+
+    assert payload["rejected"] and payload["rejected"][0]["reason"] == "TOTAL_TOO_LARGE"
+    assert payload["rejected"][0]["original_name"] == "b.xlsx"
+    assert payload["rejected"][0]["sha256"] == hashlib.sha256(b"b" * 10).hexdigest()
+    assert len(payload["rejected"]) == 1
+    assert not (dirs["inbox"] / "b.xlsx").exists()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -409,3 +536,34 @@ def test_download_logs_blocks_absolute_path(ops_client):
     if r.status_code == 403:
         data = r.get_json()
         assert data and data.get("error") == "Path traversal blocked"
+
+
+def test_upload_name_conflict_db_only_can_lead_to_name_conflict_reason(ops_client):
+    client, _mod, dirs = ops_client
+
+    # precreate 5 DB rows with names that our retry will try (no files on disk)
+    # We use 5 uploads with different sha256 to occupy names: prices.xlsx, prices (1).xlsx ... prices (4).xlsx
+    def post_bytes(name, payload):
+        return client.post(
+            "/api/v1/ops/daily-import/inbox/upload",
+            headers={"X-API-Key": "testkey"},
+            data={"files": (io.BytesIO(payload), name)},
+            content_type="multipart/form-data",
+        )
+
+    # Create actual files + DB rows to occupy names, then delete files to simulate "db has it, fs doesn't"
+    for i in range(5):
+        nm = "prices.xlsx" if i == 0 else f"prices ({i}).xlsx"
+        r = post_bytes(nm, f"v{i}".encode())
+        assert r.status_code == 200
+        saved = r.get_json()["uploaded"][0]["saved_name"]
+        p = dirs["inbox"] / saved
+        if p.exists():
+            p.unlink()
+
+    # Now upload another file with safe_name prices.xlsx; allocator will keep proposing names that DB blocks
+    r2 = post_bytes("prices.xlsx", b"new-content")
+    assert r2.status_code == 200
+    d2 = r2.get_json()
+    assert d2["uploaded"] == []
+    assert d2["rejected"][0]["reason"] == "NAME_CONFLICT"
