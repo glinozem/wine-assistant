@@ -215,6 +215,73 @@ def release_lock(conn):
     except Exception:
         pass
 
+def try_mark_inbox_upload_moved(
+    conn,
+    *,
+    sha256: str,
+    saved_name: str,
+    new_status: str,
+    moved_path: str,
+    run_id: str,
+    extra_meta: Optional[Dict[str, Any]] = None,
+) -> None:
+    """
+    Best-effort: если файл был загружен через API и зарегистрирован в public.ops_daily_import_uploads,
+    помечаем, что он перемещён из INBOX (ARCHIVED/QUARANTINED) и доклеиваем метаданные.
+
+    Важно:
+    - Это NO-OP, если строки нет (файл попал в INBOX вручную).
+    - Не должно валить импорт при любой DB-ошибке (миграция не применена, таблицы нет и т.п.).
+    """
+    if conn is None:
+        return
+    if new_status not in {"ARCHIVED", "QUARANTINED"}:
+        return
+
+    meta: Dict[str, Any] = {"run_id": run_id, "moved_to": moved_path}
+    if extra_meta:
+        for k, v in extra_meta.items():
+            if v is not None:
+                meta[k] = v
+
+    payload = json.dumps(meta, ensure_ascii=False)
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE public.ops_daily_import_uploads
+                SET status   = %s,
+                    moved_at = now(),
+                    metadata = coalesce(metadata, '{}'::jsonb) || %s::jsonb
+                WHERE status = 'INBOX'
+                  AND sha256 = %s
+                  AND saved_name = %s
+                """,
+                (
+                    new_status,
+                    payload,
+                    sha256,
+                    saved_name,
+                ),
+            )
+
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        # Best-effort: не мешаем импорту. Лог в stderr.
+        try:
+            print(
+                f"[WARN] ops_daily_import_uploads update failed: saved_name={saved_name} sha256={sha256[:12]}...",
+                file=sys.stderr,
+            )
+        except Exception:
+            pass
+
+
 # ==================== File Operations ====================
 def compute_file_hash(file_path: Path) -> str:
     sha256 = hashlib.sha256()
@@ -256,7 +323,12 @@ def quarantine_file(file_path: Path, file_name: str) -> str:
     return str(rel_path)
 
 # ==================== Process File ====================
-def process_file(file_path: Path, selected_mode: SelectedMode) -> Dict[str, Any]:
+def process_file(
+    file_path: Path,
+    selected_mode: SelectedMode,
+    run_id: str,
+    conn: Any,
+) -> Dict[str, Any]:
     started_at = datetime.now(UTC)
     file_name = file_path.name
     guessed_effective_date = parse_effective_date_from_filename(file_name)
@@ -296,6 +368,20 @@ def process_file(file_path: Path, selected_mode: SelectedMode) -> Dict[str, Any]
             result["status"] = "SKIPPED"
             result["skip_reason"] = SkipReason.ALREADY_IMPORTED_SAME_HASH.value
             result["archive_path"] = archive_file(file_path)
+
+            try_mark_inbox_upload_moved(
+                conn,
+                sha256=file_hash,
+                saved_name=file_name,
+                new_status="ARCHIVED",
+                moved_path=result["archive_path"],
+                run_id=run_id,
+                extra_meta={
+                    "import_status": result["status"],
+                    "skip_reason": result["skip_reason"],
+                    "mode": selected_mode.value,
+                },
+            )
 
         elif proc.returncode == 0:
             result["status"] = "IMPORTED"
@@ -342,6 +428,24 @@ def process_file(file_path: Path, selected_mode: SelectedMode) -> Dict[str, Any]
 
             result["archive_path"] = archive_file(file_path)
 
+            try_mark_inbox_upload_moved(
+                conn,
+                sha256=file_hash,
+                saved_name=file_name,
+                new_status="ARCHIVED",
+                moved_path=result["archive_path"],
+                run_id=run_id,
+                extra_meta={
+                    "import_status": result["status"],
+                    "mode": selected_mode.value,
+                    "envelope_id": result.get("envelope_id"),
+                    "effective_date": result.get("effective_date"),
+                    "rows_good": result.get("rows_good"),
+                    "rows_quarantine": result.get("rows_quarantine"),
+                    "etl_exit_code": 0,
+                },
+            )
+
         else:
             if proc.returncode == 2:
                 result["status"] = "QUARANTINED"
@@ -354,6 +458,21 @@ def process_file(file_path: Path, selected_mode: SelectedMode) -> Dict[str, Any]
 
             if result["status"] == "QUARANTINED":
                 result["quarantine_path"] = quarantine_file(file_path, file_name)
+
+                try_mark_inbox_upload_moved(
+                    conn,
+                    sha256=file_hash,
+                    saved_name=file_name,
+                    new_status="QUARANTINED",
+                    moved_path=result["quarantine_path"],
+                    run_id=run_id,
+                    extra_meta={
+                        "status": result["status"],
+                        "mode": selected_mode.value,
+                        "etl_exit_code": int(proc.returncode),
+                        "error": result.get("error"),
+                    },
+                )
 
     except subprocess.TimeoutExpired:
         result["status"] = "ERROR"
@@ -568,7 +687,7 @@ def main():
                     "finished_at": datetime.now(UTC).isoformat()
                 })
             else:
-                file_result = process_file(file_item, selected_mode)
+                file_result = process_file(file_item, selected_mode, run_id, conn)
                 all_results.append(file_result)
 
         post_steps_result = None
