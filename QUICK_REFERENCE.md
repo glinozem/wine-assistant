@@ -18,6 +18,8 @@ echo $env:API_KEY
 
 ## 📥 Daily Import (Ops)
 
+Runbook: [docs/ops_daily_import.md](docs/ops_daily_import.md)
+
 ### 1) Web UI
 
 ```text
