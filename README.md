@@ -731,6 +731,7 @@ make dr-smoke-truncate DR_BACKUP_KEEP=2 MANAGE_PROMTAIL=1
 - **[docs/changes_daily_import.md](docs/changes_daily_import.md)** — Daily Import (Ops) guide
 - **[docs/MIGRATION_GUIDE_v1.0.4.md](docs/MIGRATION_GUIDE_v1.0.4.md)** — Migration guide
 - **[docs/dev/import_flow.md](docs/dev/import_flow.md)** — Import Operations архитектура
+- **[docs/architecture.md](docs/architecture.md)** — Общая архитектурная диаграмма
 - **[docs/ops_daily_import.md](docs/ops_daily_import.md)** — Ops Daily Import runbook
 - **[docs/dev/backup-dr-runbook.md](docs/dev/backup-dr-runbook.md)** — Backup/DR руководство
 - **[docs/dev/web-ui.md](docs/dev/web-ui.md)** — Документация UI

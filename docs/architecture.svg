@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="700" viewBox="0 0 1200 700">
+  <rect width="1200" height="700" fill="#ffffff"/>
+  <style>
+    .title { font: 16px sans-serif; font-weight: 600; }
+    .label { font: 12px sans-serif; }
+    .box { fill: #f6f8fa; stroke: #1f2328; stroke-width: 1; }
+    .arrow { stroke: #1f2328; stroke-width: 1.5; fill: none; marker-end: url(#arrow); }
+  </style>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#1f2328"/>
+    </marker>
+  </defs>
+
+  <text x="40" y="40" class="title">Wine Assistant Architecture (High-level)</text>
+
+  <rect x="40" y="70" width="250" height="170" class="box"/>
+  <text x="50" y="95" class="label">Sources</text>
+  <text x="50" y="120" class="label">- data/inbox (Excel/CSV)</text>
+  <text x="50" y="140" class="label">- PDF каталоги</text>
+  <text x="50" y="160" class="label">- UI/Пользователь</text>
+  <text x="50" y="180" class="label">- API клиенты</text>
+
+  <rect x="350" y="70" width="300" height="170" class="box"/>
+  <text x="360" y="95" class="label">ETL/Импорт</text>
+  <text x="360" y="120" class="label">- etl/run_daily.py</text>
+  <text x="360" y="140" class="label">- import_orchestrator.py</text>
+  <text x="360" y="160" class="label">- idempotency.py</text>
+  <text x="360" y="180" class="label">- ingest_envelope.py</text>
+  <text x="360" y="200" class="label">- import_run_registry.py</text>
+
+  <rect x="700" y="70" width="300" height="170" class="box"/>
+  <text x="710" y="95" class="label">API слой</text>
+  <text x="710" y="120" class="label">- api/app.py</text>
+  <text x="710" y="140" class="label">- api/export.py</text>
+  <text x="710" y="160" class="label">- api/templates/ui.html</text>
+
+  <rect x="350" y="280" width="300" height="170" class="box"/>
+  <text x="360" y="305" class="label">PostgreSQL</text>
+  <text x="360" y="330" class="label">- products / product_prices</text>
+  <text x="360" y="350" class="label">- inventory / inventory_history</text>
+  <text x="360" y="370" class="label">- ingest_envelope / price_list</text>
+  <text x="360" y="390" class="label">- import_runs</text>
+
+  <rect x="700" y="280" width="300" height="170" class="box"/>
+  <text x="710" y="305" class="label">Observability/Ops</text>
+  <text x="710" y="330" class="label">- Grafana dashboards</text>
+  <text x="710" y="350" class="label">- Loki/Promtail</text>
+  <text x="710" y="370" class="label">- Backup/DR scripts</text>
+
+  <line x1="290" y1="155" x2="350" y2="155" class="arrow"/>
+  <line x1="650" y1="155" x2="700" y2="155" class="arrow"/>
+  <line x1="500" y1="240" x2="500" y2="280" class="arrow"/>
+  <line x1="850" y1="240" x2="850" y2="280" class="arrow"/>
+  <line x1="700" y1="365" x2="650" y2="365" class="arrow"/>
+</svg>
