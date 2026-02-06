@@ -206,7 +206,7 @@ def detect_mapping(df, mapping_template):
             if any(k in lc for k in keys):
                 mapping[tgt] = c
                 break
-        return mapping
+    return mapping
 
 
 def normalize_row(raw, m):
