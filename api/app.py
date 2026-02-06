@@ -42,6 +42,7 @@ PRICE_EFFECTIVE_SQL = "COALESCE(p.price_final_rub, p.price_list_rub)"
 # ────────────────────────────────────────────────────────────────────────────────
 try:
     import psycopg  # psycopg3
+
     HAVE_PSYCOPG3 = True
 except Exception:  # pragma: no cover
     HAVE_PSYCOPG3 = False
@@ -49,6 +50,7 @@ except Exception:  # pragma: no cover
         import psycopg2  # type: ignore
     except Exception:  # pragma: no cover
         psycopg2 = None  # type: ignore
+
 
 def db_connect() -> Tuple[Optional[Any], Optional[str]]:
     """
@@ -88,6 +90,7 @@ def db_connect() -> Tuple[Optional[Any], Optional[str]]:
     except Exception as e:
         return None, str(e)
 
+
 def db_query(conn: Any, sql: str, params: Optional[tuple] = None) -> List[Dict[str, Any]]:
     """Execute SELECT and return rows as list of dicts (works for psycopg2/3)."""
     params = params or tuple()
@@ -106,12 +109,13 @@ def db_query(conn: Any, sql: str, params: Optional[tuple] = None) -> List[Dict[s
                 rows.append({c: v for c, v in zip(cols, r)})
     return rows
 
+
 # ────────────────────────────────────────────────────────────────────────────────
 # App / CORS / Logging / Rate limiting
 # ────────────────────────────────────────────────────────────────────────────────
 app = Flask(
     __name__,
-    static_folder="../static",   # /app/api -> /app/static
+    static_folder="../static",  # /app/api -> /app/static
     static_url_path="/static",  # URL вида /static/...
 )
 
@@ -125,6 +129,9 @@ API_KEY = os.getenv("API_KEY")  # if set → protect certain endpoints
 
 _IMAGE_EXT_PRIORITY = (".jpeg", ".jpg", ".png", ".webp")
 _IMAGE_INDEX: dict[str, str] | None = None
+_IMAGE_INDEX_MTIME_NS: int | None = None
+_IMAGE_INDEX_TS: float | None = None
+_IMAGE_INDEX_TTL_SECONDS: int = int(os.getenv("WINE_IMAGE_INDEX_TTL_SECONDS", "0"))
 
 
 def _get_image_dir() -> Path:
@@ -135,8 +142,17 @@ def _get_image_dir() -> Path:
     return Path(app.static_folder) / "images"
 
 
-def _build_image_index() -> dict[str, str]:
-    image_dir = _get_image_dir()
+def _image_dir_mtime_ns(image_dir: Path) -> int:
+    try:
+        if not image_dir.exists():
+            return 0
+        return image_dir.stat().st_mtime_ns
+    except Exception:
+        return 0
+
+
+def _build_image_index(image_dir: Path | None = None) -> dict[str, str]:
+    image_dir = image_dir or _get_image_dir()
     idx: dict[str, str] = {}
     if not image_dir.exists():
         return idx
@@ -168,10 +184,22 @@ def _build_image_index() -> dict[str, str]:
 
 
 def _get_best_image_filename(code: str) -> str | None:
-    global _IMAGE_INDEX
-    if _IMAGE_INDEX is None:
-        _IMAGE_INDEX = _build_image_index()
-    return _IMAGE_INDEX.get(code)
+    global _IMAGE_INDEX, _IMAGE_INDEX_MTIME_NS, _IMAGE_INDEX_TS
+    image_dir = _get_image_dir()
+    dir_mtime_ns = _image_dir_mtime_ns(image_dir)
+    now = time.time()
+
+    stale_by_mtime = _IMAGE_INDEX_MTIME_NS != dir_mtime_ns
+    stale_by_ttl = (
+        _IMAGE_INDEX_TTL_SECONDS > 0
+        and _IMAGE_INDEX_TS is not None
+        and (now - _IMAGE_INDEX_TS) >= _IMAGE_INDEX_TTL_SECONDS
+    )
+    if _IMAGE_INDEX is None or stale_by_mtime or stale_by_ttl:
+        _IMAGE_INDEX = _build_image_index(image_dir=image_dir)
+        _IMAGE_INDEX_MTIME_NS = dir_mtime_ns
+        _IMAGE_INDEX_TS = now
+    return _IMAGE_INDEX.get(code) if _IMAGE_INDEX else None
 
 
 def _public_url(path: str) -> str:
@@ -202,9 +230,11 @@ def ui_index():
     # позже сюда можно добавить передачу API-ключа из конфига
     return render_template("ui.html", api_key=API_KEY or "")
 
+
 @app.route("/daily-import")
 def daily_import_ui():
     return render_template("daily_import.html", api_key=API_KEY or "")
+
 
 # CORS
 cors_origins = os.getenv("CORS_ORIGINS", "*")
@@ -238,12 +268,14 @@ if RATE_LIMIT_ENABLED:
         headers_enabled=True,
     )
 else:
+
     class _DummyLimiter:
         """Простая заглушка для limiter, когда RATE_LIMIT_ENABLED=0."""
 
         def limit(self, *args, **kwargs):
             def decorator(fn):
                 return fn
+
             return decorator
 
     limiter = _DummyLimiter()
@@ -458,15 +490,16 @@ swagger_config = {
 }
 Swagger(app, template=swagger_template, config=swagger_config)
 
+
 # ────────────────────────────────────────────────────────────────────────────────
 # Request/Response logging and error handling
 # ────────────────────────────────────────────────────────────────────────────────
 @app.errorhandler(RateLimitExceeded)
 def handle_ratelimit(e):
-    return jsonify({
-        "error": "rate_limited",
-        "message": "Too many requests. Please retry later."
-    }), 429
+    return jsonify(
+        {"error": "rate_limited", "message": "Too many requests. Please retry later."}
+    ), 429
+
 
 @app.errorhandler(HTTPException)
 def handle_http_exception(e: HTTPException):
@@ -485,6 +518,7 @@ def handle_http_exception(e: HTTPException):
 
     return e
 
+
 @app.errorhandler(Exception)
 def log_exception(exc):
     app.logger.error(
@@ -501,12 +535,8 @@ def log_exception(exc):
         },
         exc_info=True,
     )
-    return jsonify(
-        {
-            "error": "internal_error",
-            "request_id": getattr(g, "request_id", None)
-        }
-    ), 500
+    return jsonify({"error": "internal_error", "request_id": getattr(g, "request_id", None)}), 500
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Security
@@ -526,12 +556,12 @@ def require_api_key(fn):
                         "http_method": request.method,
                         "http_path": request.path,
                         "client_ip": request.remote_addr,
-                        "provided_key_prefix": (provided[
-                                                    :8] + "...") if provided else None,
+                        "provided_key_prefix": (provided[:8] + "...") if provided else None,
                     },
                 )
                 return jsonify({"error": "forbidden"}), 403
         return fn(*args, **kwargs)
+
     return wrapper
 
 
@@ -551,11 +581,13 @@ def _parse_int(name: str, default: int) -> int:
     except Exception:
         return default
 
+
 def _parse_bool(name: str, default: bool = False) -> bool:
     raw = request.args.get(name)
     if raw is None:
         return default
     return str(raw).lower() in ("1", "true", "yes", "on")
+
 
 def _parse_date(name: str) -> Optional[date]:
     raw = request.args.get(name)
@@ -567,6 +599,7 @@ def _parse_date(name: str) -> Optional[date]:
         except Exception:
             pass
     return None
+
 
 def _convert_decimal_to_number(value):
     """Привести Decimal/строки с числом к int/float, остальные значения вернуть как есть."""
@@ -660,6 +693,7 @@ def health():
     """
     return jsonify({"ok": True})
 
+
 @app.route("/live", methods=["GET"])
 @limiter.limit(PUBLIC_LIMIT)
 def liveness():
@@ -680,6 +714,7 @@ def liveness():
             "version": APP_VERSION,
         }
     )
+
 
 @app.route("/ready", methods=["GET"])
 @limiter.limit(PUBLIC_LIMIT)
@@ -808,6 +843,7 @@ def readiness():
     finally:
         _close_conn_safely(conn)
 
+
 @app.route("/version", methods=["GET"])
 @limiter.limit(PUBLIC_LIMIT)
 def version():
@@ -856,6 +892,7 @@ def version():
     """
 
     return jsonify({"version": APP_VERSION})
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Search endpoints
@@ -947,8 +984,7 @@ def simple_search():
         rows = db_query(conn, sql, tuple(qparams))
         items = [_normalize_price_and_inventory_row(dict(r)) for r in rows]
 
-        return jsonify(
-            {"items": items, "total": len(items), "query": params.q})
+        return jsonify({"items": items, "total": len(items), "query": params.q})
     except Exception as e:
         app.logger.error(
             "Search query failed",
@@ -965,13 +1001,15 @@ def simple_search():
             },
             exc_info=True,
         )
-        return jsonify({
-            "error": "search_failed",
-            "message": "Failed to execute search",
-            "items": [],
-            "total": 0,
-            "query": params.q
-        }), 500
+        return jsonify(
+            {
+                "error": "search_failed",
+                "message": "Failed to execute search",
+                "items": [],
+                "total": 0,
+                "query": params.q,
+            }
+        ), 500
     finally:
         _close_conn_safely(conn)
 
@@ -1329,9 +1367,7 @@ def export_search():
         qparams: list = []
 
         if params.q:
-            clauses.append(
-                "(p.title_ru ILIKE %s OR p.producer ILIKE %s OR p.region ILIKE %s)"
-            )
+            clauses.append("(p.title_ru ILIKE %s OR p.producer ILIKE %s OR p.region ILIKE %s)")
             like = f"%{params.q}%"
             qparams.extend([like, like, like])
 
@@ -1397,18 +1433,18 @@ def export_search():
         # 3. В зависимости от формата используем ExportService
         if fmt == "json":
             items = [_normalize_product_row(dict(row)) for row in rows]
-            return jsonify({
-                "value": items,
-                "Count": len(items),
-            })
+            return jsonify(
+                {
+                    "value": items,
+                    "Count": len(items),
+                }
+            )
 
         if fmt == "xlsx":
             content = export_service.export_search_to_excel(rows, fields)
             return send_file(
                 io.BytesIO(content),
-                mimetype=(
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                ),
+                mimetype=("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
                 as_attachment=True,
                 download_name="wine_search.xlsx",
             )
@@ -1449,6 +1485,7 @@ def export_search():
 # ────────────────────────────────────────────────────────────────────────────────
 # SKU endpoints (protected if API_KEY set)
 # ────────────────────────────────────────────────────────────────────────────────
+
 
 def _fetch_sku_row(conn, code: str) -> dict | None:
     """
@@ -1597,6 +1634,7 @@ def get_sku(code: str):
         return jsonify({"error": "internal_error"}), 500
     finally:
         _close_conn_safely(conn)
+
 
 @app.route("/export/sku/<code>", methods=["GET"])
 @app.route("/api/v1/export/sku/<code>", methods=["GET"])
@@ -1810,13 +1848,15 @@ def price_history(code: str):
             if "price_rub" in r:
                 r["price_rub"] = _convert_decimal_to_number(r["price_rub"])
 
-        return jsonify({
-            "code": code,
-            "items": rows,
-            "total": len(rows),
-            "limit": params.limit,
-            "offset": params.offset,
-        })
+        return jsonify(
+            {
+                "code": code,
+                "items": rows,
+                "total": len(rows),
+                "limit": params.limit,
+                "offset": params.offset,
+            }
+        )
     except Exception as e:
         app.logger.error(
             f"Price history lookup failed: {code}",
@@ -1833,11 +1873,16 @@ def price_history(code: str):
             },
             exc_info=True,
         )
-        return jsonify({
-            "error": "query_failed",
-            "items": [], "total": 0, "code": code,
-            "limit": params.limit, "offset": params.offset
-        }), 500
+        return jsonify(
+            {
+                "error": "query_failed",
+                "items": [],
+                "total": 0,
+                "code": code,
+                "limit": params.limit,
+                "offset": params.offset,
+            }
+        ), 500
     finally:
         _close_conn_safely(conn)
 
@@ -1910,9 +1955,7 @@ def export_price_history(code: str):
             extra={
                 "event": "export_price_history_db_unavailable",
                 "service": "wine-assistant-api",
-                "request_id": getattr(
-                    g, "request_id", getattr(g, "_request_id", "unknown")
-                ),
+                "request_id": getattr(g, "request_id", getattr(g, "_request_id", "unknown")),
                 "http_method": request.method,
                 "http_path": request.path,
                 "sku_code": code,
@@ -1973,9 +2016,7 @@ def export_price_history(code: str):
             extra={
                 "event": "export_price_history_succeeded",
                 "service": "wine-assistant-api",
-                "request_id": getattr(
-                    g, "request_id", getattr(g, "_request_id", "unknown")
-                ),
+                "request_id": getattr(g, "request_id", getattr(g, "_request_id", "unknown")),
                 "http_method": request.method,
                 "http_path": request.path,
                 "sku_code": code,
@@ -1989,12 +2030,8 @@ def export_price_history(code: str):
         if fmt == "json":
             # Нормализуем числа в JSON
             for item in history["items"]:
-                item["price_list_rub"] = _convert_decimal_to_number(
-                    item["price_list_rub"]
-                )
-                item["price_final_rub"] = _convert_decimal_to_number(
-                    item["price_final_rub"]
-                )
+                item["price_list_rub"] = _convert_decimal_to_number(item["price_list_rub"])
+                item["price_final_rub"] = _convert_decimal_to_number(item["price_final_rub"])
             return jsonify(history)
 
         # Excel-экспорт через ExportService
@@ -2002,10 +2039,7 @@ def export_price_history(code: str):
 
         return send_file(
             io.BytesIO(xlsx_bytes),
-            mimetype=(
-                "application/vnd.openxmlformats-"
-                "officedocument.spreadsheetml.sheet"
-            ),
+            mimetype=("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
             as_attachment=True,
             download_name=f"price_history_{code}.xlsx",
         )
@@ -2015,9 +2049,7 @@ def export_price_history(code: str):
             extra={
                 "event": "export_price_history_failed",
                 "service": "wine-assistant-api",
-                "request_id": getattr(
-                    g, "request_id", getattr(g, "_request_id", "unknown")
-                ),
+                "request_id": getattr(g, "request_id", getattr(g, "_request_id", "unknown")),
                 "http_method": request.method,
                 "http_path": request.path,
                 "sku_code": code,
@@ -2188,9 +2220,7 @@ def export_inventory_history(code: str):
 
         return send_file(
             io.BytesIO(content),
-            mimetype=(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            ),
+            mimetype=("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
             as_attachment=True,
             download_name=f"inventory_history_{code}.xlsx",
         )
@@ -2201,9 +2231,7 @@ def export_inventory_history(code: str):
             extra={
                 "event": "export_inventory_history_failed",
                 "service": "wine-assistant-api",
-                "request_id": getattr(
-                    g, "request_id", getattr(g, "_request_id", "unknown")
-                ),
+                "request_id": getattr(g, "request_id", getattr(g, "_request_id", "unknown")),
                 "http_method": request.method,
                 "http_path": request.path,
                 "sku_code": code,
@@ -2322,13 +2350,15 @@ def inventory_history(code: str):
         sql_params.extend([params.limit, params.offset])
 
         rows = db_query(conn, sql, tuple(sql_params))
-        return jsonify({
-            "items": rows,
-            "total": len(rows),
-            "code": code,
-            "limit": params.limit,
-            "offset": params.offset
-        })
+        return jsonify(
+            {
+                "items": rows,
+                "total": len(rows),
+                "code": code,
+                "limit": params.limit,
+                "offset": params.offset,
+            }
+        )
     except Exception as e:
         app.logger.error(
             f"Inventory history lookup failed: {code}",
@@ -2345,13 +2375,19 @@ def inventory_history(code: str):
             },
             exc_info=True,
         )
-        return jsonify({
-            "error": "query_failed",
-            "items": [], "total": 0, "code": code,
-            "limit": params.limit, "offset": params.offset
-        }), 500
+        return jsonify(
+            {
+                "error": "query_failed",
+                "items": [],
+                "total": 0,
+                "code": code,
+                "limit": params.limit,
+                "offset": params.offset,
+            }
+        ), 500
     finally:
         _close_conn_safely(conn)
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Entrypoint (dev only; production uses Gunicorn with api.wsgi:app)
