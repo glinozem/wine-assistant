@@ -163,3 +163,6 @@ data/quarantine/*
 
 data/logs/*
 !data/logs/.gitkeep
+
+# Local artifacts
+issues_open_with_body.json
