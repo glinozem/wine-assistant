@@ -329,8 +329,26 @@ smoke-e2e:
 # Daily Import Targets
 # ===================================================================
 
-.PHONY: inbox-ls daily-import daily-import-files daily-import-history daily-import-show daily-import-cleanup-archive daily-import-quarantine-stats
+.PHONY: inbox-ls daily-import daily-import-files daily-import-history daily-import-show daily-import-housekeeping daily-import-cleanup-archive daily-import-quarantine-stats
 .PHONY: daily-import-ps daily-import-files-ps
+
+# Housekeeping retention (0 = disabled)
+DAYS_INBOX ?= 0
+DAYS_ARCHIVE ?= 0
+DAYS_QUARANTINE ?= 0
+DAYS_LOGS ?= 0
+HK_MIN_AGE_DAYS ?= 7
+
+daily-import-housekeeping:
+	@echo "=== Daily Import housekeeping (dry-run by default) ==="
+	@$(DOCKER_COMPOSE) exec -T api python -m scripts.ops_housekeeping \
+		--days-inbox $(DAYS_INBOX) \
+		--days-archive $(DAYS_ARCHIVE) \
+		--days-quarantine $(DAYS_QUARANTINE) \
+		--days-logs $(DAYS_LOGS) \
+		--min-age-days $(HK_MIN_AGE_DAYS) \
+		$(if $(APPLY),--apply,) \
+		$(if $(FORCE),--force,)
 
 # Показать список файлов в data/inbox (внутри контейнера)
 inbox-ls:
@@ -384,8 +402,11 @@ endif
 # Usage: make daily-import-cleanup-archive DAYS=90
 DAYS ?= 90
 daily-import-cleanup-archive:
-	@echo "=== Cleaning archive older than $(DAYS) days ==="
-	@$(DOCKER_COMPOSE) exec -T api sh -lc 'find data/archive -type f -mtime +$(DAYS) -delete'
+	@echo "=== (DEPRECATED) Use: make daily-import-housekeeping DAYS_ARCHIVE=$(DAYS) [APPLY=1] [FORCE=1] ==="
+	@$(DOCKER_COMPOSE) exec -T api python -m scripts.ops_housekeeping \
+		--days-archive $(DAYS) --min-age-days $(HK_MIN_AGE_DAYS) \
+		$(if $(APPLY),--apply,) \
+		$(if $(FORCE),--force,)
 
 # Показать статистику по карантину
 daily-import-quarantine-stats:
