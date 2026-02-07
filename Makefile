@@ -21,7 +21,20 @@ DOCKER_COMPOSE ?= docker compose
 OBS_DOCKER_COMPOSE ?= $(DOCKER_COMPOSE) -f docker-compose.yml -f docker-compose.storage.yml -f docker-compose.observability.yml
 
 # Python launcher (override if needed): make PY=python3 ...
+# Prefer repo-local virtualenv if present (works in Codex on Windows too)
+ifeq ($(OS),Windows_NT)
+ifneq ($(wildcard .venv/Scripts/python.exe),)
+PY ?= .\.venv\Scripts\python.exe
+else
 PY ?= python
+endif
+else
+ifneq ($(wildcard .venv/bin/python),)
+PY ?= .venv/bin/python
+else
+PY ?= python
+endif
+endif
 
 # --- Analysis bundle (архив для ревью/диагностики) ---
 BUNDLE_OUT_DIR ?= ./_bundles
@@ -103,22 +116,22 @@ else
 endif
 
 test:
-	pytest -q
+	$(PY) -m pytest -q
 
 test-unit:
-	pytest tests/unit -q
+	$(PY) -m pytest tests/unit -q
 
 test-int:
-	$(SET_DBTEST_ENV) pytest -m "integration" -vv
+	$(SET_DBTEST_ENV) $(PY) -m pytest -m "integration" -vv
 
 test-int-noslow:
-	$(SET_DBTEST_ENV) pytest -m "integration and not slow" -vv
+	$(SET_DBTEST_ENV) $(PY) -m pytest -m "integration and not slow" -vv
 
 lint:
-	ruff check .
+	$(PY) -m ruff check .
 
 fmt:
-	ruff check . --fix
+	$(PY) -m ruff check . --fix
 # Сводные цели для тестов и работы с данными прайс-листа
 
 check: lint test
