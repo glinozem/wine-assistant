@@ -72,12 +72,20 @@ def ops_client(tmp_path, monkeypatch):
 
     # in-memory "table" for ops_daily_import_uploads (only what we need)
     uploads = []  # list[dict]
+    # in-memory "table" for ingest_envelope (sha256 -> envelope_id)
+    ingest = {}  # dict[str, str]
 
     def db_connect():
         return FakeConn(), None
 
     def db_query(conn, sql, params=()):
         q = " ".join(sql.split()).lower()
+
+        # SELECT envelope_id FROM public.ingest_envelope WHERE file_sha256=%s LIMIT 1
+        if "from public.ingest_envelope" in q and "where file_sha256 = %s" in q:
+            (sha256,) = params
+            env_id = ingest.get(sha256)
+            return [{"envelope_id": env_id}] if env_id else []
 
         # INSERT ... ops_daily_import_uploads ... ON CONFLICT (sha256) WHERE status='INBOX'
         if "insert into public.ops_daily_import_uploads" in q:
@@ -132,7 +140,15 @@ def ops_client(tmp_path, monkeypatch):
         return []
 
     mod.register_ops_daily_import(app, require_api_key, db_connect, db_query)
-    return app.test_client(), mod, {"inbox": inbox, "archive": archive, "quarantine": quarantine, "logs": logs}
+    return app.test_client(), mod, {
+        "inbox": inbox,
+        "archive": archive,
+        "quarantine": quarantine,
+        "logs": logs,
+        "state": {
+            "ingest": ingest,
+        },
+    }
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -230,6 +246,33 @@ def test_upload_dedupe_same_content_rejected_by_sha(ops_client):
     assert d2["rejected"][0]["duplicate_upload_id"] == u1_id
     assert not (dirs["inbox"] / "b.xlsx").exists()
 
+
+def test_upload_rejects_if_already_imported_by_sha256(ops_client):
+    client, _mod, dirs = ops_client
+
+    payload = b"already-imported"
+    sha = hashlib.sha256(payload).hexdigest()
+    envelope_id = str(uuid.uuid4())
+
+    # emulate "already imported" in DB
+    dirs["state"]["ingest"][sha] = envelope_id
+
+    r = client.post(
+        "/api/v1/ops/daily-import/inbox/upload",
+        headers={"X-API-Key": "testkey"},
+        data={"files": (io.BytesIO(payload), "imported.xlsx")},
+        content_type="multipart/form-data",
+    )
+    assert r.status_code == 200
+    d = r.get_json()
+
+    assert d and d["uploaded"] == []
+    assert d["rejected"] and d["rejected"][0]["reason"] == "ALREADY_IMPORTED_SAME_HASH"
+    assert d["rejected"][0]["envelope_id"] == envelope_id
+    assert d["rejected"][0]["sha256"] == sha
+    assert not (dirs["inbox"] / "imported.xlsx").exists()
+
+
 def test_upload_accepts_files_array_field_name_files_brackets(ops_client):
     client, _mod, dirs = ops_client
 
@@ -243,7 +286,6 @@ def test_upload_accepts_files_array_field_name_files_brackets(ops_client):
     data = r.get_json()
     assert data and data["uploaded"] and data["uploaded"][0]["saved_name"] == "a.xlsx"
     assert (dirs["inbox"] / "a.xlsx").exists()
-
 
 def test_upload_rejects_non_xlsx_extension(ops_client):
     client, _mod, dirs = ops_client
