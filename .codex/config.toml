@@ -1,4 +1,7 @@
 # .codex/config.toml
+# NOTE: AI agents must read and follow AGENTS.md (repo contract).
+# Key rules: no commits to master; never touch .env; run make lint/test; keep diffs minimal.
+
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
 
