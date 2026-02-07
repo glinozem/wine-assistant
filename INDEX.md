@@ -111,6 +111,12 @@
 - Рабочие команды для PS 5.1 и PS 7+
 - Диагностика по ответу `Invalid JSON` (в т.ч. `received_body_tail`)
 
+### Working with Codex + PyCharm (Windows 11)
+- Работайте только в feature-ветке: `git switch -c chore/your-topic` (не коммитить в `master`).
+- Перед изменениями: `!git status -sb` и `/diff` для подтверждения области.
+- После изменений: `make check` (Windows/Codex: `make PY=.\.venv\Scripts\python.exe check`), затем `/review`.
+- Никогда не редактируйте/не коммитьте `.env` или секреты; держите диффы минимальными (без широких рефакторингов).
+
 ### Development Setup
 
 ```bash
