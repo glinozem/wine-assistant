@@ -290,6 +290,26 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
         ) or []
         return rows[0] if rows else None
 
+    def _db_get_ingest_envelope_by_sha256_best_effort(conn, sha256: str) -> dict | None:
+        try:
+            rows = db_query(
+                conn,
+                """
+                SELECT envelope_id
+                FROM public.ingest_envelope
+                WHERE file_sha256 = %s
+                LIMIT 1
+                """,
+                (sha256,),
+            ) or []
+            return rows[0] if rows else None
+        except Exception as e:
+            # best-effort: если таблица ещё не задеплоена — не блокируем uploads
+            msg = str(e).lower()
+            if getattr(e, "pgcode", None) == "42p01" or ("ingest_envelope" in msg and "does not exist" in msg):
+                return None
+            raise
+
     def _db_try_register_inbox_upload(
         conn,
         *,
@@ -719,6 +739,21 @@ def register_ops_daily_import(app, require_api_key, db_connect, db_query):
                                 "original_name": original,
                                 "reason": "TOTAL_TOO_LARGE",
                                 "message": f"Total upload limit exceeded ({MAX_UPLOAD_TOTAL_MB} MB)",
+                                "sha256": sha256,
+                            })
+                            continue
+
+                        env = _db_get_ingest_envelope_by_sha256_best_effort(conn, sha256)
+                        if env:
+                            try:
+                                tmp_path.unlink(missing_ok=True)
+                            except Exception:
+                                pass
+                            rejected.append({
+                                "original_name": original,
+                                "reason": "ALREADY_IMPORTED_SAME_HASH",
+                                "envelope_id": str(env.get("envelope_id")) if env.get("envelope_id") else None,
+                                "message": "File already imported (SHA-256 exists in ingest_envelope)",
                                 "sha256": sha256,
                             })
                             continue

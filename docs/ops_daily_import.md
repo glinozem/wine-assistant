@@ -126,6 +126,7 @@ curl -sS -H "X-API-Key: $API_KEY" \
 
 Типовые `rejected[].reason`:
 - `DUPLICATE` (одинаковый SHA-256 уже есть в inbox)
+- `ALREADY_IMPORTED_SAME_HASH` (SHA-256 уже есть в `ingest_envelope`; в ответе будет `envelope_id`)
 - `INVALID_FILE`, `FILE_TOO_LARGE`, `TOTAL_TOO_LARGE`, `NAME_CONFLICT`
 
 ### 3.3 POST /api/v1/ops/daily-import/run (async)
